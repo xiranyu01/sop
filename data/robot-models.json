@@ -1,0 +1,26 @@
+[
+  {
+    "id": "robot-general-dual-arm",
+    "brand": "S",
+    "model": "双臂移动机器人",
+    "terminal": "夹爪",
+    "topics": {
+      "camera1": "待填写",
+      "camera2": "待填写"
+    },
+    "extraTopicRequirements": {
+      "camera1": "18-22",
+      "camera2": "18-22"
+    }
+  },
+  {
+    "id": "robot_mqorua3y_c7w6nr",
+    "brand": "X",
+    "model": "X1",
+    "terminal": "",
+    "topics": {
+      "camera1": "10-13"
+    },
+    "extraTopicRequirements": {}
+  }
+]

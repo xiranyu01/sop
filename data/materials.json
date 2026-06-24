@@ -1,0 +1,42 @@
+[
+  {
+    "id": "mat-toothbrush",
+    "skuId": "SKU001",
+    "type": "牙刷",
+    "color": "白色",
+    "material": "塑料",
+    "packageType": "无包装",
+    "size": "长：180mm",
+    "weight": "20g"
+  },
+  {
+    "id": "mat-toothpaste",
+    "skuId": "SKU002",
+    "type": "牙膏",
+    "color": "蓝白色",
+    "material": "软管",
+    "packageType": "管装",
+    "size": "长：160mm",
+    "weight": "120g"
+  },
+  {
+    "id": "mat-microwave",
+    "skuId": "SKU003",
+    "type": "微波炉",
+    "color": "黑色",
+    "material": "金属/玻璃",
+    "packageType": "设备",
+    "size": "长：460mm 宽：360mm 高：280mm",
+    "weight": "10kg"
+  },
+  {
+    "id": "mat-popcorn",
+    "skuId": "SKU004",
+    "type": "爆米花",
+    "color": "黄色",
+    "material": "食品",
+    "packageType": "袋装",
+    "size": "小件",
+    "weight": "80g"
+  }
+]

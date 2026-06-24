@@ -1,0 +1,181 @@
+[
+  {
+    "id": "req-we-home",
+    "versions": [
+      {
+        "version": "0.0.1",
+        "status": "draft",
+        "title": "WE 家庭场景",
+        "projectName": "WE 家庭场景采集",
+        "priority": "P0",
+        "deadline": "2026-07-01",
+        "customerId": "cus-we",
+        "robotModelId": "robot-general-dual-arm",
+        "businessGoal": "用于家庭场景机器人操作数据采集",
+        "requestedScenes": [
+          "家庭场景"
+        ],
+        "requiredDurationHours": 100,
+        "allowedOperations": [
+          {
+            "operation": "若单臂无法完成任务，可进行臂间协作",
+            "note": ""
+          },
+          {
+            "operation": "若机器人高度无法完成任务，可调整高度",
+            "note": ""
+          }
+        ],
+        "forbiddenOperations": [
+          {
+            "category": "",
+            "operations": [
+              {
+                "operation": "出现人脸",
+                "note": ""
+              },
+              {
+                "operation": "出现隐私数据信息",
+                "note": ""
+              },
+              {
+                "operation": "机器人碰撞",
+                "note": ""
+              },
+              {
+                "operation": "一次夹取多个物品",
+                "note": ""
+              },
+              {
+                "operation": "禁止门体或夹爪与微波炉产生碰撞",
+                "note": "禁止门体或夹爪与微波炉产生碰撞"
+              },
+              {
+                "operation": "禁止碰撞或推动其他物料",
+                "note": "禁止碰撞或推动其他物料"
+              }
+            ]
+          }
+        ],
+        "annotation": {
+          "required": true,
+          "types": [
+            "语义标注"
+          ],
+          "forbiddenOperations": [
+            {
+              "operation": "禁止标注画面中不可见的状态",
+              "note": "画面中不可见、无法判断的状态不应凭经验推断。"
+            },
+            {
+              "operation": "禁止将多个物体合并成一个标注对象",
+              "note": "多个独立物体应拆分标注，不应合并为一个对象。"
+            }
+          ],
+          "allowedOperations": [
+            {
+              "operation": "需要清晰标注目标物体边界",
+              "note": "标注时需要保证目标物体边界完整、清晰。"
+            },
+            {
+              "operation": "需要按采集步骤标注动作阶段",
+              "note": "标注结果需要能对应采集步骤中的动作阶段。"
+            }
+          ]
+        },
+        "qualityInspection": {
+          "required": true,
+          "samplingPolicy": "全量抽检"
+        },
+        "delivery": {
+          "formats": [
+            "mcap"
+          ],
+          "method": "亚马逊存储",
+          "languages": [
+            {
+              "code": "zh-CN",
+              "name": "简体中文"
+            }
+          ],
+          "dataStructureUrl": ""
+        },
+        "selectedSubscenes": [
+          {
+            "subsceneCode": "NO.001",
+            "subsceneName": "洗漱台整理",
+            "sceneName": "家庭场景",
+            "version": "0.0.1",
+            "targetDurationHours": 50
+          },
+          {
+            "subsceneCode": "NO.002",
+            "subsceneName": "将爆米花装入盒子",
+            "sceneName": "家庭场景",
+            "version": "0.0.1",
+            "targetDurationHours": 0
+          }
+        ],
+        "updatedAt": "2026-06-23T11:39:04.219Z"
+      }
+    ]
+  },
+  {
+    "id": "req_mqoxvj9v_tcwrgs",
+    "versions": [
+      {
+        "version": "0.0.1",
+        "status": "draft",
+        "title": "mayi的客户需求",
+        "projectName": "",
+        "priority": "P2",
+        "deadline": "2026-06-22",
+        "sourceBaseUrl": "",
+        "attachmentNotes": "",
+        "extraTopicRequirementsText": "",
+        "globalRandomizationRequirements": "",
+        "additionalNotes": "",
+        "customerId": "cus_mqhxju1s_5yhu1j",
+        "robotModelId": "robot_mqorua3y_c7w6nr",
+        "businessGoal": "",
+        "requestedScenes": [
+          "家庭场景"
+        ],
+        "requiredDurationHours": 500,
+        "allowedOperations": [],
+        "forbiddenOperations": [],
+        "annotation": {
+          "required": false,
+          "types": []
+        },
+        "qualityInspection": {
+          "required": true,
+          "samplingPolicy": "全量抽检"
+        },
+        "delivery": {
+          "formats": [
+            "mcap"
+          ],
+          "method": "",
+          "languages": [
+            {
+              "code": "zh-CN",
+              "name": "简体中文"
+            }
+          ],
+          "dataStructureUrl": ""
+        },
+        "selectedSubscenes": [
+          {
+            "subsceneCode": "NO.002",
+            "subsceneName": "将爆米花装入盒子",
+            "sceneName": "家庭场景",
+            "version": "0.0.1",
+            "targetDurationHours": 5
+          }
+        ],
+        "updatedAt": "2026-06-22T08:15:47.926Z"
+      }
+    ]
+  }
+]

@@ -1,0 +1,502 @@
+[
+  {
+    "id": "gf-robot-state-all-materials-visible",
+    "group": "robot_state",
+    "label": "头部相机能看到全部场景内容与物料",
+    "value": "头部相机能看到全部场景内容与物料",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-robot-state-safe-initial",
+    "group": "robot_state",
+    "label": "机器人处于安全初始位",
+    "value": "机器人处于安全初始位",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-robot-state-task-complete",
+    "group": "robot_state",
+    "label": "完成最后一步操作的状态",
+    "value": "完成最后一步操作的状态",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-reference-object-sink",
+    "group": "reference_object",
+    "label": "洗手盆",
+    "value": "洗手盆",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-reference-object-microwave",
+    "group": "reference_object",
+    "label": "微波炉",
+    "value": "微波炉",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-relative-left",
+    "group": "relative_position",
+    "label": "左侧",
+    "value": "左侧",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-relative-right",
+    "group": "relative_position",
+    "label": "右侧",
+    "value": "右侧",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-relative-front",
+    "group": "relative_position",
+    "label": "前侧",
+    "value": "前侧",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-relative-surface",
+    "group": "relative_position",
+    "label": "在参照物表面",
+    "value": "在参照物表面",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-relative-inside",
+    "group": "relative_position",
+    "label": "在参照物内部",
+    "value": "在参照物内部",
+    "status": "active",
+    "updatedAt": "2026-06-23T02:31:31.919Z",
+    "category": ""
+  },
+  {
+    "id": "gf-support-countertop",
+    "group": "support_surface",
+    "label": "台面",
+    "value": "台面",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-support-microwave-tray",
+    "group": "support_surface",
+    "label": "微波炉托盘",
+    "value": "微波炉托盘",
+    "status": "inactive",
+    "updatedAt": "2026-06-22T06:54:07.648Z",
+    "category": ""
+  },
+  {
+    "id": "gf-region-left",
+    "group": "region",
+    "label": "左侧",
+    "value": "左侧",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-region-right",
+    "group": "region",
+    "label": "右侧",
+    "value": "右侧",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-region-front",
+    "group": "region",
+    "label": "前侧",
+    "value": "前侧",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-region-middle",
+    "group": "region",
+    "label": "中间",
+    "value": "中间",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-region-inside",
+    "group": "region",
+    "label": "内部",
+    "value": "内部",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-pose-flat",
+    "group": "pose",
+    "label": "平放",
+    "value": "平放",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-pose-lean",
+    "group": "pose",
+    "label": "搭放",
+    "value": "搭放",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-form-normal",
+    "group": "form",
+    "label": "正常",
+    "value": "正常",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-parameter-door-open-angle",
+    "group": "parameter",
+    "label": "微波炉门打开角度",
+    "value": "door_open_angle",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-parameter-power",
+    "group": "parameter",
+    "label": "微波炉功率",
+    "value": "power",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-parameter-duration",
+    "group": "parameter",
+    "label": "微波炉设置时长",
+    "value": "duration",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-allowed-base-movement",
+    "group": "allowed_operation",
+    "label": "底盘可移动到安全位置后再执行放置",
+    "value": "底盘可移动到安全位置后再执行放置",
+    "description": "底盘可移动到安全位置后再执行放置",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-allowed-door-operation",
+    "group": "allowed_operation",
+    "label": "可调整微波炉门打开角度以便拿取",
+    "value": "可调整微波炉门打开角度以便拿取",
+    "description": "可调整微波炉门打开角度以便拿取",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-allowed-arm-cooperation",
+    "group": "allowed_operation",
+    "label": "若单臂无法完成任务，可进行臂间协作",
+    "value": "若单臂无法完成任务，可进行臂间协作",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-allowed-height-adjust",
+    "group": "allowed_operation",
+    "label": "若机器人高度无法完成任务，可调整高度",
+    "value": "若机器人高度无法完成任务，可调整高度",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-forbidden-collision-push",
+    "group": "forbidden_operation",
+    "label": "禁止碰撞或推动其他物料",
+    "value": "禁止碰撞或推动其他物料",
+    "category": "",
+    "description": "禁止碰撞或推动其他物料",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-door-collision",
+    "group": "forbidden_operation",
+    "label": "禁止门体或夹爪与微波炉产生碰撞",
+    "value": "禁止门体或夹爪与微波炉产生碰撞",
+    "category": "",
+    "description": "禁止门体或夹爪与微波炉产生碰撞",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-face",
+    "group": "forbidden_operation",
+    "label": "出现人脸",
+    "value": "出现人脸",
+    "category": "",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-private-data",
+    "group": "forbidden_operation",
+    "label": "出现隐私数据信息",
+    "value": "出现隐私数据信息",
+    "category": "",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-robot-collision",
+    "group": "forbidden_operation",
+    "label": "机器人碰撞",
+    "value": "机器人碰撞",
+    "category": "",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-multi-grasp",
+    "group": "forbidden_operation",
+    "label": "一次夹取多个物品",
+    "value": "一次夹取多个物品",
+    "category": "",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "gf-random-frequency-every-record",
+    "group": "random_frequency",
+    "label": "每条数据随机",
+    "value": "every_record",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-random-field-initial-position",
+    "group": "robot_random_field",
+    "label": "位置",
+    "value": "initial_position",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-random-field-initial-yaw",
+    "group": "robot_random_field",
+    "label": "朝向",
+    "value": "initial_yaw",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-random-field-location",
+    "group": "material_random_field",
+    "label": "物料位置",
+    "value": "location",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-random-field-pose",
+    "group": "material_random_field",
+    "label": "物料姿态",
+    "value": "pose",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-random-field-form",
+    "group": "material_random_field",
+    "label": "物料形态",
+    "value": "form",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-random-field-door-open-angle",
+    "group": "random_field",
+    "label": "微波炉门打开角度",
+    "value": "door_open_angle",
+    "status": "inactive",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-random-field-power",
+    "group": "random_field",
+    "label": "微波炉功率",
+    "value": "power",
+    "status": "inactive",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-random-field-duration",
+    "group": "random_field",
+    "label": "微波炉设置时长",
+    "value": "duration",
+    "status": "inactive",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-annotation-type-semantic",
+    "group": "annotation_type",
+    "label": "语义标注",
+    "value": "语义标注",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-action-tag-grasp",
+    "group": "action_tag",
+    "label": "抓取",
+    "value": "抓取",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-action-tag-place",
+    "group": "action_tag",
+    "label": "放置",
+    "value": "放置",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-action-tag-open-door",
+    "group": "action_tag",
+    "label": "开门",
+    "value": "开门",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-delivery-format-mcap-json",
+    "group": "delivery_format",
+    "label": "mcap",
+    "value": "mcap",
+    "status": "active",
+    "updatedAt": "2026-06-22T07:18:47.773Z",
+    "category": ""
+  },
+  {
+    "id": "gf-delivery-language-zh-cn",
+    "group": "delivery_language",
+    "label": "简体中文",
+    "value": "zh-CN:简体中文",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-delivery-method-amazon",
+    "group": "delivery_method",
+    "label": "亚马逊存储",
+    "value": "亚马逊存储",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "gf-sampling-policy-full",
+    "group": "sampling_policy",
+    "label": "全量抽检",
+    "value": "全量抽检",
+    "status": "active",
+    "updatedAt": "2026-06-22T00:00:00.000Z",
+    "category": ""
+  },
+  {
+    "id": "field_mqq0zky9_dxh5zn",
+    "group": "robot_state",
+    "label": "有一个相机能看到全部场景内容与物料",
+    "value": "有一个相机能看到全部场景内容与物料",
+    "category": "",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-23T02:28:51.537Z"
+  },
+  {
+    "id": "gf-annotation-allowed-clear-object-boundary",
+    "group": "annotation_allowed_operation",
+    "label": "需要清晰标注目标物体边界",
+    "value": "需要清晰标注目标物体边界",
+    "description": "标注时需要保证目标物体边界完整、清晰。",
+    "status": "active",
+    "updatedAt": "2026-06-23T04:20:41.399Z"
+  },
+  {
+    "id": "gf-annotation-allowed-label-action-steps",
+    "group": "annotation_allowed_operation",
+    "label": "需要按采集步骤标注动作阶段",
+    "value": "需要按采集步骤标注动作阶段",
+    "description": "标注结果需要能对应采集步骤中的动作阶段。",
+    "status": "active",
+    "updatedAt": "2026-06-23T04:20:41.399Z"
+  },
+  {
+    "id": "gf-annotation-forbidden-infer-invisible-state",
+    "group": "annotation_forbidden_operation",
+    "label": "禁止标注画面中不可见的状态",
+    "value": "禁止标注画面中不可见的状态",
+    "description": "画面中不可见、无法判断的状态不应凭经验推断。",
+    "status": "active",
+    "updatedAt": "2026-06-23T04:20:41.399Z"
+  },
+  {
+    "id": "gf-annotation-forbidden-merge-multiple-objects",
+    "group": "annotation_forbidden_operation",
+    "label": "禁止将多个物体合并成一个标注对象",
+    "value": "禁止将多个物体合并成一个标注对象",
+    "description": "多个独立物体应拆分标注，不应合并为一个对象。",
+    "status": "active",
+    "updatedAt": "2026-06-23T04:20:41.399Z"
+  }
+]

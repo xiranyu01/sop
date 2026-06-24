@@ -1,0 +1,4159 @@
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import type {
+  AppData,
+  Customer,
+  ExportResult,
+  GlobalField,
+  GlobalFieldGroup,
+  GlobalFieldStatus,
+  Material,
+  OperationStep,
+  Requirement,
+  RequirementVersion,
+  RobotModel,
+  Scene,
+  Subscene,
+  SubsceneVersion,
+} from './types';
+
+type Page = 'requirements' | 'scenes' | 'globalFields' | 'customers' | 'materials' | 'robots';
+
+const pageStorageKey = 'sop-manager-current-page';
+
+type DataTableColumn<T> = {
+  key: string;
+  title: string;
+  width?: string;
+  align?: 'left' | 'center' | 'right';
+  allowOverflow?: boolean;
+  render: (item: T, index: number) => ReactNode;
+};
+
+type CandidateSubsceneOption = {
+  sceneId: string;
+  sceneName: string;
+  code: string;
+  name: string;
+  version: SubsceneVersion;
+};
+
+type SubsceneLookupResult = {
+  scene: Scene;
+  subscene: Subscene;
+  version?: SubsceneVersion;
+};
+
+type VersionPatch<T> = Partial<T> & { baseVersion?: string };
+
+type InitialLocationRow = {
+  object: string;
+  primaryReferences: string[];
+  primaryRelativePositions: string[];
+  supportSurfaces: string[];
+  regions: string[];
+  secondaryReferences: string[];
+  secondaryRelativePositions: string[];
+  poses: string[];
+  forms: string[];
+  parameters: string[];
+  constraints: string[];
+};
+
+type TargetStateRow = InitialLocationRow;
+
+type MaterialInitialRandomizationRow = {
+  targetMaterials: string[];
+  changeIntervalRecords: number;
+  randomizedFields: string[];
+  constraints: string;
+};
+
+type RobotInitialRandomizationRow = {
+  target: string;
+  changeIntervalRecords: number;
+  randomizedFields: string[];
+  constraints: string;
+};
+
+type Option = {
+  value: string;
+  label: string;
+  category?: string;
+  description?: string;
+};
+
+const globalFieldGroupLabels: Record<GlobalFieldGroup, string> = {
+  robot_state: '机器人状态',
+  reference_object: '参照物',
+  relative_position: '相对位置',
+  support_surface: '支撑面',
+  region: '区域',
+  pose: '姿态',
+  form: '形态',
+  parameter: '参数',
+  allowed_operation: '采集操作要求',
+  forbidden_operation: '采集禁止操作',
+  annotation_allowed_operation: '标注操作要求',
+  annotation_forbidden_operation: '标注禁止操作',
+  random_frequency: '随机频率',
+  random_field: '随机字段',
+  robot_random_field: '机器人随机性字段',
+  material_random_field: '物料随机性字段',
+  annotation_type: '标注类型',
+  action_tag: '动作标签',
+  delivery_format: '交付格式',
+  delivery_language: '交付语言',
+  delivery_method: '交付方式',
+  sampling_policy: '质检策略',
+};
+
+const hiddenGlobalFieldGroups: GlobalFieldGroup[] = ['random_field'];
+const globalFieldGroups = (Object.keys(globalFieldGroupLabels) as GlobalFieldGroup[]).filter(
+  (group) => !hiddenGlobalFieldGroups.includes(group),
+);
+
+type GlobalFieldCategory = {
+  id: string;
+  label: string;
+  description: string;
+  groups: GlobalFieldGroup[];
+};
+
+const globalFieldCategoryConfigs: GlobalFieldCategory[] = [
+  {
+    id: 'object_state',
+    label: '对象状态',
+    description: '位置、姿态、形态、参数',
+    groups: ['reference_object', 'relative_position', 'support_surface', 'region', 'pose', 'form', 'parameter'],
+  },
+  {
+    id: 'randomization',
+    label: '随机性',
+    description: '机器人与物料随机字段',
+    groups: ['robot_random_field', 'material_random_field', 'random_frequency'],
+  },
+  {
+    id: 'operation',
+    label: '采集 / 标注操作',
+    description: '操作要求、禁止操作、动作标签',
+    groups: [
+      'allowed_operation',
+      'forbidden_operation',
+      'annotation_allowed_operation',
+      'annotation_forbidden_operation',
+      'action_tag',
+    ],
+  },
+  {
+    id: 'delivery_quality',
+    label: '交付 / 质检',
+    description: '格式、语言、方式、抽检',
+    groups: ['delivery_format', 'delivery_language', 'delivery_method', 'sampling_policy'],
+  },
+  {
+    id: 'base',
+    label: '基础字段',
+    description: '机器人状态、标注类型',
+    groups: ['robot_state', 'annotation_type'],
+  },
+];
+
+const globalFieldCategories = globalFieldCategoryConfigs
+  .map((category) => ({
+    ...category,
+    groups: category.groups.filter((group) => globalFieldGroups.includes(group)),
+  }))
+  .filter((category) => category.groups.length > 0);
+
+function findGlobalFieldCategory(group: GlobalFieldGroup) {
+  return globalFieldCategories.find((category) => category.groups.includes(group));
+}
+
+const fallbackRobotRandomOptions: Option[] = [
+  { value: 'initial_position', label: '位置' },
+  { value: 'initial_yaw', label: '朝向' },
+];
+const fallbackMaterialRandomOptions: Option[] = [
+  { value: 'location', label: '物料位置' },
+  { value: 'pose', label: '物料姿态' },
+  { value: 'form', label: '物料形态' },
+];
+
+const api = {
+  async data(): Promise<AppData> {
+    const res = await fetch('/api/data');
+    return assertJson<AppData>(res);
+  },
+  async saveCustomer(customer: Customer): Promise<Customer[]> {
+    const res = await fetch('/api/customers', postJson(customer));
+    return assertJson<Customer[]>(res);
+  },
+  async saveMaterial(material: Material): Promise<Material[]> {
+    const res = await fetch('/api/materials', postJson(material));
+    return assertJson<Material[]>(res);
+  },
+  async saveRobot(robot: RobotModel): Promise<RobotModel[]> {
+    const res = await fetch('/api/robot-models', postJson(robot));
+    return assertJson<RobotModel[]>(res);
+  },
+  async saveScene(scene: Scene): Promise<Scene[]> {
+    const res = await fetch('/api/scenes', postJson(scene));
+    return assertJson<Scene[]>(res);
+  },
+  async saveGlobalField(field: GlobalField): Promise<GlobalField[]> {
+    const res = await fetch('/api/global-fields', postJson(field));
+    return assertJson<GlobalField[]>(res);
+  },
+  async saveRequirement(id: string, version: VersionPatch<RequirementVersion>): Promise<Requirement[]> {
+    const res = await fetch(`/api/requirements/${id}`, putJson(version));
+    return assertJson<Requirement[]>(res);
+  },
+  async deleteRequirementVersion(id: string, version: string): Promise<Requirement[]> {
+    const res = await fetch(`/api/requirements/${id}/versions/${version}`, { method: 'DELETE' });
+    return assertJson<Requirement[]>(res);
+  },
+  async createRequirement(version: Partial<RequirementVersion>): Promise<Requirement[]> {
+    const res = await fetch('/api/requirements', postJson(version));
+    return assertJson<Requirement[]>(res);
+  },
+  async confirmRequirement(id: string, version: string): Promise<Requirement[]> {
+    const res = await fetch(`/api/requirements/${id}/confirm`, postJson({ version }));
+    return assertJson<Requirement[]>(res);
+  },
+  async saveSubscene(sceneId: string, code: string, version: VersionPatch<SubsceneVersion>): Promise<Scene[]> {
+    const res = await fetch(`/api/scenes/${sceneId}/subscenes/${code}/versions`, postJson(version));
+    return assertJson<Scene[]>(res);
+  },
+  async deleteSubsceneVersion(sceneId: string, code: string, version: string): Promise<Scene[]> {
+    const res = await fetch(`/api/scenes/${sceneId}/subscenes/${code}/versions/${version}`, { method: 'DELETE' });
+    return assertJson<Scene[]>(res);
+  },
+  async confirmSubscene(sceneId: string, code: string, version: string): Promise<Scene[]> {
+    const res = await fetch(`/api/scenes/${sceneId}/subscenes/${code}/confirm`, postJson({ version }));
+    return assertJson<Scene[]>(res);
+  },
+  async exportYaml(id: string, version: string): Promise<ExportResult> {
+    const res = await fetch(`/api/requirements/${id}/export-yaml`, postJson({ version }));
+    return assertJson<ExportResult>(res);
+  },
+};
+
+function postJson(body: unknown) {
+  return {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+function putJson(body: unknown) {
+  return {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+async function assertJson<T>(res: Response): Promise<T> {
+  const data = (await res.json()) as T | { message?: string };
+  if (!res.ok) {
+    const message =
+      typeof data === 'object' && data !== null && 'message' in data && typeof data.message === 'string'
+        ? data.message
+        : '请求失败';
+    throw new Error(message);
+  }
+  return data as T;
+}
+
+const emptyData: AppData = {
+  customers: [],
+  materials: [],
+  robotModels: [],
+  scenes: [],
+  requirements: [],
+  globalFields: [],
+  materialStateRules: [],
+};
+
+function initialPage(): Page {
+  if (typeof window === 'undefined') return 'requirements';
+  const stored = window.localStorage.getItem(pageStorageKey);
+  return isPage(stored) ? stored : 'requirements';
+}
+
+function isPage(value: string | null): value is Page {
+  return ['requirements', 'scenes', 'globalFields', 'customers', 'materials', 'robots'].includes(value || '');
+}
+
+function latest<T extends { version: string }>(versions: T[]): T {
+  return versions[versions.length - 1];
+}
+
+function statusText(status: string): string {
+  if (status === 'active') return '启用';
+  if (status === 'inactive') return '停用';
+  return status === 'confirmed' ? '已确认' : status === 'archived' ? '已归档' : '草稿';
+}
+
+function formatShortDate(value?: string): string {
+  return value ? value.slice(0, 10) : '-';
+}
+
+function matchesQuery(query: string, values: Array<string | number | undefined>): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return true;
+  return values.some((value) => String(value ?? '').toLowerCase().includes(normalized));
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    const copied = document.execCommand('copy');
+    textarea.remove();
+    return copied;
+  }
+}
+
+function nextReadableId(values: string[], prefix: string): string {
+  const pattern = new RegExp(`^${prefix}(\\d+)$`, 'i');
+  const maxNumber = values.reduce((max, value) => {
+    const match = value.match(pattern);
+    if (!match) return max;
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isNaN(parsed) ? max : Math.max(max, parsed);
+  }, 0);
+  return `${prefix}${maxNumber + 1}`;
+}
+
+function sceneLatestUpdated(scene: Scene): string {
+  const updatedAt = scene.subscenes
+    .flatMap((subscene) => subscene.versions.map((version) => version.updatedAt))
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  return formatShortDate(updatedAt);
+}
+
+function nextSubsceneCode(scenes: Scene[]): string {
+  const maxNumber = scenes
+    .flatMap((scene) => scene.subscenes)
+    .reduce((max, subscene) => {
+      const match = subscene.code.match(/\d+/);
+      const value = match ? Number(match[0]) : 0;
+      return Number.isFinite(value) ? Math.max(max, value) : max;
+    }, 0);
+  return `NO.${String(maxNumber + 1).padStart(3, '0')}`;
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function asLines(value: string): string[] {
+  return value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function findSubscene(scenes: Scene[], code: string, version?: string): SubsceneLookupResult | undefined {
+  for (const scene of scenes) {
+    const subscene = scene.subscenes.find((item) => item.code === code);
+    if (!subscene) continue;
+    const foundVersion = version ? subscene.versions.find((item) => item.version === version) : undefined;
+    return {
+      scene,
+      subscene,
+      version: foundVersion,
+    };
+  }
+  return undefined;
+}
+
+export default function App() {
+  const [data, setData] = useState<AppData>(emptyData);
+  const [page, setPageState] = useState<Page>(initialPage);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [selectedRequirementId, setSelectedRequirementId] = useState<string>('');
+  const [selectedRequirementVersion, setSelectedRequirementVersion] = useState('');
+  const [requirementDetailOpen, setRequirementDetailOpen] = useState(false);
+  const [selectedSceneId, setSelectedSceneId] = useState('');
+  const [selectedSubsceneCode, setSelectedSubsceneCode] = useState('');
+  const [selectedSubsceneVersion, setSelectedSubsceneVersion] = useState('');
+  const [sceneDetailOpen, setSceneDetailOpen] = useState(false);
+
+  function setPage(pageName: Page) {
+    setPageState(pageName);
+    window.localStorage.setItem(pageStorageKey, pageName);
+  }
+
+  async function load() {
+    setLoading(true);
+    setError('');
+    try {
+      const next = await api.data();
+      setData(next);
+      setSelectedRequirementId((current) => current || next.requirements[0]?.id || '');
+      setSelectedSceneId((current) => current || next.scenes[0]?.id || '');
+      setSelectedSubsceneCode((current) => current || next.scenes[0]?.subscenes[0]?.code || '');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  useEffect(() => {
+    if (!message && !error) return;
+    const timer = window.setTimeout(() => {
+      setMessage('');
+      setError('');
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [message, error]);
+
+  const selectedRequirement = data.requirements.find((item) => item.id === selectedRequirementId);
+  const requirementVersion =
+    selectedRequirement?.versions.find((item) => item.version === selectedRequirementVersion) ||
+    (selectedRequirement ? latest(selectedRequirement.versions) : undefined);
+
+  useEffect(() => {
+    if (selectedRequirement && !selectedRequirementVersion) {
+      setSelectedRequirementVersion(latest(selectedRequirement.versions).version);
+    }
+  }, [selectedRequirement, selectedRequirementVersion]);
+
+  async function run<T>(action: () => Promise<T>, success: string): Promise<T | undefined> {
+    setError('');
+    setMessage('');
+    try {
+      const result = await action();
+      setMessage(success);
+      return result;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '操作失败');
+      return undefined;
+    }
+  }
+
+  if (loading) {
+    return <div className="loading">正在加载 SOP 需求管理...</div>;
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">SOP</div>
+          <div>
+            <strong>需求管理</strong>
+            <span>coScene 数据采集</span>
+          </div>
+        </div>
+        <NavButton active={page === 'requirements'} label="客户需求" count={data.requirements.length} onClick={() => setPage('requirements')} />
+        <NavButton active={page === 'scenes'} label="场景库" count={data.scenes.length} onClick={() => setPage('scenes')} />
+        <NavButton active={page === 'customers'} label="客户" count={data.customers.length} onClick={() => setPage('customers')} />
+        <NavButton active={page === 'materials'} label="物料" count={data.materials.length} onClick={() => setPage('materials')} />
+        <NavButton active={page === 'robots'} label="机器型号" count={data.robotModels.length} onClick={() => setPage('robots')} />
+        <NavButton
+          active={page === 'globalFields'}
+          label="全局字段"
+          count={data.globalFields.length}
+          onClick={() => setPage('globalFields')}
+        />
+      </aside>
+
+      <main className="workspace">
+        <header className="topbar">
+          <div>
+            <h1>{pageTitle(page)}</h1>
+            <p>{pageHint(page)}</p>
+          </div>
+          <button className="ghost-button" onClick={() => void load()}>
+            刷新
+          </button>
+        </header>
+        {(message || error) && (
+          <div className="toast-stack" aria-live="polite">
+            {message && <div className="notice success">{message}</div>}
+            {error && <div className="notice error">{error}</div>}
+          </div>
+        )}
+
+        {page === 'requirements' && (
+          <RequirementPage
+            data={data}
+            globalFields={data.globalFields}
+            selectedRequirement={selectedRequirement}
+            selectedVersion={requirementVersion}
+            detailOpen={requirementDetailOpen}
+            onDetailOpenChange={setRequirementDetailOpen}
+            onSelectRequirement={(id) => {
+              const target = data.requirements.find((item) => item.id === id);
+              setSelectedRequirementId(id);
+              setSelectedRequirementVersion(target ? latest(target.versions).version : '');
+            }}
+            onSelectVersion={setSelectedRequirementVersion}
+            onCreate={async () => {
+              const result = await run(
+                () =>
+                  api.createRequirement({
+                    title: '新的客户需求',
+                    projectName: '',
+                    priority: 'P2',
+                    deadline: today(),
+                    customerId: data.customers[0]?.id || '',
+                    robotModelId: data.robotModels[0]?.id || '',
+                    requestedScenes: [],
+                    selectedSubscenes: [],
+                  }),
+                '已新建客户需求',
+              );
+              if (result) {
+                setData((current) => ({ ...current, requirements: result }));
+                const created = result[result.length - 1];
+                setSelectedRequirementId(created.id);
+                setSelectedRequirementVersion(latest(created.versions).version);
+              }
+            }}
+            onSave={async (patch) => {
+              if (!selectedRequirement || !requirementVersion) return;
+              const result = await run(
+                () => api.saveRequirement(selectedRequirement.id, { ...patch, baseVersion: requirementVersion.version }),
+                requirementVersion.status === 'confirmed' ? '已创建草稿版本' : '已保存客户需求',
+              );
+              if (result) {
+                setData((current) => ({ ...current, requirements: result }));
+                const updated = result.find((item) => item.id === selectedRequirement.id);
+                if (updated) setSelectedRequirementVersion(latest(updated.versions).version);
+              }
+            }}
+            onDeleteVersion={async () => {
+              if (!selectedRequirement || !requirementVersion) return;
+              const result = await run(
+                () => api.deleteRequirementVersion(selectedRequirement.id, requirementVersion.version),
+                '草稿版本已删除',
+              );
+              if (result) {
+                setData((current) => ({ ...current, requirements: result }));
+                const updated = result.find((item) => item.id === selectedRequirement.id);
+                setSelectedRequirementVersion(updated ? latest(updated.versions).version : '');
+              }
+            }}
+            onConfirm={async () => {
+              if (!selectedRequirement || !requirementVersion) return;
+              const result = await run(
+                () => api.confirmRequirement(selectedRequirement.id, requirementVersion.version),
+                '客户需求版本已确认',
+              );
+              if (result) setData((current) => ({ ...current, requirements: result }));
+            }}
+            onExport={async () => {
+              if (!selectedRequirement || !requirementVersion) return undefined;
+              return run(() => api.exportYaml(selectedRequirement.id, requirementVersion.version), 'YAML 已导出');
+            }}
+            onOpenSubscene={(code, version) => {
+              const target = findSubscene(data.scenes, code, version);
+              if (!target) return;
+              setSelectedSceneId(target.scene.id);
+              setSelectedSubsceneCode(target.subscene.code);
+              setSelectedSubsceneVersion(version);
+              setSceneDetailOpen(true);
+              setPage('scenes');
+            }}
+          />
+        )}
+
+        {page === 'scenes' && (
+          <ScenePage
+            globalFields={data.globalFields}
+            materials={data.materials}
+            scenes={data.scenes}
+            selectedSceneId={selectedSceneId}
+            selectedSubsceneCode={selectedSubsceneCode}
+            selectedVersion={selectedSubsceneVersion}
+            detailOpen={sceneDetailOpen}
+            onSelectScene={(id) => {
+              const target = data.scenes.find((item) => item.id === id);
+              setSelectedSceneId(id);
+              setSelectedSubsceneCode(target?.subscenes[0]?.code || '');
+              setSelectedSubsceneVersion('');
+            }}
+            onSelectSubscene={setSelectedSubsceneCode}
+            onSelectVersion={setSelectedSubsceneVersion}
+            onDetailOpenChange={setSceneDetailOpen}
+            onSaveScene={async (scene) => {
+              const result = await run(() => api.saveScene(scene), '场景已保存');
+              if (result) {
+                setData((current) => ({ ...current, scenes: result }));
+                const savedScene = result.find((item) => item.id === scene.id) || result[result.length - 1];
+                setSelectedSceneId(savedScene?.id || '');
+                const preservedSubscene = savedScene?.subscenes.some((item) => item.code === selectedSubsceneCode)
+                  ? selectedSubsceneCode
+                  : savedScene?.subscenes[0]?.code || '';
+                setSelectedSubsceneCode(preservedSubscene);
+              }
+            }}
+            onSaveSubscene={async (sceneId, code, patch) => {
+              const target = data.scenes
+                .find((item) => item.id === sceneId)
+                ?.subscenes.find((item) => item.code === code)
+                ?.versions.find((item) => item.version === patch.baseVersion);
+              const result = await run(
+                () => api.saveSubscene(sceneId, code, patch),
+                target?.status === 'confirmed' ? '已创建草稿版本' : '已保存子场景版本',
+              );
+              if (result) setData((current) => ({ ...current, scenes: result }));
+            }}
+            onDeleteSubsceneVersion={async (sceneId, code, version) => {
+              const result = await run(() => api.deleteSubsceneVersion(sceneId, code, version), '草稿版本已删除');
+              if (result) setData((current) => ({ ...current, scenes: result }));
+            }}
+            onConfirmSubscene={async (sceneId, code, version) => {
+              const result = await run(() => api.confirmSubscene(sceneId, code, version), '子场景版本已确认');
+              if (result) setData((current) => ({ ...current, scenes: result }));
+            }}
+          />
+        )}
+
+        {page === 'globalFields' && (
+          <GlobalFieldPage
+            globalFields={data.globalFields}
+            onSaveField={async (field) => {
+              const result = await run(() => api.saveGlobalField(field), '全局字段已保存');
+              if (result) setData((current) => ({ ...current, globalFields: result }));
+            }}
+          />
+        )}
+
+        {page === 'customers' && (
+          <CustomerPage
+            customers={data.customers}
+            onSave={async (customer) => {
+              const result = await run(() => api.saveCustomer(customer), '客户信息已保存');
+              if (result) setData((current) => ({ ...current, customers: result }));
+            }}
+          />
+        )}
+        {page === 'materials' && (
+          <MaterialPage
+            materials={data.materials}
+            onSave={async (material) => {
+              const result = await run(() => api.saveMaterial(material), '物料信息已保存');
+              if (result) setData((current) => ({ ...current, materials: result }));
+            }}
+          />
+        )}
+        {page === 'robots' && (
+          <RobotPage
+            robots={data.robotModels}
+            onSave={async (robot) => {
+              const result = await run(() => api.saveRobot(robot), '机器型号已保存');
+              if (result) setData((current) => ({ ...current, robotModels: result }));
+            }}
+          />
+        )}
+      </main>
+    </div>
+  );
+}
+
+function NavButton({ active, label, count, onClick }: { active: boolean; label: string; count: number; onClick: () => void }) {
+  return (
+    <button className={`nav-button ${active ? 'active' : ''}`} onClick={onClick}>
+      <span>{label}</span>
+      <strong>{count}</strong>
+    </button>
+  );
+}
+
+function pageTitle(page: Page) {
+  const map: Record<Page, string> = {
+    requirements: '客户需求管理',
+    scenes: '场景与子场景库',
+    globalFields: '全局字段管理',
+    customers: '客户信息',
+    materials: '物料信息',
+    robots: '机器型号',
+  };
+  return map[page];
+}
+
+function pageHint(page: Page) {
+  const map: Record<Page, string> = {
+    requirements: '选择客户、机器人和子场景版本，确认后可导出需求 YAML。',
+    scenes: '子场景按唯一编号管理，每个编号可维护多个版本。',
+    globalFields: '管理 SOP 表单复用字段，子场景会从这里选择标准词表。',
+    customers: '管理客户和联系人，供客户需求引用。',
+    materials: '管理可复用物料主数据，供子场景版本引用。',
+    robots: '管理机器人型号、末端和 topic 要求。',
+  };
+  return map[page];
+}
+
+function SearchPanel({
+  title,
+  description,
+  query,
+  placeholder,
+  count,
+  actions,
+  onQueryChange,
+}: {
+  title: string;
+  description?: string;
+  query: string;
+  placeholder: string;
+  count: number;
+  actions?: ReactNode;
+  onQueryChange: (value: string) => void;
+}) {
+  return (
+    <div className="table-toolbar">
+      <div>
+        <h2>{title}</h2>
+        {description && <p>{description}</p>}
+      </div>
+      <div className="table-tools">
+        <label className="search-field">
+          <span>搜索</span>
+          <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={placeholder} />
+        </label>
+        <span className="result-count">{count} 条</span>
+        {actions}
+      </div>
+    </div>
+  );
+}
+
+function DataTable<T>({
+  rows,
+  columns,
+  rowKey,
+  selectedKey,
+  emptyText = '暂无数据',
+  onRowClick,
+}: {
+  rows: T[];
+  columns: Array<DataTableColumn<T>>;
+  rowKey: (item: T, index: number) => string;
+  selectedKey?: string;
+  emptyText?: string;
+  onRowClick?: (item: T) => void;
+}) {
+  const gridTemplateColumns = columns.map((column) => column.width || 'minmax(120px, 1fr)').join(' ');
+  const tableStyle = { gridTemplateColumns } as const;
+
+  return (
+    <div className="data-table-scroll">
+      <div className="data-table" role="table" style={tableStyle}>
+        <div className="data-table-row data-table-head" role="row">
+          {columns.map((column) => (
+            <div className={`data-table-cell align-${column.align || 'left'}`} role="columnheader" key={column.key}>
+              {column.title}
+            </div>
+          ))}
+        </div>
+        {rows.length === 0 ? (
+          <div className="table-empty">{emptyText}</div>
+        ) : (
+          rows.map((row, index) => {
+            const key = rowKey(row, index);
+            const clickable = Boolean(onRowClick);
+            const cells = columns.map((column) => (
+              <span
+                className={`data-table-cell align-${column.align || 'left'} ${column.allowOverflow ? 'has-popup-control' : ''}`}
+                role="cell"
+                key={column.key}
+              >
+                {column.render(row, index)}
+              </span>
+            ));
+
+            return clickable ? (
+              <div
+                className={`data-table-row ${selectedKey === key ? 'selected' : ''} ${clickable ? 'clickable' : ''}`}
+                role="button"
+                tabIndex={0}
+                key={key}
+                onClick={() => onRowClick?.(row)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onRowClick?.(row);
+                  }
+                }}
+              >
+                {cells}
+              </div>
+            ) : (
+              <div className={`data-table-row ${selectedKey === key ? 'selected' : ''}`} role="row" key={key}>
+                {cells}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return <span className={`status-badge status-${status}`}>{statusText(status)}</span>;
+}
+
+function InfoItem({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="info-item">
+      <span>{label}</span>
+      <strong>{value || '-'}</strong>
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="panel-header">
+          <h2>{title}</h2>
+          <button className="ghost-button" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function MultiEnumInput({
+  value,
+  options,
+  placeholder,
+  disabled = false,
+  allowCustom = false,
+  onChange,
+}: {
+  value: string[];
+  options: string[];
+  placeholder?: string;
+  disabled?: boolean;
+  allowCustom?: boolean;
+  onChange: (value: string[]) => void;
+}) {
+  const uniqueOptions = Array.from(new Set([...options, ...value].filter(Boolean)));
+  return (
+    <MultiSelectInput
+      value={value}
+      options={uniqueOptions.map((option) => ({ value: option, label: option }))}
+      placeholder={placeholder || '选择枚举值'}
+      disabled={disabled}
+      emptyText="暂无可选项"
+      allowCustom={allowCustom}
+      onChange={onChange}
+    />
+  );
+}
+
+function MultiSelectInput({
+  value,
+  options,
+  placeholder,
+  disabled = false,
+  emptyText = '暂无可选项',
+  allowCustom = false,
+  onChange,
+}: {
+  value: string[];
+  options: Option[];
+  placeholder?: string;
+  disabled?: boolean;
+  emptyText?: string;
+  allowCustom?: boolean;
+  onChange: (value: string[]) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 240 });
+  const [customValue, setCustomValue] = useState('');
+  const selectedOptions = value.map((item) => options.find((option) => option.value === item) || { value: item, label: item });
+  const allOptions = uniqueOptions([...options, ...selectedOptions]);
+  const summaryText = value.length > 0 ? selectedOptions.map((option) => option.label).join('、') : placeholder || '选择字段';
+
+  useEffect(() => {
+    if (!open) return;
+    function updateMenuPosition() {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.max(rect.width, 240);
+      setMenuStyle({
+        left: Math.min(rect.left, Math.max(8, window.innerWidth - width - 8)),
+        top: Math.min(rect.bottom + 4, Math.max(8, window.innerHeight - 268)),
+        width,
+      });
+    }
+    function closeOnOutsideClick(event: MouseEvent) {
+      const target = event.target as Node;
+      if (!containerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    }
+    updateMenuPosition();
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    window.addEventListener('resize', updateMenuPosition);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      window.removeEventListener('resize', updateMenuPosition);
+    };
+  }, [open]);
+
+  const toggleValue = (target: string) => {
+    if (value.includes(target)) {
+      onChange(value.filter((item) => item !== target));
+      return;
+    }
+    onChange([...value, target]);
+  };
+
+  const addCustomValue = () => {
+    const nextValue = customValue.trim();
+    if (!nextValue) return;
+    if (!value.includes(nextValue)) {
+      onChange([...value, nextValue]);
+    }
+    setCustomValue('');
+  };
+
+  if (disabled) {
+    return (
+      <div className="multi-select-dropdown disabled">
+        <div className="multi-select-summary">
+          {selectedOptions.length > 0 ? (
+            <span className="multi-select-values">{summaryText}</span>
+          ) : (
+            <span className="multi-select-placeholder">{emptyText}</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`multi-select-dropdown ${open ? 'open' : ''}`} ref={containerRef}>
+      <button
+        type="button"
+        className="multi-select-summary"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((current) => !current);
+        }}
+      >
+        {selectedOptions.length > 0 ? (
+          <span className="multi-select-values">{summaryText}</span>
+        ) : (
+          <span className="multi-select-placeholder">{allOptions.length ? placeholder || '选择字段' : emptyText}</span>
+        )}
+      </button>
+      {open && createPortal(
+        <div
+          className="multi-select-menu"
+          ref={menuRef}
+          style={{ top: menuStyle.top, left: menuStyle.left, width: menuStyle.width }}
+        >
+          {allOptions.length === 0 ? (
+            <div className="multi-select-empty">{emptyText}</div>
+          ) : (
+            allOptions.map((option) => (
+              <label className="multi-select-option" key={`${option.category || ''}-${option.value}`}>
+                <input type="checkbox" checked={value.includes(option.value)} onChange={() => toggleValue(option.value)} />
+                <span>{option.category ? `${option.category} / ${option.label}` : option.label}</span>
+              </label>
+            ))
+          )}
+          {allowCustom && (
+            <div className="multi-select-custom">
+              <input
+                value={customValue}
+                placeholder="新增当前子场景字段"
+                onChange={(event) => setCustomValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addCustomValue();
+                  }
+                }}
+              />
+              <button type="button" className="ghost-button" onClick={addCustomValue}>
+                新增
+              </button>
+            </div>
+          )}
+        </div>
+      , document.body)}
+    </div>
+  );
+}
+
+function fieldOptions(fields: GlobalField[], group: GlobalFieldGroup, includeValues: string[] = []): Option[] {
+  const activeOptions = fields
+    .filter((field) => field.group === group && field.status === 'active')
+    .map(fieldToOption);
+  const missingOptions = includeValues
+    .filter((value) => value && !activeOptions.some((option) => option.value === value))
+    .map((value) => ({ value, label: value }));
+  return uniqueOptions([...activeOptions, ...missingOptions]);
+}
+
+function fieldToOption(field: GlobalField): Option {
+  return {
+    value: field.value,
+    label: field.label || field.value,
+    category: field.category,
+    description: field.description,
+  };
+}
+
+function uniqueOptions(options: Option[]): Option[] {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    const key = `${option.category || ''}:${option.value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function RequirementPage({
+  data,
+  globalFields,
+  selectedRequirement,
+  selectedVersion,
+  detailOpen,
+  onDetailOpenChange,
+  onSelectRequirement,
+  onSelectVersion,
+  onCreate,
+  onSave,
+  onDeleteVersion,
+  onConfirm,
+  onExport,
+  onOpenSubscene,
+}: {
+  data: AppData;
+  globalFields: GlobalField[];
+  selectedRequirement?: Requirement;
+  selectedVersion?: RequirementVersion;
+  detailOpen: boolean;
+  onDetailOpenChange: (open: boolean) => void;
+  onSelectRequirement: (id: string) => void;
+  onSelectVersion: (version: string) => void;
+  onCreate: () => Promise<void>;
+  onSave: (patch: Partial<RequirementVersion>) => Promise<void>;
+  onDeleteVersion: () => Promise<void>;
+  onConfirm: () => Promise<void>;
+  onExport: () => Promise<ExportResult | undefined>;
+  onOpenSubscene: (code: string, version: string) => void;
+}) {
+  const [yamlPreview, setYamlPreview] = useState('');
+  const [exportPath, setExportPath] = useState('');
+  const [yamlCopyStatus, setYamlCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [requirementQuery, setRequirementQuery] = useState('');
+  const [subsceneQuery, setSubsceneQuery] = useState('');
+  const [subscenePickerOpen, setSubscenePickerOpen] = useState(false);
+
+  const candidateSubscenes = useMemo(() => {
+    const items: CandidateSubsceneOption[] = [];
+    for (const scene of data.scenes) {
+      for (const subscene of scene.subscenes) {
+        const confirmed = [...subscene.versions].reverse().find((item) => item.status === 'confirmed');
+        items.push({
+          sceneId: scene.id,
+          sceneName: scene.name,
+          code: subscene.code,
+          name: subscene.name,
+          version: confirmed || latest(subscene.versions),
+        });
+      }
+    }
+    return items.filter(
+      (item) =>
+        !subsceneQuery ||
+        item.code.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
+        item.name.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
+        item.sceneName.toLowerCase().includes(subsceneQuery.toLowerCase()),
+    );
+  }, [data.scenes, subsceneQuery]);
+
+  const filteredRequirements = data.requirements.filter((requirement) => {
+    const current = latest(requirement.versions);
+    const customer = data.customers.find((item) => item.id === current.customerId);
+    const robot = data.robotModels.find((item) => item.id === current.robotModelId);
+    return matchesQuery(requirementQuery, [
+      requirement.id,
+      current.title,
+      current.projectName,
+      current.priority,
+      current.status,
+      current.version,
+      customer?.name,
+      robot?.model,
+      robot?.brand,
+    ]);
+  });
+  const selectedSubsceneKeys = new Set(
+    selectedVersion?.selectedSubscenes.map((item) => `${item.subsceneCode}@${item.version}`) || [],
+  );
+  const selectedSubsceneGroups = selectedVersion
+    ? Array.from(
+        selectedVersion.selectedSubscenes.reduce((groups, item) => {
+          const rows = groups.get(item.sceneName) || [];
+          rows.push(item);
+          groups.set(item.sceneName, rows);
+          return groups;
+        }, new Map<string, RequirementVersion['selectedSubscenes']>()),
+      )
+    : [];
+  const selectedSubsceneDurationTotal =
+    selectedVersion?.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0) || 0;
+  const durationDelta = selectedVersion ? selectedSubsceneDurationTotal - (Number(selectedVersion.requiredDurationHours) || 0) : 0;
+  const missingSelectedSubscenes =
+    selectedVersion?.selectedSubscenes.filter((item) => !findSubscene(data.scenes, item.subsceneCode, item.version)) || [];
+
+  const requirementColumns: Array<DataTableColumn<Requirement>> = [
+    {
+      key: 'id',
+      title: '需求编号',
+      width: '92px',
+      render: (requirement) => <strong className="table-link">{requirement.id}</strong>,
+    },
+    {
+      key: 'title',
+      title: '需求名称',
+      width: 'minmax(190px, 1.6fr)',
+      render: (requirement) => latest(requirement.versions).title,
+    },
+    {
+      key: 'customer',
+      title: '客户',
+      width: 'minmax(92px, 0.8fr)',
+      render: (requirement) =>
+        data.customers.find((item) => item.id === latest(requirement.versions).customerId)?.name || '-',
+    },
+    {
+      key: 'project',
+      title: '项目名称',
+      width: 'minmax(130px, 1fr)',
+      render: (requirement) => latest(requirement.versions).projectName || '-',
+    },
+    {
+      key: 'priority',
+      title: '优先级',
+      width: '76px',
+      render: (requirement) => latest(requirement.versions).priority,
+    },
+    {
+      key: 'status',
+      title: '状态',
+      width: '88px',
+      render: (requirement) => <StatusBadge status={latest(requirement.versions).status} />,
+    },
+    {
+      key: 'version',
+      title: '版本',
+      width: '86px',
+      render: (requirement) => `v${latest(requirement.versions).version}`,
+    },
+    {
+      key: 'subscenes',
+      title: '子场景',
+      width: '74px',
+      align: 'right',
+      render: (requirement) => latest(requirement.versions).selectedSubscenes.length,
+    },
+    {
+      key: 'duration',
+      title: '总时长',
+      width: '86px',
+      align: 'right',
+      render: (requirement) => `${latest(requirement.versions).requiredDurationHours || 0} h`,
+    },
+    {
+      key: 'deadline',
+      title: '截止日期',
+      width: '108px',
+      render: (requirement) => formatShortDate(latest(requirement.versions).deadline),
+    },
+    {
+      key: 'action',
+      title: '操作',
+      width: '64px',
+      render: (requirement) => (
+        <button
+          className="text-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            openRequirementDetail(requirement.id);
+          }}
+        >
+          查看
+        </button>
+      ),
+    },
+  ];
+
+  const selectedSubsceneColumns: Array<DataTableColumn<RequirementVersion['selectedSubscenes'][number]>> = [
+    {
+      key: 'code',
+      title: '编号',
+      width: '110px',
+      render: (item) => <strong className="table-link">{item.subsceneCode}</strong>,
+    },
+    { key: 'name', title: '子场景', width: 'minmax(180px, 1.4fr)', render: (item) => item.subsceneName },
+    { key: 'version', title: '版本', width: '90px', render: (item) => `v${item.version}` },
+    {
+      key: 'status',
+      title: '状态',
+      width: '96px',
+      render: (item) => {
+        const target = findSubscene(data.scenes, item.subsceneCode, item.version);
+        return target?.version ? <StatusBadge status={target.version.status} /> : '未找到';
+      },
+    },
+    {
+      key: 'duration',
+      title: '目标采集时长',
+      width: '160px',
+      render: (item) => (
+        <span className="inline-edit">
+          <input
+            type="number"
+            disabled={readonly}
+            value={item.targetDurationHours}
+            onChange={(event) => {
+              if (readonly) return;
+              const selectedSubscenes = selectedVersion?.selectedSubscenes.map((current) =>
+                current.subsceneCode === item.subsceneCode && current.version === item.version
+                  ? { ...current, targetDurationHours: Number(event.target.value) }
+                  : current,
+              );
+              if (selectedSubscenes) void onSave({ selectedSubscenes });
+            }}
+          />
+          h
+        </span>
+      ),
+    },
+    {
+      key: 'action',
+      title: '操作',
+      width: '118px',
+      render: (item) => (
+        <span className="table-action-row">
+          <button className="text-button" onClick={() => onOpenSubscene(item.subsceneCode, item.version)}>
+            查看
+          </button>
+          <button
+            className="text-button danger"
+            disabled={readonly}
+            onClick={() => {
+              if (readonly || !selectedVersion) return;
+              void onSave({
+                selectedSubscenes: selectedVersion.selectedSubscenes.filter(
+                  (current) => !(current.subsceneCode === item.subsceneCode && current.version === item.version),
+                ),
+              });
+            }}
+          >
+            移除
+          </button>
+        </span>
+      ),
+    },
+  ];
+
+  const candidateSubsceneColumns: Array<DataTableColumn<CandidateSubsceneOption>> = [
+    {
+      key: 'code',
+      title: '编号',
+      width: '110px',
+      render: (item) => <strong className="table-link">{item.code}</strong>,
+    },
+    { key: 'name', title: '子场景', width: 'minmax(180px, 1.4fr)', render: (item) => item.name },
+    { key: 'scene', title: '场景', width: '140px', render: (item) => item.sceneName },
+    { key: 'version', title: '版本', width: '90px', render: (item) => `v${item.version.version}` },
+    { key: 'status', title: '状态', width: '96px', render: (item) => <StatusBadge status={item.version.status} /> },
+    {
+      key: 'importStatus',
+      title: '导入状态',
+      width: '100px',
+      render: (item) => (selectedSubsceneKeys.has(`${item.code}@${item.version.version}`) ? '已导入' : '可导入'),
+    },
+  ];
+
+  function openRequirementDetail(id: string) {
+    onSelectRequirement(id);
+    setYamlPreview('');
+    setExportPath('');
+    onDetailOpenChange(true);
+  }
+
+  async function createRequirementAndOpen() {
+    await onCreate();
+    setYamlPreview('');
+    setExportPath('');
+    onDetailOpenChange(true);
+  }
+
+  function closeRequirementDetail() {
+    setYamlPreview('');
+    setExportPath('');
+    onDetailOpenChange(false);
+  }
+
+  if (!detailOpen || !selectedRequirement || !selectedVersion) {
+    return (
+      <div className="page-stack">
+        <section className="panel table-panel">
+          <SearchPanel
+            title="需求列表"
+            description="按需求编号、需求名称、客户、项目、状态或版本搜索，点击行进入详情页"
+            query={requirementQuery}
+            placeholder="搜索需求编号、需求名称、客户、项目"
+            count={filteredRequirements.length}
+            onQueryChange={setRequirementQuery}
+            actions={
+              <button className="primary-button" onClick={() => void createRequirementAndOpen()}>
+                新建需求
+              </button>
+            }
+          />
+          <DataTable
+            rows={filteredRequirements}
+            columns={requirementColumns}
+            rowKey={(requirement) => requirement.id}
+            emptyText="还没有客户需求"
+            onRowClick={(requirement) => openRequirementDetail(requirement.id)}
+          />
+        </section>
+      </div>
+    );
+  }
+
+  const readonly = selectedVersion.status === 'confirmed';
+  const selectedAllowedOperations = selectedVersion.allowedOperations.map((item) => item.operation);
+  const selectedForbiddenOperations = selectedVersion.forbiddenOperations.flatMap((group) =>
+    group.operations.map((item) => item.operation),
+  );
+  const forbiddenOptions = fieldOptions(
+    globalFields,
+    'forbidden_operation',
+    selectedVersion.forbiddenOperations.flatMap((group) => group.operations.map((item) => item.operation)),
+  );
+  const selectedAnnotationAllowedOperations = selectedVersion.annotation.allowedOperations?.map((item) => item.operation) || [];
+  const selectedAnnotationForbiddenOperations = selectedVersion.annotation.forbiddenOperations?.map((item) => item.operation) || [];
+  const yamlDownloadFileName = `${selectedRequirement.id}-${selectedVersion.version}.yaml`;
+
+  async function generateYamlPreview(): Promise<ExportResult | undefined> {
+    const result = await onExport();
+    if (result) {
+      setYamlPreview(result.yaml);
+      setExportPath(result.path);
+    }
+    return result;
+  }
+
+  async function downloadYaml() {
+    const result = await generateYamlPreview();
+    if (!result) return;
+    const blob = new Blob([result.yaml], { type: 'application/x-yaml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = yamlDownloadFileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyYamlPreview() {
+    const yaml = yamlPreview || (await generateYamlPreview())?.yaml;
+    if (!yaml) return;
+    const copied = await copyTextToClipboard(yaml);
+    setYamlCopyStatus(copied ? 'copied' : 'failed');
+    window.setTimeout(() => setYamlCopyStatus('idle'), 1600);
+  }
+
+  function createDraftFromCurrentVersion() {
+    void onSave({});
+  }
+
+  function addSubsceneToRequirement(item: CandidateSubsceneOption) {
+    if (!selectedVersion || readonly) return;
+    const key = `${item.code}@${item.version.version}`;
+    if (selectedSubsceneKeys.has(key)) return;
+    void onSave({
+      requestedScenes: Array.from(new Set([...selectedVersion.requestedScenes, item.sceneName])),
+      selectedSubscenes: [
+        ...selectedVersion.selectedSubscenes,
+        {
+          subsceneCode: item.code,
+          subsceneName: item.name,
+          sceneName: item.sceneName,
+          version: item.version.version,
+          targetDurationHours: 0,
+        },
+      ],
+    });
+    setSubscenePickerOpen(false);
+  }
+
+  const subscenePickerModal = subscenePickerOpen && (
+    <Modal title="从子场景库添加子场景" onClose={() => setSubscenePickerOpen(false)}>
+      <SearchPanel
+        title="子场景库"
+        description="按编号、名称或场景搜索，点击行导入子场景版本"
+        query={subsceneQuery}
+        placeholder="搜索 NO.001、洗漱台整理或场景名称"
+        count={candidateSubscenes.length}
+        onQueryChange={setSubsceneQuery}
+      />
+      <DataTable
+        rows={candidateSubscenes}
+        columns={candidateSubsceneColumns}
+        rowKey={(item) => `${item.code}-${item.version.version}`}
+        emptyText="没有匹配的子场景"
+        onRowClick={addSubsceneToRequirement}
+      />
+    </Modal>
+  );
+
+  return (
+    <>
+      <div className="detail-page">
+        <div className="detail-page-toolbar">
+          <button className="ghost-button" onClick={closeRequirementDetail}>
+            返回需求列表
+          </button>
+          <span>客户需求 / {selectedRequirement.id} / v{selectedVersion.version}</span>
+        </div>
+        <section className="panel detail-panel">
+          <div className="panel-header">
+          <div>
+            <h2>{selectedVersion.title}</h2>
+            <p>
+              {selectedRequirement.id} · v{selectedVersion.version} · {statusText(selectedVersion.status)}
+            </p>
+          </div>
+          <div className="button-row">
+            <label className="version-select">
+              <span>版本</span>
+              <select value={selectedVersion.version} onChange={(event) => onSelectVersion(event.target.value)}>
+                {selectedRequirement.versions.map((version) => (
+                  <option value={version.version} key={version.version}>
+                    v{version.version} · {statusText(version.status)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="ghost-button"
+              disabled={missingSelectedSubscenes.length > 0}
+              onClick={() => void downloadYaml()}
+            >
+              导出 YAML
+            </button>
+            {selectedVersion.status === 'confirmed' ? (
+              <button className="primary-button" onClick={createDraftFromCurrentVersion}>
+                编辑为草稿
+              </button>
+            ) : (
+              <>
+                <button className="ghost-button danger" onClick={() => void onDeleteVersion()}>
+                  删除草稿
+                </button>
+                <button className="primary-button" onClick={() => void onConfirm()}>
+                  确认版本
+                </button>
+              </>
+            )}
+          </div>
+          </div>
+
+          {readonly && <div className="notice info">当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
+
+          <div className="requirement-sections">
+            <section className="requirement-section">
+              <div className="requirement-section-header">
+                <h3>基础信息</h3>
+                <p>客户、项目、机器人和计划信息</p>
+              </div>
+              <div className="requirement-section-grid">
+                <Field label="需求编号" value={selectedRequirement.id} disabled onChange={() => undefined} />
+                <Field
+                  label="需求名称"
+                  value={selectedVersion.title}
+                  disabled={readonly}
+                  onChange={(title) => void onSave({ title })}
+                />
+                <Field
+                  label="项目名称"
+                  value={selectedVersion.projectName}
+                  disabled={readonly}
+                  onChange={(projectName) => void onSave({ projectName })}
+                />
+                <SelectField
+                  label="客户"
+                  value={selectedVersion.customerId}
+                  options={data.customers.map((item) => ({ value: item.id, label: item.name }))}
+                  disabled={readonly}
+                  onChange={(customerId) => void onSave({ customerId })}
+                />
+                <SelectField
+                  label="机器人型号"
+                  value={selectedVersion.robotModelId}
+                  options={data.robotModels.map((item) => ({ value: item.id, label: `${item.brand} ${item.model}` }))}
+                  disabled={readonly}
+                  onChange={(robotModelId) => void onSave({ robotModelId })}
+                />
+                <SelectField
+                  label="优先级"
+                  value={selectedVersion.priority}
+                  options={['P0', 'P1', 'P2', 'P3'].map((item) => ({ value: item, label: item }))}
+                  disabled={readonly}
+                  onChange={(priority) => void onSave({ priority: priority as RequirementVersion['priority'] })}
+                />
+                <Field
+                  label="截止日期"
+                  type="date"
+                  value={selectedVersion.deadline}
+                  disabled={readonly}
+                  onChange={(deadline) => void onSave({ deadline })}
+                />
+                <Field
+                  label="总目标时长（小时）"
+                  type="number"
+                  value={String(selectedVersion.requiredDurationHours)}
+                  disabled={readonly}
+                  onChange={(requiredDurationHours) => void onSave({ requiredDurationHours: Number(requiredDurationHours) })}
+                />
+              </div>
+            </section>
+
+            <section className="requirement-section">
+              <div className="requirement-section-header">
+                <h3>交付 / 标注 / 质检</h3>
+                <p>数据交付方式、标注范围和客户抽检策略</p>
+              </div>
+              <div className="requirement-section-grid">
+                <SelectField
+                  label="交付形式"
+                  value={selectedVersion.delivery.method}
+                  options={fieldOptions(globalFields, 'delivery_method', [selectedVersion.delivery.method]).map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  }))}
+                  disabled={readonly}
+                  onChange={(method) => void onSave({ delivery: { ...selectedVersion.delivery, method } })}
+                />
+                <Field
+                  label="数据交付结构"
+                  value={selectedVersion.delivery.dataStructureUrl}
+                  disabled={readonly}
+                  onChange={(dataStructureUrl) => void onSave({ delivery: { ...selectedVersion.delivery, dataStructureUrl } })}
+                />
+                <MultiSelectField
+                  label="交付数据"
+                  value={selectedVersion.delivery.formats}
+                  options={fieldOptions(globalFields, 'delivery_format', selectedVersion.delivery.formats)}
+                  disabled={readonly}
+                  onChange={(formats) => void onSave({ delivery: { ...selectedVersion.delivery, formats } })}
+                />
+                <MultiSelectField
+                  label="交付语言"
+                  value={selectedVersion.delivery.languages.map((item) => `${item.code}:${item.name}`)}
+                  options={fieldOptions(
+                    globalFields,
+                    'delivery_language',
+                    selectedVersion.delivery.languages.map((item) => `${item.code}:${item.name}`),
+                  )}
+                  disabled={readonly}
+                  onChange={(value) =>
+                    void onSave({
+                      delivery: {
+                        ...selectedVersion.delivery,
+                        languages: value.map((item) => {
+                          const [code, name = code] = item.split(':');
+                          return { code, name };
+                        }),
+                      },
+                    })
+                  }
+                />
+                <SelectField
+                  label="是否需要标注"
+                  value={selectedVersion.annotation.required ? '需要' : '不需要'}
+                  options={['需要', '不需要'].map((item) => ({ value: item, label: item }))}
+                  disabled={readonly}
+                  onChange={(value) => void onSave({ annotation: { ...selectedVersion.annotation, required: value === '需要' } })}
+                />
+                <SelectField
+                  label="客户抽检策略"
+                  value={selectedVersion.qualityInspection.samplingPolicy}
+                  options={fieldOptions(globalFields, 'sampling_policy', [selectedVersion.qualityInspection.samplingPolicy]).map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  }))}
+                  disabled={readonly}
+                  onChange={(samplingPolicy) =>
+                    void onSave({ qualityInspection: { ...selectedVersion.qualityInspection, samplingPolicy } })
+                  }
+                />
+                <div className="field wide">
+                  <span>标注类型</span>
+                  <MultiSelectInput
+                    value={selectedVersion.annotation.types}
+                    options={fieldOptions(globalFields, 'annotation_type', selectedVersion.annotation.types)}
+                    disabled={readonly}
+                    onChange={(types) => void onSave({ annotation: { ...selectedVersion.annotation, types } })}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="requirement-section">
+              <div className="requirement-section-header">
+                <h3>说明补充</h3>
+                <p>需求背景、topic、随机性和附件说明</p>
+              </div>
+              <div className="requirement-notes-grid">
+                <TextArea
+                  label="数据用途/业务目标"
+                  value={selectedVersion.businessGoal}
+                  disabled={readonly}
+                  onChange={(businessGoal) => void onSave({ businessGoal })}
+                />
+                <TextArea
+                  label="客户额外 topic 要求"
+                  value={selectedVersion.extraTopicRequirementsText || ''}
+                  disabled={readonly}
+                  onChange={(extraTopicRequirementsText) => void onSave({ extraTopicRequirementsText })}
+                />
+                <TextArea
+                  label="全局随机性要求"
+                  value={selectedVersion.globalRandomizationRequirements || ''}
+                  disabled={readonly}
+                  onChange={(globalRandomizationRequirements) => void onSave({ globalRandomizationRequirements })}
+                />
+                <TextArea
+                  label="附件说明"
+                  value={selectedVersion.attachmentNotes || ''}
+                  disabled={readonly}
+                  onChange={(attachmentNotes) => void onSave({ attachmentNotes })}
+                />
+                <TextArea
+                  label="其他补充说明"
+                  value={selectedVersion.additionalNotes || ''}
+                  disabled={readonly}
+                  onChange={(additionalNotes) => void onSave({ additionalNotes })}
+                />
+              </div>
+            </section>
+
+            <section className="requirement-section">
+              <div className="requirement-section-header">
+                <h3>操作要求</h3>
+                <p>客户需求层面的采集和标注操作约束</p>
+              </div>
+              <div className="requirement-operation-grid">
+                <div className="field wide">
+                  <span>采集操作要求</span>
+                  <MultiSelectInput
+                    value={selectedAllowedOperations}
+                    options={fieldOptions(globalFields, 'allowed_operation', selectedAllowedOperations)}
+                    disabled={readonly}
+                    onChange={(operations) =>
+                      void onSave({
+                        allowedOperations: operations.map((operation) => {
+                          const option = fieldOptions(globalFields, 'allowed_operation', [operation]).find((item) => item.value === operation);
+                          return { operation, note: option?.description || '' };
+                        }),
+                      })
+                    }
+                  />
+                </div>
+                <div className="field wide">
+                  <span>采集禁止操作</span>
+                  <MultiSelectInput
+                    value={selectedForbiddenOperations}
+                    options={forbiddenOptions}
+                    disabled={readonly}
+                    onChange={(items) => void onSave({ forbiddenOperations: forbiddenGroupsFromKeys(items, forbiddenOptions) })}
+                  />
+                </div>
+                <div className="field wide">
+                  <span>标注操作要求</span>
+                  <MultiSelectInput
+                    value={selectedAnnotationAllowedOperations}
+                    options={fieldOptions(globalFields, 'annotation_allowed_operation', selectedAnnotationAllowedOperations)}
+                    disabled={readonly}
+                    onChange={(operations) =>
+                      void onSave({
+                        annotation: {
+                          ...selectedVersion.annotation,
+                          allowedOperations: operations.map((operation) => {
+                            const option = fieldOptions(globalFields, 'annotation_allowed_operation', [operation]).find(
+                              (item) => item.value === operation,
+                            );
+                            return { operation, note: option?.description || '' };
+                          }),
+                        },
+                      })
+                    }
+                  />
+                </div>
+                <div className="field wide">
+                  <span>标注禁止操作</span>
+                  <MultiSelectInput
+                    value={selectedAnnotationForbiddenOperations}
+                    options={fieldOptions(globalFields, 'annotation_forbidden_operation', selectedAnnotationForbiddenOperations)}
+                    disabled={readonly}
+                    onChange={(operations) =>
+                      void onSave({
+                        annotation: {
+                          ...selectedVersion.annotation,
+                          forbiddenOperations: operations.map((operation) => {
+                            const option = fieldOptions(globalFields, 'annotation_forbidden_operation', [operation]).find(
+                              (item) => item.value === operation,
+                            );
+                            return { operation, note: option?.description || '' };
+                          }),
+                        },
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            </section>
+          </div>
+
+        <div className="embedded-table">
+          <div className="embedded-table-header">
+            <div>
+              <h3>已选子场景</h3>
+              <p>按场景分组展示；客户需求锁定具体子场景编号和版本，目标采集时长在这里维护</p>
+            </div>
+            <div className="button-row">
+              <span className="result-count">{selectedVersion.selectedSubscenes.length} 条</span>
+              <button className="primary-button" disabled={readonly} onClick={() => setSubscenePickerOpen(true)}>
+                添加子场景
+              </button>
+            </div>
+          </div>
+          {durationDelta !== 0 && (
+            <div className="notice warning compact-notice">
+              已选子场景目标时长合计 {selectedSubsceneDurationTotal} h，
+              {durationDelta > 0 ? '超出' : '少于'}总目标时长 {Math.abs(durationDelta)} h。
+            </div>
+          )}
+          {missingSelectedSubscenes.length > 0 && (
+            <div className="notice error compact-notice">
+              有 {missingSelectedSubscenes.length} 个已选子场景版本未找到，修正引用后才能导出 YAML。
+            </div>
+          )}
+          {selectedSubsceneGroups.length === 0 ? (
+            <div className="table-empty">当前客户需求还没有导入子场景</div>
+          ) : (
+            <div className="subscene-group-list">
+              {selectedSubsceneGroups.map(([sceneName, rows]) => (
+                <section className="subscene-group" key={sceneName}>
+                  <div className="subscene-group-header">
+                    <strong>{sceneName}</strong>
+                    <span>{rows.length} 个子场景</span>
+                  </div>
+                  <DataTable
+                    rows={rows}
+                    columns={selectedSubsceneColumns}
+                    rowKey={(item) => `${item.subsceneCode}-${item.version}`}
+                    emptyText="当前场景下没有子场景"
+                  />
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+
+          <div className="yaml-preview">
+          <div className="section-title yaml-preview-title">
+            <div>
+              <h3>YAML 预览</h3>
+              {exportPath && <span>{exportPath}</span>}
+            </div>
+            <div className="button-row">
+              <button
+                className="ghost-button"
+                disabled={missingSelectedSubscenes.length > 0}
+                onClick={() => void generateYamlPreview()}
+              >
+                生成预览
+              </button>
+              <button
+                className="ghost-button"
+                disabled={missingSelectedSubscenes.length > 0}
+                onClick={() => void copyYamlPreview()}
+              >
+                {yamlCopyStatus === 'copied' ? '已复制' : yamlCopyStatus === 'failed' ? '复制失败' : '复制'}
+              </button>
+            </div>
+          </div>
+          <pre>{yamlPreview || '点击“生成预览”后在这里预览。'}</pre>
+          </div>
+        </section>
+      </div>
+      {subscenePickerModal}
+    </>
+  );
+}
+
+function ScenePage({
+  globalFields,
+  materials,
+  scenes,
+  selectedSceneId,
+  selectedSubsceneCode,
+  selectedVersion,
+  detailOpen,
+  onSelectScene,
+  onSelectSubscene,
+  onSelectVersion,
+  onDetailOpenChange,
+  onSaveScene,
+  onSaveSubscene,
+  onDeleteSubsceneVersion,
+  onConfirmSubscene,
+}: {
+  globalFields: GlobalField[];
+  materials: Material[];
+  scenes: Scene[];
+  selectedSceneId: string;
+  selectedSubsceneCode: string;
+  selectedVersion: string;
+  detailOpen: boolean;
+  onSelectScene: (id: string) => void;
+  onSelectSubscene: (code: string) => void;
+  onSelectVersion: (version: string) => void;
+  onDetailOpenChange: (open: boolean) => void;
+  onSaveScene: (scene: Scene) => Promise<void>;
+  onSaveSubscene: (sceneId: string, code: string, version: VersionPatch<SubsceneVersion>) => Promise<void>;
+  onDeleteSubsceneVersion: (sceneId: string, code: string, version: string) => Promise<void>;
+  onConfirmSubscene: (sceneId: string, code: string, version: string) => Promise<void>;
+}) {
+  const [sceneQuery, setSceneQuery] = useState('');
+  const [subsceneQuery, setSubsceneQuery] = useState('');
+  const [materialQuery, setMaterialQuery] = useState('');
+  const [materialPickerOpen, setMaterialPickerOpen] = useState(false);
+  const [sceneEditorOpen, setSceneEditorOpen] = useState(false);
+  const [sceneDraft, setSceneDraft] = useState<Scene>(emptyScene());
+  const scene = scenes.find((item) => item.id === selectedSceneId) || scenes[0];
+  const subscene = scene?.subscenes.find((item) => item.code === selectedSubsceneCode) || scene?.subscenes[0];
+  const version = subscene
+    ? subscene.versions.find((item) => item.version === selectedVersion) || latest(subscene.versions)
+    : undefined;
+  const canEditVersion = version?.status === 'draft';
+  const canEditSubsceneTitle = Boolean(version && canEditVersion && version.version === '0.0.1' && version.status === 'draft');
+  const canEditDescription = Boolean(version && canEditVersion && version.status === 'draft');
+
+  useEffect(() => {
+    if (selectedVersion && subscene?.versions.some((item) => item.version === selectedVersion)) return;
+    onSelectVersion('');
+  }, [selectedSubsceneCode, selectedSceneId, selectedVersion, subscene]);
+
+  const filteredScenes = scenes.filter((item) => matchesQuery(sceneQuery, [item.id, item.name, item.description]));
+  const filteredSubscenes = scene?.subscenes.filter((item) =>
+    matchesQuery(subsceneQuery, [
+      item.code,
+      item.name,
+      latest(item.versions).title,
+      latest(item.versions).status,
+      latest(item.versions).version,
+    ]),
+  ) || [];
+  const filteredMaterials = materials.filter((item) =>
+    matchesQuery(materialQuery, [
+      item.id,
+      item.skuId,
+      item.type,
+      item.color,
+      item.material,
+      item.packageType,
+      item.size,
+      item.weight,
+    ]),
+  );
+
+  if (!scene) {
+    return (
+      <section className="empty-state">
+        <p>暂无场景数据，请先在数据文件中维护场景库。</p>
+      </section>
+    );
+  }
+
+  const subsceneColumns: Array<DataTableColumn<Subscene>> = [
+    {
+      key: 'code',
+      title: '编号',
+      width: '110px',
+      render: (item) => <strong className="table-link">{item.code}</strong>,
+    },
+    {
+      key: 'name',
+      title: '子场景',
+      width: 'minmax(180px, 1.5fr)',
+      render: (item) => latest(item.versions).title || item.name,
+    },
+    {
+      key: 'versions',
+      title: '版本数',
+      width: '88px',
+      align: 'right',
+      render: (item) => item.versions.length,
+    },
+    {
+      key: 'latestVersion',
+      title: '最新版本',
+      width: '96px',
+      render: (item) => `v${latest(item.versions).version}`,
+    },
+    {
+      key: 'status',
+      title: '状态',
+      width: '96px',
+      render: (item) => <StatusBadge status={latest(item.versions).status} />,
+    },
+    {
+      key: 'materials',
+      title: '物料',
+      width: '88px',
+      align: 'right',
+      render: (item) => `${latest(item.versions).materials.length} 种`,
+    },
+    {
+      key: 'updated',
+      title: '最近更新',
+      width: '116px',
+      render: (item) => formatShortDate(latest(item.versions).updatedAt),
+    },
+    {
+      key: 'action',
+      title: '操作',
+      width: '78px',
+      render: (item) => (
+        <button
+          className="text-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            openSubsceneDetail(item.code);
+          }}
+        >
+          查看
+        </button>
+      ),
+    },
+  ];
+
+  const selectedMaterialColumns: Array<DataTableColumn<SubsceneVersion['materials'][number]>> = [
+    {
+      key: 'skuId',
+      title: 'SKU',
+      width: '120px',
+      render: (item) => <strong className="table-link">{item.skuId}</strong>,
+    },
+    { key: 'type', title: '物料类型', width: 'minmax(140px, 1.2fr)', render: (item) => item.type },
+    {
+      key: 'quantity',
+      title: '数量',
+      width: '150px',
+      render: (item, index) =>
+        version && subscene ? (
+          <span className="inline-edit">
+            <input
+              type="number"
+              disabled={!canEditVersion}
+              value={item.quantity.value || 0}
+              onChange={(event) => {
+                if (!canEditVersion) return;
+                const nextMaterials = version.materials.map((current, currentIndex) =>
+                  currentIndex === index
+                    ? { ...current, quantity: { ...current.quantity, mode: 'fixed' as const, value: Number(event.target.value) } }
+                    : current,
+                );
+                void saveCurrentSubscene({ materials: nextMaterials });
+              }}
+            />
+            {item.quantity.unit}
+          </span>
+        ) : (
+          '-'
+        ),
+    },
+    { key: 'color', title: '颜色', width: '110px', render: (item) => item.color || '-' },
+    { key: 'material', title: '材质', width: '120px', render: (item) => item.material || '-' },
+    { key: 'packageType', title: '包装类型', width: '120px', render: (item) => item.packageType || '-' },
+    {
+      key: 'action',
+      title: '操作',
+      width: '90px',
+      render: (item, index) =>
+        version && subscene ? (
+          <button
+            className="text-button danger"
+            disabled={!canEditVersion}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (!canEditVersion) return;
+              const nextMaterials = version.materials.filter((_, currentIndex) => currentIndex !== index);
+              void saveCurrentSubscene({ materials: nextMaterials });
+            }}
+          >
+            移除
+          </button>
+        ) : (
+          '-'
+        ),
+    },
+  ];
+
+  const materialLibraryColumns: Array<DataTableColumn<Material>> = [
+    {
+      key: 'skuId',
+      title: 'SKU 编号',
+      width: '130px',
+      render: (item) => <strong className="table-link">{item.skuId}</strong>,
+    },
+    { key: 'type', title: '物料类型', width: 'minmax(140px, 1.2fr)', render: (item) => item.type || '-' },
+    { key: 'color', title: '颜色', width: '110px', render: (item) => item.color || '-' },
+    { key: 'material', title: '材质', width: '120px', render: (item) => item.material || '-' },
+    { key: 'packageType', title: '包装类型', width: '120px', render: (item) => item.packageType || '-' },
+    {
+      key: 'status',
+      title: '引用状态',
+      width: '100px',
+      render: (item) => (version?.materials.some((material) => material.materialId === item.id) ? '已选择' : '可添加'),
+    },
+  ];
+
+  function addMaterial(material: Material) {
+    if (!version || !subscene || !canEditVersion) return;
+    if (version.materials.some((item) => item.materialId === material.id)) return;
+    void saveCurrentSubscene({
+      materials: [
+        ...version.materials,
+        {
+          materialId: material.id,
+          skuId: material.skuId,
+          type: material.type,
+          quantity: { mode: 'fixed', value: 1, unit: '件' },
+          color: material.color,
+          material: material.material,
+          packageType: material.packageType,
+        },
+      ],
+    });
+  }
+
+  async function saveCurrentSubscene(patch: Partial<SubsceneVersion>) {
+    if (!subscene || !version) return;
+    await onSaveSubscene(scene.id, subscene.code, { ...patch, baseVersion: version.version });
+    onSelectVersion('');
+  }
+
+  async function createDraftFromCurrentSubsceneVersion() {
+    await saveCurrentSubscene({});
+  }
+
+  async function deleteCurrentSubsceneDraft() {
+    if (!subscene || !version || version.status !== 'draft') return;
+    await onDeleteSubsceneVersion(scene.id, subscene.code, version.version);
+    onSelectVersion('');
+  }
+
+  async function createSubscene() {
+    const code = nextSubsceneCode(scenes);
+    await onSaveSubscene(scene.id, code, emptySubsceneVersionDraft(`新子场景 ${code}`));
+    onSelectSubscene(code);
+    onSelectVersion('');
+    onDetailOpenChange(true);
+  }
+
+  function selectScene(id: string) {
+    onSelectScene(id);
+    onDetailOpenChange(false);
+    setMaterialPickerOpen(false);
+  }
+
+  function openSubsceneDetail(code: string) {
+    onSelectSubscene(code);
+    onSelectVersion('');
+    onDetailOpenChange(true);
+  }
+
+  function closeSubsceneDetail() {
+    onDetailOpenChange(false);
+    setMaterialPickerOpen(false);
+  }
+
+  function openSceneEditor() {
+    setSceneDraft(emptyScene(`新的场景 ${scenes.length + 1}`));
+    setSceneEditorOpen(true);
+  }
+
+  function openCurrentSceneEditor() {
+    setSceneDraft(scene);
+    setSceneEditorOpen(true);
+  }
+
+  async function saveSceneDraft() {
+    const name = sceneDraft.name.trim();
+    if (!name) return;
+    await onSaveScene({ ...sceneDraft, name });
+    setSceneEditorOpen(false);
+  }
+
+  const robotStateOptions = fieldOptions(globalFields, 'robot_state', [version?.robotState.initial || '', version?.robotState.target || '']).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
+  const robotRandomFields = version?.randomization.robotInitialState.randomizedFields.map((item) => item.field) || [];
+  const robotRandomOptions = uniqueOptions([
+    ...fieldOptions(globalFields, 'robot_random_field', robotRandomFields),
+    ...fallbackRobotRandomOptions,
+  ]);
+  const robotInitialRandomRows = version ? robotInitialRandomizationRows(version.randomization, version.randomizationFrequency) : [];
+  function saveRobotInitialRandomRows(nextRows: RobotInitialRandomizationRow[]) {
+    if (!version) return;
+    void saveCurrentSubscene(robotInitialRandomizationPatch(version, nextRows));
+  }
+  const robotInitialRandomColumns: Array<DataTableColumn<RobotInitialRandomizationRow>> = [
+    {
+      key: 'target',
+      title: '对象',
+      width: '160px',
+      render: (row) => row.target,
+    },
+    {
+      key: 'frequency',
+      title: '每多少条变换',
+      width: '140px',
+      render: (row, index) => (
+        <input
+          type="number"
+          min={1}
+          value={row.changeIntervalRecords || 1}
+          disabled={!canEditVersion}
+          onChange={(event) => {
+            const nextRows = robotInitialRandomRows.map((current, currentIndex) =>
+              currentIndex === index ? { ...current, changeIntervalRecords: Number(event.target.value) || 1 } : current,
+            );
+            saveRobotInitialRandomRows(nextRows);
+          }}
+        />
+      ),
+    },
+    {
+      key: 'fields',
+      title: '随机性要求',
+      width: '260px',
+      allowOverflow: true,
+      render: (row, index) => (
+        <MultiSelectInput
+          value={row.randomizedFields}
+          options={uniqueOptions([
+            ...robotRandomOptions,
+            ...row.randomizedFields
+              .filter((field) => !robotRandomOptions.some((option) => option.value === field))
+              .map((field) => ({ value: field, label: field })),
+          ])}
+          disabled={!canEditVersion}
+          onChange={(randomizedFields) => {
+            const nextRows = robotInitialRandomRows.map((current, currentIndex) =>
+              currentIndex === index ? { ...current, randomizedFields } : current,
+            );
+            saveRobotInitialRandomRows(nextRows);
+          }}
+        />
+      ),
+    },
+    {
+      key: 'constraints',
+      title: '限制条件',
+      width: '260px',
+      render: (row, index) => (
+        <LongTextDialogEditor
+          title="机器人初始态随机性限制条件"
+          value={row.constraints}
+          disabled={!canEditVersion}
+          placeholder="限制条件"
+          onChange={(constraints) => {
+            const nextRows = robotInitialRandomRows.map((current, currentIndex) =>
+              currentIndex === index ? { ...current, constraints } : current,
+            );
+            saveRobotInitialRandomRows(nextRows);
+          }}
+        />
+      ),
+    },
+    {
+      key: 'action',
+      title: '操作',
+      width: '86px',
+      render: (_row, index) => (
+        <button
+          className="text-button danger"
+          disabled={!canEditVersion}
+          onClick={() => {
+            const nextRows = robotInitialRandomRows.filter((_, currentIndex) => currentIndex !== index);
+            saveRobotInitialRandomRows(nextRows);
+          }}
+        >
+          移除
+        </button>
+      ),
+    },
+  ];
+
+  const materialPickerModal = materialPickerOpen && (
+    <Modal title="从物料库添加物料" onClose={() => setMaterialPickerOpen(false)}>
+      <SearchPanel
+        title="物料库"
+        description="点击物料行添加到当前子场景"
+        query={materialQuery}
+        placeholder="搜索 SKU、物料类型、颜色、材质"
+        count={filteredMaterials.length}
+        onQueryChange={setMaterialQuery}
+      />
+      <DataTable
+        rows={filteredMaterials}
+        columns={materialLibraryColumns}
+        rowKey={(material) => material.id}
+        emptyText="没有匹配的物料"
+        onRowClick={addMaterial}
+      />
+    </Modal>
+  );
+
+  if (detailOpen && subscene && version) {
+    return (
+      <>
+        <div className="detail-page">
+          <div className="detail-page-toolbar">
+            <button className="ghost-button" onClick={closeSubsceneDetail}>
+              返回子场景列表
+            </button>
+            <span>{scene.name} / {subscene.code} / v{version.version}</span>
+          </div>
+          <section className="panel detail-panel">
+            <div className="panel-header">
+              <div>
+                <h2>
+                  {subscene.code} {version.title || subscene.name}
+                </h2>
+                <p>
+                  v{version.version} · {statusText(version.status)}
+                </p>
+              </div>
+              <div className="button-row">
+                <label className="version-select">
+                  <span>版本</span>
+                  <select value={version.version} onChange={(event) => onSelectVersion(event.target.value)}>
+                    {subscene.versions.map((item) => (
+                      <option value={item.version} key={item.version}>
+                        v{item.version} · {statusText(item.status)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {version.status === 'confirmed' ? (
+                  <button className="primary-button" onClick={() => void createDraftFromCurrentSubsceneVersion()}>
+                    编辑为草稿
+                  </button>
+                ) : (
+                  <>
+                    <button className="ghost-button danger" onClick={() => void deleteCurrentSubsceneDraft()}>
+                      删除草稿
+                    </button>
+                    <button className="primary-button" onClick={() => void onConfirmSubscene(scene.id, subscene.code, version.version)}>
+                      确认子场景
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            {version.status === 'confirmed' && <div className="notice info">当前子场景已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
+            <CollapsibleSection title="基础信息" description="0.0.1 草稿可编辑名称；草稿版本可编辑描述">
+              <div className="form-grid compact-fields">
+                <Field label="子场景编号" value={subscene.code} disabled onChange={() => undefined} />
+                <Field
+                  label="子场景名称"
+                  value={version.title || ''}
+                  disabled={!canEditSubsceneTitle}
+                  onChange={(title) => void saveCurrentSubscene({ title })}
+                />
+              </div>
+              <TextArea
+                label="子场景描述"
+                value={version.description || ''}
+                disabled={!canEditDescription}
+                onChange={(description) => void saveCurrentSubscene({ description })}
+              />
+            </CollapsibleSection>
+            <CollapsibleSection title="机器人与随机性" description="机器人初始态、目标态和初始状态随机性">
+              <div className="form-grid compact-fields">
+                <SelectFieldInline
+                  label="机器人初始态"
+                  value={version.robotState.initial}
+                  options={robotStateOptions}
+                  disabled={!canEditVersion}
+                  onChange={(initial) => void saveCurrentSubscene({ robotState: { ...version.robotState, initial } })}
+                />
+                <SelectFieldInline
+                  label="机器人目标态"
+                  value={version.robotState.target}
+                  options={robotStateOptions}
+                  disabled={!canEditVersion}
+                  onChange={(target) => void saveCurrentSubscene({ robotState: { ...version.robotState, target } })}
+                />
+              </div>
+              <div className="embedded-table">
+                <div className="embedded-table-header">
+                  <div>
+                    <h3>机器人初始态随机性</h3>
+                    <p>按机器人初始状态配置随机字段与变换频率</p>
+                  </div>
+                  <button
+                    className="primary-button"
+                    disabled={!canEditVersion || robotInitialRandomRows.length > 0}
+                    onClick={() =>
+                      saveRobotInitialRandomRows([
+                        {
+                          target: '机器人初始态',
+                          changeIntervalRecords: 1,
+                          randomizedFields: [],
+                          constraints: '',
+                        },
+                      ])
+                    }
+                  >
+                    添加随机性
+                  </button>
+                </div>
+                <DataTable
+                  rows={robotInitialRandomRows}
+                  columns={robotInitialRandomColumns}
+                  rowKey={(_row, index) => `robot-initial-random-${index}`}
+                  emptyText="暂无机器人初始态随机性"
+                />
+              </div>
+            </CollapsibleSection>
+            <CollapsibleSection title="物料相关" description="选择本子场景物料，并维护物料状态、状态规则和随机性要求">
+              <div className="embedded-table">
+                <div className="embedded-table-header">
+                  <div>
+                    <h3>已选物料</h3>
+                    <p>点击添加从物料库选择，已选物料支持移除</p>
+                  </div>
+                  <div className="button-row">
+                    <span className="result-count">{version.materials.length} 条</span>
+                    <button className="primary-button" disabled={!canEditVersion} onClick={() => setMaterialPickerOpen(true)}>
+                      添加物料
+                    </button>
+                  </div>
+                </div>
+                <DataTable
+                  rows={version.materials}
+                  columns={selectedMaterialColumns}
+                  rowKey={(material, index) => `${material.skuId}-${index}`}
+                  emptyText="当前子场景还没有选择物料"
+                />
+              </div>
+              <SubsceneStateEditor
+                globalFields={globalFields}
+                version={version}
+                materials={version.materials}
+                readOnly={!canEditVersion}
+                onSave={(patch) => {
+                  if (!canEditVersion) return;
+                  void saveCurrentSubscene(patch);
+                }}
+              />
+            </CollapsibleSection>
+            <CollapsibleSection title="采集步骤和说明" description="仅当前子场景使用的采集步骤、采集操作要求与禁止操作">
+              <StepsTextArea
+                label="采集步骤（一行一步）"
+                steps={version.operation.steps}
+                disabled={!canEditVersion}
+                onChange={(steps) => void saveCurrentSubscene({ operation: { ...version.operation, steps } })}
+              />
+              <StepRandomizationEditor
+                title="采集步骤随机性"
+                value={version.operation.stepRandomization}
+                disabled={!canEditVersion}
+                onChange={(stepRandomization) => void saveCurrentSubscene({ operation: { ...version.operation, stepRandomization } })}
+              />
+              <LocalTextItemEditor
+                title="采集操作要求"
+                description="仅在当前子场景中生效，可直接新建"
+                items={version.operation.allowedOperations}
+                disabled={!canEditVersion}
+                onChange={(allowedOperations) => void saveCurrentSubscene({ operation: { ...version.operation, allowedOperations } })}
+              />
+              <LocalTextItemEditor
+                title="采集禁止操作"
+                description="仅在当前子场景中生效，可直接新建"
+                items={version.operation.forbiddenOperations}
+                disabled={!canEditVersion}
+                onChange={(forbiddenOperations) => void saveCurrentSubscene({ operation: { ...version.operation, forbiddenOperations } })}
+              />
+            </CollapsibleSection>
+            <CollapsibleSection title="标注步骤和说明" description="标注步骤，以及仅当前子场景生效的标注操作要求与禁止操作">
+              <StepsTextArea
+                label="标注步骤（一行一步）"
+                steps={version.annotation.steps || []}
+                disabled={!canEditVersion}
+                onChange={(steps) => void saveCurrentSubscene({ annotation: { ...version.annotation, steps } })}
+              />
+              <LocalTextItemEditor
+                title="标注操作要求"
+                description="仅在当前子场景中生效，可直接新建"
+                items={version.annotation.allowedOperations || []}
+                disabled={!canEditVersion}
+                onChange={(allowedOperations) => void saveCurrentSubscene({ annotation: { ...version.annotation, allowedOperations } })}
+              />
+              <LocalTextItemEditor
+                title="标注禁止操作"
+                description="仅在当前子场景中生效，可直接新建"
+                items={version.annotation.forbiddenOperations || []}
+                disabled={!canEditVersion}
+                onChange={(forbiddenOperations) => void saveCurrentSubscene({ annotation: { ...version.annotation, forbiddenOperations } })}
+              />
+            </CollapsibleSection>
+          </section>
+        </div>
+        {materialPickerModal}
+      </>
+    );
+  }
+
+  return (
+    <div className="scene-workbench">
+      <aside className="scene-directory panel">
+        <SearchPanel
+          title="场景目录"
+          description="按场景分组展示子场景"
+          query={sceneQuery}
+          placeholder="搜索场景名称或 ID"
+          count={filteredScenes.length}
+          onQueryChange={setSceneQuery}
+          actions={
+            <button className="primary-button" onClick={openSceneEditor}>
+              新建场景
+            </button>
+          }
+        />
+        <div className="directory-list">
+          {filteredScenes.map((item) => (
+            <div className={`directory-group ${item.id === scene.id ? 'selected' : ''}`} key={item.id}>
+              <button
+                className="directory-row scene-row"
+                onClick={() => selectScene(item.id)}
+              >
+                <strong>{item.name}</strong>
+                <span>{item.subscenes.length} 个子场景</span>
+              </button>
+              {item.id === scene.id && (
+                <div className="directory-children">
+                  {item.subscenes.map((child) => (
+                    <button
+                      className="directory-row subscene-row"
+                      key={child.code}
+                      onClick={() => openSubsceneDetail(child.code)}
+                    >
+                      <strong>{child.code}</strong>
+                      <span>{latest(child.versions).title || child.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      <section className="scene-main">
+        <section className="panel scene-summary">
+          <div className="panel-header">
+            <div>
+              <h2>{scene.name}</h2>
+              <p>{scene.description || '暂无场景描述'}</p>
+            </div>
+            <button className="ghost-button" onClick={openCurrentSceneEditor}>
+              编辑场景
+            </button>
+          </div>
+          <div className="info-grid">
+            <InfoItem label="场景 ID" value={scene.id} />
+            <InfoItem label="子场景数" value={scene.subscenes.length} />
+            <InfoItem label="最近更新" value={sceneLatestUpdated(scene)} />
+          </div>
+        </section>
+
+        <section className="panel table-panel">
+          <SearchPanel
+            title="子场景列表"
+            description="点击子场景进入详情页"
+            query={subsceneQuery}
+            placeholder="搜索编号、名称、状态或版本"
+            count={filteredSubscenes.length}
+            onQueryChange={setSubsceneQuery}
+            actions={<button className="primary-button" onClick={() => void createSubscene()}>新建子场景</button>}
+          />
+          <DataTable
+            rows={filteredSubscenes}
+            columns={subsceneColumns}
+            rowKey={(item) => item.code}
+            emptyText="没有匹配的子场景"
+            onRowClick={(item) => openSubsceneDetail(item.code)}
+          />
+        </section>
+      </section>
+      {materialPickerModal}
+      {sceneEditorOpen && (
+        <Modal title={sceneDraft.id ? '编辑场景' : '新建场景'} onClose={() => setSceneEditorOpen(false)}>
+          <div className="modal-body">
+            <div className="form-grid">
+              <Field label="场景名称" value={sceneDraft.name} onChange={(name) => setSceneDraft({ ...sceneDraft, name })} />
+            </div>
+            <TextArea
+              label="场景描述"
+              value={sceneDraft.description}
+              onChange={(description) => setSceneDraft({ ...sceneDraft, description })}
+            />
+            <div className="form-actions">
+              <button className="primary-button" disabled={!sceneDraft.name.trim()} onClick={() => void saveSceneDraft()}>
+                保存场景
+              </button>
+              <button className="ghost-button" onClick={() => setSceneEditorOpen(false)}>
+                取消
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function GlobalFieldPage({
+  globalFields,
+  onSaveField,
+}: {
+  globalFields: GlobalField[];
+  onSaveField: (field: GlobalField) => Promise<void>;
+}) {
+  const [fieldQuery, setFieldQuery] = useState('');
+  const [selectedGroup, setSelectedGroup] = useState<GlobalFieldGroup>('reference_object');
+  const [statusFilter, setStatusFilter] = useState<GlobalFieldStatus | 'all'>('all');
+  const [fieldDraft, setFieldDraft] = useState<GlobalField>(emptyGlobalField('reference_object'));
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [openCategories, setOpenCategories] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(globalFieldCategories.map((category) => [category.id, category.groups.includes('reference_object')])),
+  );
+
+  const filteredFields = globalFields.filter(
+    (field) =>
+      field.group === selectedGroup &&
+      (statusFilter === 'all' || field.status === statusFilter) &&
+      matchesQuery(fieldQuery, [
+        field.id,
+        field.label,
+        field.value,
+        field.description,
+        field.status === 'active' ? '启用' : '停用',
+      ]),
+  );
+
+  const fieldColumns: Array<DataTableColumn<GlobalField>> = [
+    {
+      key: 'label',
+      title: '字段名称',
+      width: 'minmax(180px, 1.4fr)',
+      render: (item) => <strong className="table-link">{item.label}</strong>,
+    },
+    {
+      key: 'status',
+      title: '状态',
+      width: '92px',
+      render: (item) => <StatusBadge status={item.status} />,
+    },
+    { key: 'updatedAt', title: '更新时间', width: '118px', render: (item) => formatShortDate(item.updatedAt) },
+  ];
+  const groupOptions = globalFieldCategories.flatMap((category) =>
+    category.groups.map((group) => ({ value: group, label: `${category.label} / ${globalFieldGroupLabels[group]}` })),
+  );
+
+  function countFieldsInGroup(group: GlobalFieldGroup) {
+    return globalFields.filter((field) => field.group === group).length;
+  }
+
+  function countFieldsInCategory(category: GlobalFieldCategory) {
+    return category.groups.reduce((total, group) => total + countFieldsInGroup(group), 0);
+  }
+
+  function toggleCategory(categoryId: string) {
+    setOpenCategories((current) => ({ ...current, [categoryId]: !current[categoryId] }));
+  }
+
+  function saveFieldDraft(patch: Partial<GlobalField> = {}): boolean {
+    const label = (patch.label ?? fieldDraft.label).trim();
+    const next = {
+      ...fieldDraft,
+      group: fieldDraft.group || selectedGroup,
+      ...patch,
+      label,
+      value: label,
+      category: '',
+    };
+    if (!next.label) return false;
+    void onSaveField(next);
+    setFieldDraft(emptyGlobalField(next.group));
+    return true;
+  }
+
+  function selectGroup(group: GlobalFieldGroup) {
+    const category = findGlobalFieldCategory(group);
+    if (category) {
+      setOpenCategories((current) => ({ ...current, [category.id]: true }));
+    }
+    setSelectedGroup(group);
+    setFieldDraft(emptyGlobalField(group));
+    setEditorOpen(false);
+  }
+
+  function openFieldEditor(field: GlobalField) {
+    setFieldDraft(field);
+    setEditorOpen(true);
+  }
+
+  function openNewFieldEditor() {
+    setFieldDraft(emptyGlobalField(selectedGroup));
+    setEditorOpen(true);
+  }
+
+  function saveFieldAndClose(patch: Partial<GlobalField> = {}) {
+    if (saveFieldDraft(patch)) {
+      setEditorOpen(false);
+    }
+  }
+
+  return (
+    <div className="global-field-workbench">
+      <aside className="field-groups panel">
+        <div className="panel-header">
+          <div>
+            <h2>字段分组</h2>
+            <p>全局词表分组</p>
+          </div>
+        </div>
+        <div className="field-group-list">
+          {globalFieldCategories.map((category) => {
+            const isOpen = openCategories[category.id] ?? false;
+            const selectedInCategory = category.groups.includes(selectedGroup);
+            const total = countFieldsInCategory(category);
+            return (
+              <div className={`field-category ${selectedInCategory ? 'contains-selected' : ''}`} key={category.id}>
+                <button
+                  type="button"
+                  className="field-category-row"
+                  aria-expanded={isOpen}
+                  onClick={() => toggleCategory(category.id)}
+                >
+                  <span>
+                    <strong>{category.label}</strong>
+                    <small>{category.description}</small>
+                  </span>
+                  <span className="field-category-meta">
+                    <span>{total}</span>
+                    <b>{isOpen ? '收起' : '展开'}</b>
+                  </span>
+                </button>
+                {isOpen && (
+                  <div className="field-category-groups">
+                    {category.groups.map((group) => (
+                      <button
+                        type="button"
+                        className={`field-group-row ${selectedGroup === group ? 'selected' : ''}`}
+                        key={group}
+                        onClick={() => selectGroup(group)}
+                      >
+                        <strong>{globalFieldGroupLabels[group]}</strong>
+                        <span>{countFieldsInGroup(group)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+
+      <section className="panel table-panel global-field-values">
+        <SearchPanel
+          title={`${globalFieldGroupLabels[selectedGroup]}字段`}
+          description="停用后不再出现在新的下拉选择中，历史数据仍保留"
+          query={fieldQuery}
+          placeholder="搜索字段名称或说明"
+          count={filteredFields.length}
+          onQueryChange={setFieldQuery}
+          actions={
+            <>
+              <label className="compact-filter">
+                <span>状态</span>
+                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as GlobalFieldStatus | 'all')}>
+                  <option value="all">全部</option>
+                  <option value="active">启用</option>
+                  <option value="inactive">停用</option>
+                </select>
+              </label>
+              <button className="primary-button" onClick={openNewFieldEditor}>
+                新建字段
+              </button>
+            </>
+          }
+        />
+        <DataTable
+          rows={filteredFields}
+          columns={fieldColumns}
+          rowKey={(item) => item.id}
+          selectedKey={fieldDraft.id}
+          emptyText="当前分组没有匹配字段"
+          onRowClick={openFieldEditor}
+        />
+      </section>
+      {editorOpen && (
+        <Modal title="字段详情" onClose={() => setEditorOpen(false)}>
+          <div className="modal-body">
+            <div className="form-grid">
+              <SelectField
+                label="字段分组"
+                value={fieldDraft.group}
+                options={groupOptions}
+                onChange={(group) => {
+                  const nextGroup = group as GlobalFieldGroup;
+                  selectGroup(nextGroup);
+                  setFieldDraft({ ...fieldDraft, group: nextGroup });
+                  setEditorOpen(true);
+                }}
+              />
+              <SelectField
+                label="状态"
+                value={fieldDraft.status}
+                options={[
+                  { value: 'active', label: '启用' },
+                  { value: 'inactive', label: '停用' },
+                ]}
+                onChange={(status) => setFieldDraft({ ...fieldDraft, status: status as GlobalFieldStatus })}
+              />
+              <Field label="字段名称" value={fieldDraft.label} onChange={(label) => setFieldDraft({ ...fieldDraft, label })} />
+              <Field
+                label="说明"
+                value={fieldDraft.description || ''}
+                onChange={(description) => setFieldDraft({ ...fieldDraft, description })}
+              />
+            </div>
+            <div className="form-actions">
+              <button className="primary-button" onClick={() => saveFieldAndClose()}>
+                保存字段
+              </button>
+              {fieldDraft.id && (
+                <button
+                  className="ghost-button"
+                  onClick={() => saveFieldAndClose({ status: fieldDraft.status === 'active' ? 'inactive' : 'active' })}
+                >
+                  {fieldDraft.status === 'active' ? '停用字段' : '启用字段'}
+                </button>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function MultiSelectField({
+  label,
+  value,
+  options,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  value: string[];
+  options: Option[];
+  disabled?: boolean;
+  onChange: (value: string[]) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <MultiSelectInput value={value} options={options} disabled={disabled} onChange={onChange} />
+    </label>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  description,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  description?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details className="collapsible-section" open={defaultOpen}>
+      <summary>
+        <div>
+          <h3>{title}</h3>
+          {description && <p>{description}</p>}
+        </div>
+        <span>展开/收起</span>
+      </summary>
+      <div className="collapsible-content">{children}</div>
+    </details>
+  );
+}
+
+function SelectFieldInline({
+  label,
+  value,
+  options,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+        <option value="">请选择</option>
+        {options.map((option) => (
+          <option value={option.value} key={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function StepsTextArea({
+  label,
+  steps,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  steps: OperationStep[];
+  disabled: boolean;
+  onChange: (steps: OperationStep[]) => void;
+}) {
+  const propValue = steps.map((step) => step.description).join('\n');
+  const [draft, setDraft] = useState(propValue);
+  const lineCount = Math.max(1, draft.split('\n').length);
+
+  useEffect(() => {
+    setDraft(propValue);
+  }, [propValue]);
+
+  function commitDraft() {
+    const nextSteps = asLines(draft).map((description, index) => ({ order: index + 1, description }));
+    const nextValue = nextSteps.map((step) => step.description).join('\n');
+    if (nextValue !== propValue) {
+      onChange(nextSteps);
+    }
+    setDraft(nextValue);
+  }
+
+  return (
+    <label className="field wide">
+      <span>{label}</span>
+      <div className="numbered-textarea">
+        <div className="line-number-gutter" aria-hidden="true">
+          {Array.from({ length: lineCount }, (_, index) => (
+            <span key={index}>{index + 1}</span>
+          ))}
+        </div>
+        <textarea
+          value={draft}
+          disabled={disabled}
+          onBlur={commitDraft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      </div>
+    </label>
+  );
+}
+
+function StepRandomizationEditor({
+  title,
+  value,
+  disabled,
+  onChange,
+}: {
+  title: string;
+  value?: { enabled: boolean; startOrder: number; endOrder: number };
+  disabled: boolean;
+  onChange: (value: { enabled: boolean; startOrder: number; endOrder: number }) => void;
+}) {
+  const current = value || { enabled: false, startOrder: 1, endOrder: 1 };
+  return (
+    <div className="form-grid compact-fields">
+      <label className="field checkbox-field">
+        <span>{title}</span>
+        <label>
+          <input
+            type="checkbox"
+            checked={current.enabled}
+            disabled={disabled}
+            onChange={(event) => onChange({ ...current, enabled: event.target.checked })}
+          />
+          启用
+        </label>
+      </label>
+      <label className="field">
+        <span>第几步到第几步可随机</span>
+        <span className="range-edit">
+          <input
+            type="number"
+            min={1}
+            value={current.startOrder}
+            disabled={disabled}
+            onChange={(event) => onChange({ ...current, startOrder: Number(event.target.value) || 1 })}
+          />
+          <input
+            type="number"
+            min={1}
+            value={current.endOrder}
+            disabled={disabled}
+            onChange={(event) => onChange({ ...current, endOrder: Number(event.target.value) || 1 })}
+          />
+        </span>
+      </label>
+    </div>
+  );
+}
+
+function LongTextDialogEditor({
+  title,
+  value,
+  disabled,
+  placeholder = '填写内容',
+  onChange,
+}: {
+  title: string;
+  value: string;
+  disabled: boolean;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    if (!open) setDraft(value);
+  }, [open, value]);
+
+  function save() {
+    onChange(draft);
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <button type="button" className="summary-edit-button" disabled={disabled} onClick={() => setOpen(true)}>
+        <span>{value || placeholder}</span>
+      </button>
+      {open && (
+        <Modal title={title} onClose={() => setOpen(false)}>
+          <div className="modal-body">
+            <textarea
+              className="long-text-editor"
+              value={draft}
+              placeholder={placeholder}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <div className="form-actions">
+              <button className="primary-button" onClick={save}>
+                保存
+              </button>
+              <button className="ghost-button" onClick={() => setOpen(false)}>
+                取消
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function LocalTextItemEditor({
+  title,
+  description,
+  items,
+  disabled,
+  onChange,
+}: {
+  title: string;
+  description: string;
+  items: SubsceneVersion['operation']['allowedOperations'];
+  disabled: boolean;
+  onChange: (items: SubsceneVersion['operation']['allowedOperations']) => void;
+}) {
+  return (
+    <div className="embedded-table">
+      <div className="embedded-table-header">
+        <div>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
+        <button
+          className="primary-button"
+          disabled={disabled}
+          onClick={() => onChange([...items, { description: '' }])}
+        >
+          新增
+        </button>
+      </div>
+      <div className="local-item-list">
+        {items.length === 0 && <div className="table-empty">暂无内容</div>}
+        {items.map((item, index) => (
+          <div className="local-item-row" key={`${title}-${index}`}>
+            <input
+              value={item.description}
+              disabled={disabled}
+              placeholder="说明"
+              onChange={(event) =>
+                onChange(items.map((current, currentIndex) => (currentIndex === index ? { ...current, description: event.target.value } : current)))
+              }
+            />
+            <button className="text-button danger" disabled={disabled} onClick={() => onChange(items.filter((_, currentIndex) => currentIndex !== index))}>
+              移除
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CustomerPage({ customers, onSave }: { customers: Customer[]; onSave: (customer: Customer) => Promise<void> }) {
+  const [draft, setDraft] = useState<Customer>(customers[0] || emptyCustomer());
+  useEffect(() => {
+    setDraft(customers[0] || emptyCustomer());
+  }, [customers]);
+  const columns: Array<DataTableColumn<Customer>> = [
+    {
+      key: 'name',
+      title: '客户名称',
+      width: 'minmax(180px, 1.4fr)',
+      render: (item) => <strong className="table-link">{item.name || '未命名客户'}</strong>,
+    },
+    { key: 'contact', title: '联系人', width: '140px', render: (item) => item.contact.name || '-' },
+    { key: 'phone', title: '电话', width: '150px', render: (item) => item.contact.phone || '-' },
+    { key: 'email', title: '邮箱', width: 'minmax(180px, 1.3fr)', render: (item) => item.contact.email || '-' },
+    { key: 'notes', title: '备注', width: 'minmax(220px, 1.6fr)', render: (item) => item.notes || '-' },
+  ];
+  return (
+    <MasterDataPage
+      title="客户"
+      description="客户主数据供客户需求引用"
+      items={customers}
+      columns={columns}
+      getTitle={(item) => item.name}
+      getSearchText={(item) => `${item.name} ${item.contact.name} ${item.contact.phone} ${item.contact.email} ${item.notes || ''}`}
+      selectedId={draft.id}
+      onSelect={(item) => setDraft(item)}
+      onNew={() => setDraft(emptyCustomer())}
+    >
+      <Field label="客户名称" value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
+      <Field label="联系人" value={draft.contact.name} onChange={(name) => setDraft({ ...draft, contact: { ...draft.contact, name } })} />
+      <Field label="电话" value={draft.contact.phone} onChange={(phone) => setDraft({ ...draft, contact: { ...draft.contact, phone } })} />
+      <Field label="邮箱" value={draft.contact.email} onChange={(email) => setDraft({ ...draft, contact: { ...draft.contact, email } })} />
+      <TextArea label="备注" value={draft.notes || ''} onChange={(notes) => setDraft({ ...draft, notes })} />
+      <button className="primary-button" onClick={() => void onSave(draft)}>
+        保存客户
+      </button>
+    </MasterDataPage>
+  );
+}
+
+function SubsceneStateEditor({
+  globalFields,
+  version,
+  materials,
+  readOnly,
+  onSave,
+}: {
+  globalFields: GlobalField[];
+  version: SubsceneVersion;
+  materials: SubsceneVersion['materials'];
+  readOnly: boolean;
+  onSave: (patch: Partial<SubsceneVersion>) => void;
+}) {
+  const rows = initialStateRows(version.objectStates.initial);
+  const targetRows = targetStateRows(version.objectStates.target);
+  const materialInitialRandomRows = materialInitialRandomizationRows(version.randomization);
+  const materialOptions = materials.map((material) => material.type);
+  const [expandedInitialRows, setExpandedInitialRows] = useState<Record<number, boolean>>({});
+  const [expandedTargetRows, setExpandedTargetRows] = useState<Record<number, boolean>>({});
+
+  function valuesForGroup(group: GlobalFieldGroup, currentValues: string[] = []): string[] {
+    return fieldOptions(globalFields, group, currentValues).map((option) => option.value);
+  }
+
+  function saveRows(nextRows: InitialLocationRow[]) {
+    if (readOnly) return;
+    onSave({ objectStates: { ...version.objectStates, initial: initialStatesFromRows(nextRows) } });
+  }
+
+  function updateRow(index: number, patch: Partial<InitialLocationRow>) {
+    saveRows(rows.map((row, currentIndex) => (currentIndex === index ? { ...row, ...patch } : row)));
+  }
+
+  function saveTargetRows(nextRows: TargetStateRow[]) {
+    if (readOnly) return;
+    onSave({ objectStates: { ...version.objectStates, target: targetStatesFromRows(nextRows) } });
+  }
+
+  function updateTargetRow(index: number, patch: Partial<TargetStateRow>) {
+    saveTargetRows(targetRows.map((row, currentIndex) => (currentIndex === index ? { ...row, ...patch } : row)));
+  }
+
+  function saveMaterialInitialRandomRows(nextRows: MaterialInitialRandomizationRow[]) {
+    if (readOnly) return;
+    onSave({
+      randomization: {
+        ...version.randomization,
+        materialInitialState: { rules: materialInitialRandomizationFromRows(nextRows) },
+      },
+    });
+  }
+
+  function updateMaterialInitialRandomRow(index: number, patch: Partial<MaterialInitialRandomizationRow>) {
+    saveMaterialInitialRandomRows(materialInitialRandomRows.map((row, currentIndex) => (currentIndex === index ? { ...row, ...patch } : row)));
+  }
+
+  function stateSummary(row: InitialLocationRow): string {
+    return [
+      row.regions.length ? `区域 ${row.regions.join('、')}` : '',
+      row.secondaryReferences.length || row.secondaryRelativePositions.length
+        ? `二级 ${[...row.secondaryReferences, ...row.secondaryRelativePositions].join('、')}`
+        : '',
+      row.poses.length ? `姿态 ${row.poses.join('、')}` : '',
+      row.forms.length ? `形态 ${row.forms.join('、')}` : '',
+      row.parameters.length ? `参数 ${row.parameters.join('、')}` : '',
+      row.constraints.length ? `限制 ${row.constraints.length} 条` : '',
+    ]
+      .filter(Boolean)
+      .join('；');
+  }
+
+  function stateDetailEditor<T extends InitialLocationRow>({
+    row,
+    index,
+    update,
+  }: {
+    row: T;
+    index: number;
+    update: (index: number, patch: Partial<T>) => void;
+  }) {
+    return (
+      <div className="row-detail-grid">
+        <label>
+          <span>区域</span>
+          <MultiEnumInput
+            value={row.regions}
+            options={valuesForGroup('region', row.regions)}
+            placeholder="选择区域"
+            disabled={readOnly}
+            allowCustom
+            onChange={(regions) => update(index, { regions } as Partial<T>)}
+          />
+        </label>
+        <label>
+          <span>二级参照物</span>
+          <MultiEnumInput
+            value={row.secondaryReferences}
+            options={valuesForGroup('reference_object', row.secondaryReferences)}
+            placeholder="选择参照物"
+            disabled={readOnly}
+            allowCustom
+            onChange={(secondaryReferences) => update(index, { secondaryReferences } as Partial<T>)}
+          />
+        </label>
+        <label>
+          <span>二级相对位置</span>
+          <MultiEnumInput
+            value={row.secondaryRelativePositions}
+            options={valuesForGroup('relative_position', row.secondaryRelativePositions)}
+            placeholder="选择相对位置"
+            disabled={readOnly}
+            allowCustom
+            onChange={(secondaryRelativePositions) => update(index, { secondaryRelativePositions } as Partial<T>)}
+          />
+        </label>
+        <label>
+          <span>姿态</span>
+          <MultiEnumInput
+            value={row.poses}
+            options={valuesForGroup('pose', row.poses)}
+            placeholder="选择姿态"
+            disabled={readOnly}
+            allowCustom
+            onChange={(poses) => update(index, { poses } as Partial<T>)}
+          />
+        </label>
+        <label>
+          <span>形态</span>
+          <MultiEnumInput
+            value={row.forms}
+            options={valuesForGroup('form', row.forms)}
+            placeholder="选择形态"
+            disabled={readOnly}
+            allowCustom
+            onChange={(forms) => update(index, { forms } as Partial<T>)}
+          />
+        </label>
+        <label>
+          <span>参数</span>
+          <MultiEnumInput
+            value={row.parameters}
+            options={valuesForGroup('parameter', row.parameters)}
+            placeholder="选择参数"
+            disabled={readOnly}
+            allowCustom
+            onChange={(parameters) => update(index, { parameters } as Partial<T>)}
+          />
+        </label>
+        <label className="row-detail-wide">
+          <span>限制条件</span>
+          <LongTextDialogEditor
+            title="物料状态限制条件"
+            value={joinEnum(row.constraints)}
+            disabled={readOnly}
+            placeholder="限制条件"
+            onChange={(constraints) => update(index, { constraints: splitEnum(constraints) } as Partial<T>)}
+          />
+        </label>
+      </div>
+    );
+  }
+
+  function stateColumns<T extends InitialLocationRow>({
+    expandedRows,
+    toggleExpanded,
+    update,
+    remove,
+  }: {
+    expandedRows: Record<number, boolean>;
+    toggleExpanded: (index: number) => void;
+    update: (index: number, patch: Partial<T>) => void;
+    remove: (index: number) => void;
+  }): Array<DataTableColumn<T>> {
+    return [
+    {
+      key: 'object',
+      title: '物料',
+      width: '150px',
+      render: (row, index) => (
+        <select value={row.object} disabled={readOnly} onChange={(event) => update(index, { object: event.target.value } as Partial<T>)}>
+          <option value="">选择物料</option>
+          {Array.from(new Set([...materialOptions, row.object].filter(Boolean))).map((option) => (
+            <option value={option} key={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      ),
+    },
+    {
+      key: 'primaryReference',
+      title: '一级参照物',
+      width: '220px',
+      allowOverflow: true,
+      render: (row, index) => (
+        <MultiEnumInput
+          value={row.primaryReferences}
+          options={valuesForGroup('reference_object', row.primaryReferences)}
+          placeholder="选择参照物"
+          disabled={readOnly}
+          allowCustom
+          onChange={(primaryReferences) => update(index, { primaryReferences } as Partial<T>)}
+        />
+      ),
+    },
+    {
+      key: 'primaryRelativePosition',
+      title: '一级相对位置',
+      width: '220px',
+      allowOverflow: true,
+      render: (row, index) => (
+        <MultiEnumInput
+          value={row.primaryRelativePositions}
+          options={valuesForGroup('relative_position', row.primaryRelativePositions)}
+          placeholder="选择相对位置"
+          disabled={readOnly}
+          allowCustom
+          onChange={(primaryRelativePositions) => update(index, { primaryRelativePositions } as Partial<T>)}
+        />
+      ),
+    },
+    {
+      key: 'supportSurface',
+      title: '支撑面',
+      width: '220px',
+      allowOverflow: true,
+      render: (row, index) => (
+        <MultiEnumInput
+          value={row.supportSurfaces}
+          options={valuesForGroup('support_surface', row.supportSurfaces)}
+          placeholder="选择支撑面"
+          disabled={readOnly}
+          allowCustom
+          onChange={(supportSurfaces) => update(index, { supportSurfaces } as Partial<T>)}
+        />
+      ),
+    },
+    {
+      key: 'summary',
+      title: '详情摘要',
+      width: 'minmax(220px, 1fr)',
+      render: (row, index) => (
+        <div className="row-summary-stack">
+          <button type="button" className="summary-edit-button" onClick={() => toggleExpanded(index)}>
+            <span>{stateSummary(row) || '展开填写更多状态字段'}</span>
+          </button>
+          {expandedRows[index] && stateDetailEditor({ row, index, update })}
+        </div>
+      ),
+    },
+    {
+      key: 'action',
+      title: '操作',
+      width: '86px',
+      render: (_row, index) => (
+        <button
+          className="text-button danger"
+          disabled={readOnly}
+          onClick={() => remove(index)}
+        >
+          移除
+        </button>
+      ),
+    },
+  ];
+  }
+
+  const initialStateColumns = stateColumns<InitialLocationRow>({
+    expandedRows: expandedInitialRows,
+    toggleExpanded: (index) => setExpandedInitialRows((current) => ({ ...current, [index]: !current[index] })),
+    update: updateRow,
+    remove: (index) => saveRows(rows.filter((_, currentIndex) => currentIndex !== index)),
+  });
+  const targetStateColumns = stateColumns<TargetStateRow>({
+    expandedRows: expandedTargetRows,
+    toggleExpanded: (index) => setExpandedTargetRows((current) => ({ ...current, [index]: !current[index] })),
+    update: updateTargetRow,
+    remove: (index) => saveTargetRows(targetRows.filter((_, currentIndex) => currentIndex !== index)),
+  });
+
+  const materialInitialRandomColumns: Array<DataTableColumn<MaterialInitialRandomizationRow>> = [
+    {
+      key: 'materials',
+      title: '物料',
+      width: '240px',
+      allowOverflow: true,
+      render: (row, index) => (
+        <MultiEnumInput
+          value={row.targetMaterials}
+          options={materialOptions}
+          placeholder="选择物料"
+          disabled={readOnly}
+          onChange={(targetMaterials) => updateMaterialInitialRandomRow(index, { targetMaterials })}
+        />
+      ),
+    },
+    {
+      key: 'frequency',
+      title: '每多少条变换',
+      width: '140px',
+      render: (row, index) => (
+        <input
+          type="number"
+          min={1}
+          value={row.changeIntervalRecords || 1}
+          disabled={readOnly}
+          onChange={(event) => updateMaterialInitialRandomRow(index, { changeIntervalRecords: Number(event.target.value) || 1 })}
+        />
+      ),
+    },
+    {
+      key: 'fields',
+      title: '随机性要求',
+      width: '260px',
+      allowOverflow: true,
+      render: (row, index) => (
+        <MultiSelectInput
+          value={row.randomizedFields}
+          options={uniqueOptions([
+            ...fieldOptions(globalFields, 'material_random_field', row.randomizedFields),
+            ...fallbackMaterialRandomOptions,
+          ])}
+          disabled={readOnly}
+          onChange={(randomizedFields) => updateMaterialInitialRandomRow(index, { randomizedFields })}
+        />
+      ),
+    },
+    {
+      key: 'constraints',
+      title: '限制条件',
+      width: '260px',
+      render: (row, index) => (
+        <LongTextDialogEditor
+          title="物料初始状态随机性限制条件"
+          value={row.constraints}
+          disabled={readOnly}
+          placeholder="限制条件"
+          onChange={(constraints) => updateMaterialInitialRandomRow(index, { constraints })}
+        />
+      ),
+    },
+    {
+      key: 'action',
+      title: '操作',
+      width: '86px',
+      render: (_row, index) => (
+        <button
+          className="text-button danger"
+          disabled={readOnly}
+          onClick={() => saveMaterialInitialRandomRows(materialInitialRandomRows.filter((_, currentIndex) => currentIndex !== index))}
+        >
+          移除
+        </button>
+      ),
+    },
+  ];
+
+  return (
+    <div className="state-editor">
+      <div className="embedded-table">
+        <div className="embedded-table-header">
+          <div>
+            <h3>物料初始状态</h3>
+            <p>物料从已选物料中选择；其他字段可从全局字段选择，也可新增当前子场景字段</p>
+          </div>
+          <button
+            className="primary-button"
+            disabled={readOnly}
+            onClick={() => saveRows([...rows, emptyInitialLocationRow(materialOptions[0] || '')])}
+          >
+            添加状态
+          </button>
+        </div>
+        <DataTable
+          rows={rows}
+          columns={initialStateColumns}
+          rowKey={(_row, index) => `initial-state-${index}`}
+          emptyText="暂无物料初始状态"
+        />
+      </div>
+      <div className="embedded-table">
+        <div className="embedded-table-header">
+          <div>
+            <h3>物料目标状态</h3>
+            <p>字段与物料初始状态一致，可描述目标位置、参照关系、姿态、形态和参数</p>
+          </div>
+          <button
+            className="primary-button"
+            disabled={readOnly}
+            onClick={() => saveTargetRows([...targetRows, emptyTargetStateRow(materialOptions[0] || '')])}
+          >
+            添加目标状态
+          </button>
+        </div>
+        <DataTable
+          rows={targetRows}
+          columns={targetStateColumns}
+          rowKey={(_row, index) => `target-state-${index}`}
+          emptyText="暂无物料目标状态"
+        />
+      </div>
+      <div className="embedded-table">
+        <div className="embedded-table-header">
+          <div>
+            <h3>物料初始状态随机性</h3>
+            <p>不同物料可设置不同随机字段与变换频率</p>
+          </div>
+          <button
+            className="primary-button"
+            disabled={readOnly}
+            onClick={() =>
+              saveMaterialInitialRandomRows([
+                ...materialInitialRandomRows,
+                { targetMaterials: materialOptions[0] ? [materialOptions[0]] : [], changeIntervalRecords: 1, randomizedFields: [], constraints: '' },
+              ])
+            }
+          >
+            添加随机性
+          </button>
+        </div>
+        <DataTable
+          rows={materialInitialRandomRows}
+          columns={materialInitialRandomColumns}
+          rowKey={(_row, index) => `material-initial-random-${index}`}
+          emptyText="暂无物料初始状态随机性"
+        />
+      </div>
+    </div>
+  );
+}
+
+function MaterialPage({ materials, onSave }: { materials: Material[]; onSave: (material: Material) => Promise<void> }) {
+  const nextSkuId = nextReadableId(
+    materials.map((material) => material.skuId),
+    'SKU',
+  );
+  const [draft, setDraft] = useState<Material>(materials[0] || emptyMaterial(nextSkuId));
+  useEffect(() => {
+    setDraft(materials[0] || emptyMaterial(nextSkuId));
+  }, [materials, nextSkuId]);
+  const columns: Array<DataTableColumn<Material>> = [
+    {
+      key: 'skuId',
+      title: 'SKU 编号',
+      width: '130px',
+      render: (item) => <strong className="table-link">{item.skuId || '-'}</strong>,
+    },
+    { key: 'type', title: '物料类型', width: 'minmax(140px, 1.2fr)', render: (item) => item.type || '-' },
+    { key: 'color', title: '颜色', width: '110px', render: (item) => item.color || '-' },
+    { key: 'material', title: '材质', width: '130px', render: (item) => item.material || '-' },
+    { key: 'packageType', title: '包装类型', width: '130px', render: (item) => item.packageType || '-' },
+    { key: 'size', title: '尺寸', width: 'minmax(180px, 1.4fr)', render: (item) => item.size || '-' },
+    { key: 'weight', title: '重量', width: '100px', render: (item) => item.weight || '-' },
+  ];
+  return (
+    <MasterDataPage
+      title="物料"
+      description="物料主数据通过 SKU 供子场景引用"
+      items={materials}
+      columns={columns}
+      getTitle={(item) => `${item.skuId} ${item.type}`}
+      getSearchText={(item) =>
+        `${item.skuId} ${item.type} ${item.color} ${item.material} ${item.packageType} ${item.size || ''} ${item.weight || ''}`
+      }
+      selectedId={draft.id}
+      onSelect={(item) => setDraft(item)}
+      onNew={() => setDraft(emptyMaterial(nextSkuId))}
+    >
+      <Field label="SKU 编号" value={draft.skuId} disabled onChange={() => undefined} />
+      {!draft.id && <p className="field-note">SKU 由系统自动生成，保存时会按最新数据确认最终编号。</p>}
+      <Field label="物料类型" value={draft.type} onChange={(type) => setDraft({ ...draft, type })} />
+      <Field label="颜色" value={draft.color} onChange={(color) => setDraft({ ...draft, color })} />
+      <Field label="材质" value={draft.material} onChange={(material) => setDraft({ ...draft, material })} />
+      <Field label="包装类型" value={draft.packageType} onChange={(packageType) => setDraft({ ...draft, packageType })} />
+      <Field label="尺寸" value={draft.size || ''} onChange={(size) => setDraft({ ...draft, size })} />
+      <Field label="重量" value={draft.weight || ''} onChange={(weight) => setDraft({ ...draft, weight })} />
+      <button className="primary-button" onClick={() => void onSave(draft.id ? draft : { ...draft, skuId: '' })}>
+        保存物料
+      </button>
+    </MasterDataPage>
+  );
+}
+
+function RobotPage({ robots, onSave }: { robots: RobotModel[]; onSave: (robot: RobotModel) => Promise<void> }) {
+  const [draft, setDraft] = useState<RobotModel>(robots[0] || emptyRobot());
+  useEffect(() => {
+    setDraft(robots[0] || emptyRobot());
+  }, [robots]);
+  const columns: Array<DataTableColumn<RobotModel>> = [
+    {
+      key: 'model',
+      title: '型号',
+      width: 'minmax(160px, 1.4fr)',
+      render: (item) => <strong className="table-link">{item.model || '未命名型号'}</strong>,
+    },
+    { key: 'brand', title: '品牌', width: '140px', render: (item) => item.brand || '-' },
+    { key: 'terminal', title: '末端', width: '160px', render: (item) => item.terminal || '-' },
+    {
+      key: 'topics',
+      title: 'Topic 数',
+      width: '100px',
+      render: (item) => Object.keys(item.topics).length,
+    },
+  ];
+  return (
+    <MasterDataPage
+      title="机器型号"
+      description="机器型号供客户需求选择，topic 要求可在详情中维护"
+      items={robots}
+      columns={columns}
+      getTitle={(item) => item.model}
+      getSearchText={(item) =>
+        `${item.brand} ${item.model} ${item.terminal} ${Object.keys(item.topics).join(' ')}`
+      }
+      selectedId={draft.id}
+      onSelect={(item) => setDraft(item)}
+      onNew={() => setDraft(emptyRobot())}
+    >
+      <Field label="品牌" value={draft.brand} onChange={(brand) => setDraft({ ...draft, brand })} />
+      <Field label="型号" value={draft.model} onChange={(model) => setDraft({ ...draft, model })} />
+      <Field label="末端" value={draft.terminal} onChange={(terminal) => setDraft({ ...draft, terminal })} />
+      <TextArea
+        label="Topic（key:value，一行一个）"
+        value={Object.entries(draft.topics)
+          .map(([key, value]) => `${key}:${value}`)
+          .join('\n')}
+        onChange={(value) => setDraft({ ...draft, topics: keyValueLines(value) })}
+      />
+      <button className="primary-button" onClick={() => void onSave(draft)}>
+        保存型号
+      </button>
+    </MasterDataPage>
+  );
+}
+
+function MasterDataPage<T extends { id: string }>({
+  title,
+  description,
+  items,
+  columns,
+  getTitle,
+  getSearchText,
+  selectedId,
+  onSelect,
+  onNew,
+  children,
+}: {
+  title: string;
+  description: string;
+  items: T[];
+  columns: Array<DataTableColumn<T>>;
+  getTitle: (item: T) => string;
+  getSearchText: (item: T) => string;
+  selectedId: string;
+  onSelect: (item: T) => void;
+  onNew: () => void;
+  children: ReactNode;
+}) {
+  const [query, setQuery] = useState('');
+  const [editorOpen, setEditorOpen] = useState(false);
+  const filteredItems = items.filter((item) => matchesQuery(query, [item.id, getTitle(item), getSearchText(item)]));
+
+  function openItemEditor(item: T) {
+    onSelect(item);
+    setEditorOpen(true);
+  }
+
+  function openNewItemEditor() {
+    onNew();
+    setEditorOpen(true);
+  }
+
+  return (
+    <div className="page-stack">
+      <section className="panel table-panel">
+        <SearchPanel
+          title={`${title}列表`}
+          description={description}
+          query={query}
+          placeholder={`搜索${title}名称、编号或字段`}
+          count={filteredItems.length}
+          onQueryChange={setQuery}
+          actions={
+            <button className="primary-button" onClick={openNewItemEditor}>
+              新建{title}
+            </button>
+          }
+        />
+        <DataTable
+          rows={filteredItems}
+          columns={columns}
+          rowKey={(item) => item.id || getTitle(item)}
+          selectedKey={selectedId}
+          emptyText={`没有匹配的${title}`}
+          onRowClick={openItemEditor}
+        />
+      </section>
+      {editorOpen && (
+        <Modal title={`${title}详情`} onClose={() => setEditorOpen(false)}>
+          <div className="form-stack modal-form-stack">{children}</div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  type?: 'text' | 'number' | 'date';
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input type={type} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  options,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => (
+          <option value={option.value} key={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function TextArea({
+  label,
+  value,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="field wide">
+      <span>{label}</span>
+      <textarea value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function keyValueLines(value: string): Record<string, string> {
+  return value.split('\n').reduce<Record<string, string>>((acc, line) => {
+    const [key, ...rest] = line.split(':');
+    if (key?.trim()) {
+      acc[key.trim()] = rest.join(':').trim();
+    }
+    return acc;
+  }, {});
+}
+
+function splitList(value: string | undefined): string[] {
+  return (value || '')
+    .split(/[，,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function forbiddenGroupsFromKeys(keys: string[], options: Option[]): RequirementVersion['forbiddenOperations'] {
+  const operations = keys.map((operation) => {
+    const option = options.find((item) => item.value === operation);
+    return { operation, note: option?.description || '' };
+  });
+  return operations.length ? [{ category: '', operations }] : [];
+}
+
+function joinEnum(values: string[]): string {
+  return values.filter(Boolean).join('、');
+}
+
+function splitEnum(value: string | undefined): string[] {
+  return (value || '')
+    .split(/[、，,\\/]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function emptyInitialLocationRow(object = ''): InitialLocationRow {
+  return {
+    object,
+    primaryReferences: [],
+    primaryRelativePositions: [],
+    supportSurfaces: [],
+    regions: [],
+    secondaryReferences: [],
+    secondaryRelativePositions: [],
+    poses: [],
+    forms: [],
+    parameters: [],
+    constraints: [],
+  };
+}
+
+function initialStateRows(states: SubsceneVersion['objectStates']['initial']): InitialLocationRow[] {
+  return states.flatMap((state) =>
+    state.allowedLocations.map((location) => {
+      const primary = location.referencePath.find((item) => item.level === 1);
+      const secondary = location.referencePath.find((item) => item.level === 2);
+      return {
+        object: state.object,
+        primaryReferences: splitEnum(primary?.referenceObject),
+        primaryRelativePositions: splitEnum(primary?.relativePosition),
+        supportSurfaces: splitEnum(location.supportSurface),
+        regions: location.allowedRegions,
+        secondaryReferences: splitEnum(secondary?.referenceObject),
+        secondaryRelativePositions: splitEnum(secondary?.relativePosition),
+        poses: location.allowedPose,
+        forms: location.allowedForm,
+        parameters: (location as { parameters?: string[] }).parameters || [],
+        constraints: location.constraints,
+      };
+    }),
+  );
+}
+
+function initialStatesFromRows(rows: InitialLocationRow[]): SubsceneVersion['objectStates']['initial'] {
+  const states = new Map<string, SubsceneVersion['objectStates']['initial'][number]>();
+  for (const row of rows) {
+    if (!row.object) continue;
+    const current = states.get(row.object) || { object: row.object, allowedLocations: [] };
+    const referencePath = [
+      row.primaryReferences.length || row.primaryRelativePositions.length
+        ? {
+            level: 1,
+            referenceObject: joinEnum(row.primaryReferences),
+            relativePosition: joinEnum(row.primaryRelativePositions),
+          }
+        : undefined,
+      row.secondaryReferences.length || row.secondaryRelativePositions.length
+        ? {
+            level: 2,
+            referenceObject: joinEnum(row.secondaryReferences),
+            relativePosition: joinEnum(row.secondaryRelativePositions),
+          }
+        : undefined,
+    ].filter(Boolean) as SubsceneVersion['objectStates']['initial'][number]['allowedLocations'][number]['referencePath'];
+    current.allowedLocations.push({
+      location: joinEnum([...row.primaryReferences, ...row.primaryRelativePositions, ...row.regions]),
+      referencePath,
+      supportSurface: joinEnum(row.supportSurfaces),
+      allowedRegions: row.regions,
+      allowedPose: row.poses,
+      allowedForm: row.forms,
+      parameters: row.parameters,
+      constraints: row.constraints,
+    });
+    states.set(row.object, current);
+  }
+  return Array.from(states.values());
+}
+
+function targetStateRows(states: SubsceneVersion['objectStates']['target']): TargetStateRow[] {
+  return states.map((state) => {
+    const primary = state.referencePath?.find((item) => item.level === 1);
+    const secondary = state.referencePath?.find((item) => item.level === 2);
+    return {
+      object: state.object,
+      primaryReferences: splitEnum(primary?.referenceObject || state.requiredLocation),
+      primaryRelativePositions: splitEnum(primary?.relativePosition),
+      supportSurfaces: splitEnum(state.supportSurface),
+      regions: state.requiredRegions,
+      secondaryReferences: splitEnum(secondary?.referenceObject),
+      secondaryRelativePositions: splitEnum(secondary?.relativePosition),
+      poses: state.requiredPose,
+      forms: state.requiredForm,
+      parameters: state.parameters || [],
+      constraints: state.constraints || [],
+    };
+  });
+}
+
+function targetStatesFromRows(rows: TargetStateRow[]): SubsceneVersion['objectStates']['target'] {
+  return rows
+    .filter((row) => row.object)
+    .map((row) => {
+      const referencePath = [
+        row.primaryReferences.length || row.primaryRelativePositions.length
+          ? {
+              level: 1,
+              referenceObject: joinEnum(row.primaryReferences),
+              relativePosition: joinEnum(row.primaryRelativePositions),
+            }
+          : undefined,
+        row.secondaryReferences.length || row.secondaryRelativePositions.length
+          ? {
+              level: 2,
+              referenceObject: joinEnum(row.secondaryReferences),
+              relativePosition: joinEnum(row.secondaryRelativePositions),
+            }
+          : undefined,
+      ].filter(Boolean) as NonNullable<SubsceneVersion['objectStates']['target'][number]['referencePath']>;
+      return {
+        object: row.object,
+        requiredLocation: joinEnum([...row.primaryReferences, ...row.primaryRelativePositions, ...row.regions]),
+        requiredRegions: row.regions,
+        requiredPose: row.poses,
+        requiredForm: row.forms,
+        referencePath,
+        supportSurface: joinEnum(row.supportSurfaces),
+        parameters: row.parameters,
+        constraints: row.constraints,
+      };
+    });
+}
+
+function emptyTargetStateRow(object = ''): TargetStateRow {
+  return emptyInitialLocationRow(object);
+}
+
+function robotInitialRandomizationRows(
+  randomization: SubsceneVersion['randomization'],
+  legacyFrequency?: string,
+): RobotInitialRandomizationRow[] {
+  const robotInitialState = randomization.robotInitialState;
+  if (!robotInitialState.enabled && robotInitialState.randomizedFields.length === 0) {
+    return [];
+  }
+  const constraints = Array.from(new Set(robotInitialState.randomizedFields.flatMap((field) => field.constraints))).filter(Boolean);
+  return [
+    {
+      target: '机器人初始态',
+      changeIntervalRecords: robotInitialState.changeIntervalRecords || Number(legacyFrequency) || 1,
+      randomizedFields: robotInitialState.randomizedFields.map((field) => field.field),
+      constraints: joinEnum(constraints),
+    },
+  ];
+}
+
+function robotInitialRandomizationPatch(
+  version: SubsceneVersion,
+  rows: RobotInitialRandomizationRow[],
+): Partial<SubsceneVersion> {
+  const row = rows[0];
+  const randomizedFields = row
+    ? row.randomizedFields.map((field) => ({
+        field,
+        displayName: field,
+        constraints: splitEnum(row.constraints),
+      }))
+    : [];
+  const changeIntervalRecords = row?.changeIntervalRecords || 1;
+  return {
+    robotInitialRandomizationRequirements: row?.randomizedFields || [],
+    randomizationFrequency: String(changeIntervalRecords),
+    randomization: {
+      ...version.randomization,
+      robotInitialState: {
+        ...version.randomization.robotInitialState,
+        enabled: Boolean(row),
+        changeFrequency: 'every_n_records',
+        changeIntervalRecords,
+        randomizedFields,
+      },
+    },
+  };
+}
+
+function materialInitialRandomizationRows(randomization: SubsceneVersion['randomization']): MaterialInitialRandomizationRow[] {
+  return randomization.materialInitialState.rules.map((rule) => ({
+    targetMaterials: rule.targetMaterials,
+    changeIntervalRecords: rule.changeIntervalRecords || 1,
+    randomizedFields: [
+      ...rule.randomizedFields.locations.map((item) => item.name),
+      ...rule.randomizedFields.poses.map((item) => item.name),
+      ...rule.randomizedFields.forms.map((item) => item.name),
+    ],
+    constraints: joinEnum(rule.constraints),
+  }));
+}
+
+function materialInitialRandomizationFromRows(rows: MaterialInitialRandomizationRow[]): SubsceneVersion['randomization']['materialInitialState']['rules'] {
+  return rows
+    .filter((row) => row.targetMaterials.length > 0)
+    .map((row) => ({
+      targetMaterials: row.targetMaterials,
+      changeFrequency: 'every_n_records',
+      changeIntervalRecords: row.changeIntervalRecords || 1,
+      randomizedFields: {
+        locations: row.randomizedFields
+          .filter((name) => name.includes('location') || name.includes('位置'))
+          .map((name) => ({ name, valueSource: 'object_states.initial.allowed_locations' })),
+        poses: row.randomizedFields
+          .filter((name) => name.includes('pose') || name.includes('姿态'))
+          .map((name) => ({ name, valueSource: 'object_states.initial.allowed_locations.allowed_pose' })),
+        forms: row.randomizedFields
+          .filter((name) => name.includes('form') || name.includes('形态'))
+          .map((name) => ({ name, valueSource: 'object_states.initial.allowed_locations.allowed_form' })),
+      },
+      constraints: splitEnum(row.constraints),
+    }));
+}
+
+function emptySubsceneVersionDraft(title = '新的子场景'): Partial<SubsceneVersion> {
+  return {
+    version: '0.0.1',
+    status: 'draft',
+    title,
+    description: '',
+    materials: [],
+    robotState: { initial: '', target: '' },
+    robotOperationRequirements: '',
+    robotInitialRandomizationRequirements: [],
+    randomizationFrequency: '1',
+    randomization: {
+      robotInitialState: {
+        enabled: true,
+        changeFrequency: 'every_n_records',
+        changeIntervalRecords: 1,
+        randomizedFields: [],
+      },
+      materialInitialState: { rules: [] },
+    },
+    operation: {
+      stepOrder: '',
+      steps: [],
+      stepRandomization: { enabled: false, startOrder: 1, endOrder: 1 },
+      allowedOperations: [],
+      forbiddenOperations: [],
+    },
+    objectStates: { initial: [], target: [] },
+    materialStateRules: [],
+    annotation: {
+      status: 'pending',
+      note: '',
+      actionTags: [],
+      steps: [],
+      allowedOperations: [],
+      forbiddenOperations: [],
+      stepRandomization: { enabled: false, startOrder: 1, endOrder: 1 },
+    },
+    references: { recordUrls: [], attachments: [] },
+  };
+}
+
+function emptyCustomer(): Customer {
+  return {
+    id: '',
+    name: '',
+    contact: { name: '', phone: '', email: '' },
+    notes: '',
+  };
+}
+
+function emptyMaterial(skuId = ''): Material {
+  return {
+    id: '',
+    skuId,
+    type: '',
+    color: '',
+    material: '',
+    packageType: '',
+  };
+}
+
+function emptyRobot(): RobotModel {
+  return {
+    id: '',
+    brand: '',
+    model: '',
+    terminal: '',
+    topics: {},
+    extraTopicRequirements: {},
+  };
+}
+
+function emptyScene(name = '新的场景'): Scene {
+  return {
+    id: '',
+    name,
+    description: '',
+    subscenes: [],
+  };
+}
+
+function emptyGlobalField(group: GlobalFieldGroup = 'reference_object'): GlobalField {
+  return {
+    id: '',
+    group,
+    label: '',
+    value: '',
+    category: '',
+    description: '',
+    status: 'active',
+    updatedAt: new Date().toISOString(),
+  };
+}

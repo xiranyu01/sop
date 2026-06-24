@@ -1,0 +1,114 @@
+[
+  {
+    "id": "msr-toothbrush",
+    "materialType": "牙刷",
+    "primaryReferences": [
+      "洗手盆"
+    ],
+    "primaryRelativePositions": [
+      "左侧",
+      "右侧",
+      "前侧"
+    ],
+    "supportSurfaces": [
+      "台面"
+    ],
+    "regions": [
+      "左侧",
+      "右侧",
+      "前侧"
+    ],
+    "secondaryReferences": [],
+    "secondaryRelativePositions": [],
+    "poses": [
+      "平放",
+      "搭放"
+    ],
+    "forms": [
+      "正常"
+    ],
+    "parameters": [],
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "msr-toothpaste",
+    "materialType": "牙膏",
+    "primaryReferences": [
+      "洗手盆"
+    ],
+    "primaryRelativePositions": [
+      "左侧",
+      "右侧",
+      "前侧"
+    ],
+    "supportSurfaces": [
+      "台面"
+    ],
+    "regions": [
+      "左侧",
+      "右侧",
+      "前侧"
+    ],
+    "secondaryReferences": [],
+    "secondaryRelativePositions": [],
+    "poses": [
+      "平放",
+      "搭放"
+    ],
+    "forms": [
+      "正常"
+    ],
+    "parameters": [],
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "msr-popcorn",
+    "materialType": "爆米花",
+    "primaryReferences": [
+      "微波炉"
+    ],
+    "primaryRelativePositions": [
+      "内部",
+      "在参照物表面"
+    ],
+    "supportSurfaces": [
+      "微波炉托盘"
+    ],
+    "regions": [
+      "内部",
+      "中间"
+    ],
+    "secondaryReferences": [],
+    "secondaryRelativePositions": [],
+    "poses": [
+      "平放"
+    ],
+    "forms": [
+      "正常"
+    ],
+    "parameters": [],
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  },
+  {
+    "id": "msr-microwave",
+    "materialType": "微波炉",
+    "primaryReferences": [],
+    "primaryRelativePositions": [],
+    "supportSurfaces": [
+      "台面"
+    ],
+    "regions": [],
+    "secondaryReferences": [],
+    "secondaryRelativePositions": [],
+    "poses": [],
+    "forms": [
+      "正常"
+    ],
+    "parameters": [
+      "door_open_angle",
+      "power",
+      "duration"
+    ],
+    "updatedAt": "2026-06-22T00:00:00.000Z"
+  }
+]

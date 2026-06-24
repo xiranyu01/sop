@@ -1,0 +1,1427 @@
+[
+  {
+    "id": "scene-home",
+    "name": "家庭场景",
+    "description": "面向家庭空间的数据采集场景",
+    "subscenes": [
+      {
+        "code": "NO.001",
+        "name": "洗漱台整理",
+        "versions": [
+          {
+            "version": "0.0.1",
+            "status": "confirmed",
+            "title": "洗漱台整理",
+            "description": "将洗漱台上的牙刷、牙膏等物料整理到指定位置。",
+            "materials": [
+              {
+                "materialId": "mat-toothbrush",
+                "skuId": "SKU001",
+                "type": "牙刷",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 2,
+                  "unit": "件"
+                },
+                "color": "白色",
+                "material": "塑料",
+                "packageType": "无包装"
+              },
+              {
+                "materialId": "mat-toothpaste",
+                "skuId": "SKU002",
+                "type": "牙膏",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 1,
+                  "unit": "件"
+                },
+                "color": "蓝白色",
+                "material": "软管",
+                "packageType": "管装"
+              }
+            ],
+            "robotState": {
+              "initial": "头部相机能看到全部场景内容与物料",
+              "target": "完成最后一步操作的状态"
+            },
+            "randomization": {
+              "robotInitialState": {
+                "enabled": true,
+                "changeFrequency": "every_record",
+                "randomizedFields": [
+                  {
+                    "field": "initial_position",
+                    "displayName": "初始位置",
+                    "constraints": [
+                      "头部相机能看到所有场景物料",
+                      "不影响机器人安全启动"
+                    ]
+                  },
+                  {
+                    "field": "initial_yaw",
+                    "displayName": "初始朝向",
+                    "constraints": [
+                      "头部相机能看到所有场景物料"
+                    ]
+                  }
+                ]
+              },
+              "materialInitialState": {
+                "rules": [
+                  {
+                    "targetMaterials": [
+                      "牙刷",
+                      "牙膏"
+                    ],
+                    "changeFrequency": "every_record",
+                    "randomizedFields": {
+                      "locations": [
+                        {
+                          "name": "location",
+                          "valueSource": "object_states.initial.allowed_locations"
+                        }
+                      ],
+                      "poses": [
+                        {
+                          "name": "pose",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_pose"
+                        }
+                      ],
+                      "forms": [
+                        {
+                          "name": "form",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_form"
+                        }
+                      ]
+                    },
+                    "constraints": [
+                      "每次采集前需要改变位置",
+                      "仍需满足 object_states.initial 中定义的允许状态"
+                    ]
+                  }
+                ]
+              },
+              "materialStateDuringOperation": {
+                "rules": []
+              }
+            },
+            "operation": {
+              "stepOrder": "按就近原则整理物料",
+              "steps": [
+                {
+                  "order": 1,
+                  "description": "识别洗漱台上的目标物料"
+                },
+                {
+                  "order": 2,
+                  "description": "依次抓取牙刷、牙膏"
+                },
+                {
+                  "order": 3,
+                  "description": "将物料放置到目标区域"
+                }
+              ],
+              "allowedOperations": [
+                {
+                  "type": "base_movement",
+                  "description": "底盘可移动到安全位置后再执行放置"
+                }
+              ],
+              "forbiddenOperations": [
+                {
+                  "type": "forbidden_action",
+                  "description": "禁止碰撞或推动其他物料"
+                }
+              ]
+            },
+            "objectStates": {
+              "initial": [
+                {
+                  "object": "牙刷",
+                  "allowedLocations": [
+                    {
+                      "location": "洗手池周边",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "左侧/右侧/前侧"
+                        }
+                      ],
+                      "supportSurface": "台面",
+                      "allowedRegions": [
+                        "左侧",
+                        "右侧",
+                        "前侧"
+                      ],
+                      "allowedPose": [
+                        "平放",
+                        "搭放"
+                      ],
+                      "allowedForm": [
+                        "正常"
+                      ],
+                      "constraints": [
+                        "不超出台面边缘"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "target": [
+                {
+                  "object": "牙刷",
+                  "requiredLocation": "收纳杯内",
+                  "requiredRegions": [
+                    "内部"
+                  ],
+                  "requiredPose": [
+                    "竖立"
+                  ],
+                  "requiredForm": [
+                    "正常"
+                  ]
+                }
+              ],
+              "duringOperation": []
+            },
+            "annotation": {
+              "status": "pending",
+              "note": "待补充标注说明",
+              "actionTags": [
+                "抓取",
+                "放置"
+              ]
+            },
+            "references": {
+              "recordUrls": [],
+              "attachments": []
+            },
+            "updatedAt": "2026-06-17T00:00:00.000Z"
+          },
+          {
+            "version": "0.0.2",
+            "status": "confirmed",
+            "title": "洗漱台整理",
+            "description": "将洗漱台上的牙刷、牙膏等物料整理到指定位置。",
+            "materials": [
+              {
+                "materialId": "mat-toothpaste",
+                "skuId": "SKU002",
+                "type": "牙膏",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 2,
+                  "unit": "件"
+                },
+                "color": "蓝白色",
+                "material": "软管",
+                "packageType": "管装"
+              },
+              {
+                "materialId": "mat-toothbrush",
+                "skuId": "SKU001",
+                "type": "牙刷",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 1,
+                  "unit": "件"
+                },
+                "color": "白色",
+                "material": "塑料",
+                "packageType": "无包装"
+              }
+            ],
+            "robotState": {
+              "initial": "头部相机能看到全部场景内容与物料",
+              "target": "完成最后一步操作的状态"
+            },
+            "randomization": {
+              "robotInitialState": {
+                "enabled": true,
+                "changeFrequency": "every_n_records",
+                "randomizedFields": [
+                  {
+                    "field": "initial_position",
+                    "displayName": "初始位置",
+                    "constraints": [
+                      "头部相机能看到所有场景物料",
+                      "不影响机器人安全启动"
+                    ]
+                  },
+                  {
+                    "field": "initial_yaw",
+                    "displayName": "初始朝向",
+                    "constraints": [
+                      "头部相机能看到所有场景物料"
+                    ]
+                  }
+                ],
+                "changeIntervalRecords": 1
+              },
+              "materialInitialState": {
+                "rules": [
+                  {
+                    "targetMaterials": [
+                      "牙膏"
+                    ],
+                    "changeFrequency": "every_n_records",
+                    "changeIntervalRecords": 1,
+                    "randomizedFields": {
+                      "locations": [
+                        {
+                          "name": "location",
+                          "valueSource": "object_states.initial.allowed_locations"
+                        }
+                      ],
+                      "poses": [
+                        {
+                          "name": "pose",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_pose"
+                        }
+                      ],
+                      "forms": [
+                        {
+                          "name": "form",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_form"
+                        }
+                      ]
+                    },
+                    "constraints": [
+                      "每次采集前需要改变位置"
+                    ]
+                  },
+                  {
+                    "targetMaterials": [
+                      "牙刷"
+                    ],
+                    "changeFrequency": "every_n_records",
+                    "changeIntervalRecords": 50,
+                    "randomizedFields": {
+                      "locations": [],
+                      "poses": [],
+                      "forms": []
+                    },
+                    "constraints": []
+                  }
+                ]
+              },
+              "materialStateDuringOperation": {
+                "rules": [
+                  {
+                    "targetMaterial": "牙膏",
+                    "changeFrequency": "every_n_records",
+                    "changeIntervalRecords": 1,
+                    "randomizedFields": {
+                      "parameters": []
+                    }
+                  }
+                ]
+              }
+            },
+            "operation": {
+              "stepOrder": "按就近原则整理物料",
+              "steps": [
+                {
+                  "order": 1,
+                  "description": "识别洗漱台上的目标物料"
+                },
+                {
+                  "order": 2,
+                  "description": "依次抓取牙刷、牙膏"
+                },
+                {
+                  "order": 3,
+                  "description": "将物料放置到1"
+                },
+                {
+                  "order": 4,
+                  "description": "125"
+                },
+                {
+                  "order": 5,
+                  "description": "三定律"
+                }
+              ],
+              "allowedOperations": [
+                {
+                  "type": "door_operation",
+                  "description": "可调整微波炉门打开角度以便拿取"
+                },
+                {
+                  "type": "若单臂无法完成任务，可进行臂间协作",
+                  "description": "若单臂无法完成任务，可进行臂间协作"
+                },
+                {
+                  "type": "若机器人高度无法完成任务，可调整高度",
+                  "description": "若机器人高度无法完成任务，可调整高度"
+                }
+              ],
+              "forbiddenOperations": [
+                {
+                  "type": "",
+                  "description": ""
+                }
+              ],
+              "stepRandomization": {
+                "enabled": true,
+                "startOrder": 2,
+                "endOrder": 4
+              }
+            },
+            "objectStates": {
+              "initial": [
+                {
+                  "object": "牙膏",
+                  "allowedLocations": [
+                    {
+                      "location": "洗手盆、在参照物表面、左侧、右侧、前侧",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "在参照物表面"
+                        }
+                      ],
+                      "supportSurface": "",
+                      "allowedRegions": [
+                        "左侧",
+                        "右侧",
+                        "前侧"
+                      ],
+                      "allowedPose": [],
+                      "allowedForm": [],
+                      "parameters": [],
+                      "constraints": []
+                    },
+                    {
+                      "location": "洗手盆、在参照物内部、左侧、右侧、前侧、中间、内部",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "在参照物内部"
+                        }
+                      ],
+                      "supportSurface": "",
+                      "allowedRegions": [
+                        "左侧",
+                        "右侧",
+                        "前侧",
+                        "中间",
+                        "内部"
+                      ],
+                      "allowedPose": [],
+                      "allowedForm": [],
+                      "parameters": [],
+                      "constraints": []
+                    }
+                  ]
+                },
+                {
+                  "object": "牙刷",
+                  "allowedLocations": [
+                    {
+                      "location": "洗手盆、在参照物表面、右侧、左侧、前侧、中间、内部",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "在参照物表面"
+                        }
+                      ],
+                      "supportSurface": "",
+                      "allowedRegions": [
+                        "右侧",
+                        "左侧",
+                        "前侧",
+                        "中间",
+                        "内部"
+                      ],
+                      "allowedPose": [],
+                      "allowedForm": [],
+                      "parameters": [],
+                      "constraints": []
+                    }
+                  ]
+                }
+              ],
+              "target": [
+                {
+                  "object": "牙刷",
+                  "requiredLocation": "内部、内部",
+                  "requiredRegions": [
+                    "内部"
+                  ],
+                  "requiredPose": [
+                    "竖立"
+                  ],
+                  "requiredForm": [],
+                  "referencePath": [
+                    {
+                      "level": 1,
+                      "referenceObject": "内部",
+                      "relativePosition": ""
+                    }
+                  ],
+                  "supportSurface": "",
+                  "parameters": [],
+                  "constraints": []
+                },
+                {
+                  "object": "牙膏",
+                  "requiredLocation": "",
+                  "requiredRegions": [],
+                  "requiredPose": [],
+                  "requiredForm": [],
+                  "referencePath": [],
+                  "supportSurface": "",
+                  "parameters": [],
+                  "constraints": []
+                }
+              ],
+              "duringOperation": []
+            },
+            "annotation": {
+              "status": "pending",
+              "note": "待补充标注说明",
+              "actionTags": [
+                "抓取",
+                "放置"
+              ],
+              "allowedOperations": [
+                {
+                  "description": ""
+                },
+                {
+                  "description": ""
+                },
+                {
+                  "description": ""
+                },
+                {
+                  "description": ""
+                }
+              ],
+              "forbiddenOperations": [
+                {
+                  "description": ""
+                }
+              ],
+              "steps": [
+                {
+                  "order": 1,
+                  "description": "12"
+                }
+              ]
+            },
+            "references": {
+              "recordUrls": [],
+              "attachments": []
+            },
+            "updatedAt": "2026-06-23T05:42:37.719Z",
+            "requiredDurationHours": -1,
+            "sceneName": "家庭场景we",
+            "materialStateRules": [
+              {
+                "id": "msr-toothpaste",
+                "materialType": "牙膏",
+                "primaryReferences": [
+                  "洗手盆"
+                ],
+                "primaryRelativePositions": [
+                  "左侧",
+                  "右侧",
+                  "前侧"
+                ],
+                "supportSurfaces": [
+                  "台面"
+                ],
+                "regions": [
+                  "左侧",
+                  "右侧",
+                  "前侧"
+                ],
+                "secondaryReferences": [],
+                "secondaryRelativePositions": [],
+                "poses": [
+                  "平放",
+                  "搭放"
+                ],
+                "forms": [
+                  "正常"
+                ],
+                "parameters": [],
+                "updatedAt": "2026-06-22T09:31:01.033Z"
+              },
+              {
+                "id": "msr-toothbrush",
+                "materialType": "牙刷",
+                "primaryReferences": [
+                  "洗手盆"
+                ],
+                "primaryRelativePositions": [
+                  "左侧",
+                  "右侧",
+                  "前侧"
+                ],
+                "supportSurfaces": [
+                  "台面"
+                ],
+                "regions": [
+                  "左侧",
+                  "右侧",
+                  "前侧"
+                ],
+                "secondaryReferences": [],
+                "secondaryRelativePositions": [],
+                "poses": [
+                  "平放",
+                  "搭放"
+                ],
+                "forms": [
+                  "正常"
+                ],
+                "parameters": [],
+                "updatedAt": "2026-06-22T00:00:00.000Z"
+              }
+            ],
+            "randomizationFrequency": "1"
+          },
+          {
+            "version": "0.0.3",
+            "status": "draft",
+            "title": "洗漱台整理",
+            "description": "将洗漱台上的牙刷、牙膏等物料整理到指定位置。",
+            "materials": [
+              {
+                "materialId": "mat-toothpaste",
+                "skuId": "SKU002",
+                "type": "牙膏",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 3,
+                  "unit": "件"
+                },
+                "color": "蓝白色",
+                "material": "软管",
+                "packageType": "管装"
+              },
+              {
+                "materialId": "mat-toothbrush",
+                "skuId": "SKU001",
+                "type": "牙刷",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 1,
+                  "unit": "件"
+                },
+                "color": "白色",
+                "material": "塑料",
+                "packageType": "无包装"
+              }
+            ],
+            "robotState": {
+              "initial": "头部相机能看到全部场景内容与物料",
+              "target": "完成最后一步操作的状态"
+            },
+            "randomization": {
+              "robotInitialState": {
+                "enabled": true,
+                "changeFrequency": "every_n_records",
+                "randomizedFields": [
+                  {
+                    "field": "initial_position",
+                    "displayName": "初始位置",
+                    "constraints": [
+                      "头部相机能看到所有场景物料",
+                      "不影响机器人安全启动"
+                    ]
+                  },
+                  {
+                    "field": "initial_yaw",
+                    "displayName": "初始朝向",
+                    "constraints": [
+                      "头部相机能看到所有场景物料"
+                    ]
+                  }
+                ],
+                "changeIntervalRecords": 1
+              },
+              "materialInitialState": {
+                "rules": [
+                  {
+                    "targetMaterials": [
+                      "牙膏"
+                    ],
+                    "changeFrequency": "every_n_records",
+                    "changeIntervalRecords": 1,
+                    "randomizedFields": {
+                      "locations": [
+                        {
+                          "name": "location",
+                          "valueSource": "object_states.initial.allowed_locations"
+                        }
+                      ],
+                      "poses": [
+                        {
+                          "name": "pose",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_pose"
+                        }
+                      ],
+                      "forms": [
+                        {
+                          "name": "form",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_form"
+                        }
+                      ]
+                    },
+                    "constraints": [
+                      "每次采集前需要改变位置"
+                    ]
+                  },
+                  {
+                    "targetMaterials": [
+                      "牙刷"
+                    ],
+                    "changeFrequency": "every_n_records",
+                    "changeIntervalRecords": 50,
+                    "randomizedFields": {
+                      "locations": [],
+                      "poses": [],
+                      "forms": []
+                    },
+                    "constraints": []
+                  }
+                ]
+              },
+              "materialStateDuringOperation": {
+                "rules": [
+                  {
+                    "targetMaterial": "牙膏",
+                    "changeFrequency": "every_n_records",
+                    "changeIntervalRecords": 1,
+                    "randomizedFields": {
+                      "parameters": []
+                    }
+                  }
+                ]
+              }
+            },
+            "operation": {
+              "stepOrder": "按就近原则整理物料",
+              "steps": [
+                {
+                  "order": 1,
+                  "description": "识别洗漱台上的目标物料"
+                },
+                {
+                  "order": 2,
+                  "description": "依次抓取牙刷、牙膏"
+                },
+                {
+                  "order": 3,
+                  "description": "将物料放置到1"
+                },
+                {
+                  "order": 4,
+                  "description": "125"
+                },
+                {
+                  "order": 5,
+                  "description": "三定律"
+                }
+              ],
+              "allowedOperations": [
+                {
+                  "type": "door_operation",
+                  "description": "可调整微波炉门打开角度以便拿取"
+                },
+                {
+                  "type": "若单臂无法完成任务，可进行臂间协作",
+                  "description": "若单臂无法完成任务，可进行臂间协作"
+                },
+                {
+                  "type": "若机器人高度无法完成任务，可调整高度",
+                  "description": "若机器人高度无法完成任务，可调整高度"
+                }
+              ],
+              "forbiddenOperations": [
+                {
+                  "type": "",
+                  "description": ""
+                }
+              ],
+              "stepRandomization": {
+                "enabled": true,
+                "startOrder": 2,
+                "endOrder": 4
+              }
+            },
+            "objectStates": {
+              "initial": [
+                {
+                  "object": "牙膏",
+                  "allowedLocations": [
+                    {
+                      "location": "洗手盆、在参照物表面、左侧、右侧、前侧",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "在参照物表面"
+                        }
+                      ],
+                      "supportSurface": "",
+                      "allowedRegions": [
+                        "左侧",
+                        "右侧",
+                        "前侧"
+                      ],
+                      "allowedPose": [],
+                      "allowedForm": [],
+                      "parameters": [],
+                      "constraints": []
+                    },
+                    {
+                      "location": "洗手盆、在参照物内部、左侧、右侧、前侧、中间、内部",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "在参照物内部"
+                        }
+                      ],
+                      "supportSurface": "",
+                      "allowedRegions": [
+                        "左侧",
+                        "右侧",
+                        "前侧",
+                        "中间",
+                        "内部"
+                      ],
+                      "allowedPose": [],
+                      "allowedForm": [],
+                      "parameters": [],
+                      "constraints": []
+                    }
+                  ]
+                },
+                {
+                  "object": "牙刷",
+                  "allowedLocations": [
+                    {
+                      "location": "洗手盆、在参照物表面、右侧、左侧、前侧、中间、内部",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "在参照物表面"
+                        }
+                      ],
+                      "supportSurface": "",
+                      "allowedRegions": [
+                        "右侧",
+                        "左侧",
+                        "前侧",
+                        "中间",
+                        "内部"
+                      ],
+                      "allowedPose": [],
+                      "allowedForm": [],
+                      "parameters": [],
+                      "constraints": []
+                    }
+                  ]
+                }
+              ],
+              "target": [
+                {
+                  "object": "牙刷",
+                  "requiredLocation": "内部、内部",
+                  "requiredRegions": [
+                    "内部"
+                  ],
+                  "requiredPose": [
+                    "竖立"
+                  ],
+                  "requiredForm": [],
+                  "referencePath": [
+                    {
+                      "level": 1,
+                      "referenceObject": "内部",
+                      "relativePosition": ""
+                    }
+                  ],
+                  "supportSurface": "",
+                  "parameters": [],
+                  "constraints": []
+                },
+                {
+                  "object": "牙膏",
+                  "requiredLocation": "",
+                  "requiredRegions": [],
+                  "requiredPose": [],
+                  "requiredForm": [],
+                  "referencePath": [],
+                  "supportSurface": "",
+                  "parameters": [],
+                  "constraints": []
+                }
+              ],
+              "duringOperation": []
+            },
+            "annotation": {
+              "status": "pending",
+              "note": "待补充标注说明",
+              "actionTags": [
+                "抓取",
+                "放置"
+              ],
+              "allowedOperations": [
+                {
+                  "description": ""
+                },
+                {
+                  "description": ""
+                },
+                {
+                  "description": ""
+                },
+                {
+                  "description": ""
+                }
+              ],
+              "forbiddenOperations": [
+                {
+                  "description": ""
+                }
+              ],
+              "steps": [
+                {
+                  "order": 1,
+                  "description": "12"
+                }
+              ]
+            },
+            "references": {
+              "recordUrls": [],
+              "attachments": []
+            },
+            "updatedAt": "2026-06-23T11:53:50.097Z",
+            "requiredDurationHours": -1,
+            "sceneName": "家庭场景we",
+            "materialStateRules": [
+              {
+                "id": "msr-toothpaste",
+                "materialType": "牙膏",
+                "primaryReferences": [
+                  "洗手盆"
+                ],
+                "primaryRelativePositions": [
+                  "左侧",
+                  "右侧",
+                  "前侧"
+                ],
+                "supportSurfaces": [
+                  "台面"
+                ],
+                "regions": [
+                  "左侧",
+                  "右侧",
+                  "前侧"
+                ],
+                "secondaryReferences": [],
+                "secondaryRelativePositions": [],
+                "poses": [
+                  "平放",
+                  "搭放"
+                ],
+                "forms": [
+                  "正常"
+                ],
+                "parameters": [],
+                "updatedAt": "2026-06-22T09:31:01.033Z"
+              },
+              {
+                "id": "msr-toothbrush",
+                "materialType": "牙刷",
+                "primaryReferences": [
+                  "洗手盆"
+                ],
+                "primaryRelativePositions": [
+                  "左侧",
+                  "右侧",
+                  "前侧"
+                ],
+                "supportSurfaces": [
+                  "台面"
+                ],
+                "regions": [
+                  "左侧",
+                  "右侧",
+                  "前侧"
+                ],
+                "secondaryReferences": [],
+                "secondaryRelativePositions": [],
+                "poses": [
+                  "平放",
+                  "搭放"
+                ],
+                "forms": [
+                  "正常"
+                ],
+                "parameters": [],
+                "updatedAt": "2026-06-22T00:00:00.000Z"
+              }
+            ],
+            "randomizationFrequency": "1"
+          },
+          {
+            "version": "0.0.4",
+            "status": "draft",
+            "title": "洗漱台整理",
+            "description": "将洗漱台上的牙刷、牙膏等物料整理到指定位置。",
+            "materials": [
+              {
+                "materialId": "mat-toothbrush",
+                "skuId": "SKU001",
+                "type": "牙刷",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 2,
+                  "unit": "件"
+                },
+                "color": "白色",
+                "material": "塑料",
+                "packageType": "无包装"
+              },
+              {
+                "materialId": "mat-toothpaste",
+                "skuId": "SKU002",
+                "type": "牙膏",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 1,
+                  "unit": "件"
+                },
+                "color": "蓝白色",
+                "material": "软管",
+                "packageType": "管装"
+              }
+            ],
+            "robotState": {
+              "initial": "头部相机能看到全部场景内容与物料",
+              "target": "完成最后一步操作的状态"
+            },
+            "randomization": {
+              "robotInitialState": {
+                "enabled": true,
+                "changeFrequency": "every_record",
+                "randomizedFields": [
+                  {
+                    "field": "initial_position",
+                    "displayName": "初始位置",
+                    "constraints": [
+                      "头部相机能看到所有场景物料",
+                      "不影响机器人安全启动"
+                    ]
+                  },
+                  {
+                    "field": "initial_yaw",
+                    "displayName": "初始朝向",
+                    "constraints": [
+                      "头部相机能看到所有场景物料"
+                    ]
+                  }
+                ]
+              },
+              "materialInitialState": {
+                "rules": [
+                  {
+                    "targetMaterials": [
+                      "牙刷",
+                      "牙膏"
+                    ],
+                    "changeFrequency": "every_record",
+                    "randomizedFields": {
+                      "locations": [
+                        {
+                          "name": "location",
+                          "valueSource": "object_states.initial.allowed_locations"
+                        }
+                      ],
+                      "poses": [
+                        {
+                          "name": "pose",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_pose"
+                        }
+                      ],
+                      "forms": [
+                        {
+                          "name": "form",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_form"
+                        }
+                      ]
+                    },
+                    "constraints": [
+                      "每次采集前需要改变位置",
+                      "仍需满足 object_states.initial 中定义的允许状态"
+                    ]
+                  }
+                ]
+              },
+              "materialStateDuringOperation": {
+                "rules": []
+              }
+            },
+            "operation": {
+              "stepOrder": "按就近原则整理物料",
+              "steps": [
+                {
+                  "order": 1,
+                  "description": "识别洗漱台上的目标物料"
+                },
+                {
+                  "order": 2,
+                  "description": "依次抓取牙刷、牙膏"
+                },
+                {
+                  "order": 3,
+                  "description": "将物料放置到目标区域"
+                }
+              ],
+              "allowedOperations": [
+                {
+                  "type": "base_movement",
+                  "description": "底盘可移动到安全位置后再执行放置"
+                }
+              ],
+              "forbiddenOperations": [
+                {
+                  "type": "forbidden_action",
+                  "description": "禁止碰撞或推动其他物料"
+                }
+              ]
+            },
+            "objectStates": {
+              "initial": [
+                {
+                  "object": "牙刷",
+                  "allowedLocations": [
+                    {
+                      "location": "洗手池周边",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "左侧/右侧/前侧"
+                        }
+                      ],
+                      "supportSurface": "台面",
+                      "allowedRegions": [
+                        "左侧",
+                        "右侧",
+                        "前侧"
+                      ],
+                      "allowedPose": [
+                        "平放",
+                        "搭放"
+                      ],
+                      "allowedForm": [
+                        "正常"
+                      ],
+                      "constraints": [
+                        "不超出台面边缘"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "target": [
+                {
+                  "object": "牙刷",
+                  "requiredLocation": "收纳杯内",
+                  "requiredRegions": [
+                    "内部"
+                  ],
+                  "requiredPose": [
+                    "竖立"
+                  ],
+                  "requiredForm": [
+                    "正常"
+                  ]
+                }
+              ],
+              "duringOperation": []
+            },
+            "annotation": {
+              "status": "pending",
+              "note": "待补充标注说明",
+              "actionTags": [
+                "抓取",
+                "放置"
+              ]
+            },
+            "references": {
+              "recordUrls": [],
+              "attachments": []
+            },
+            "updatedAt": "2026-06-23T11:52:07.322Z"
+          }
+        ]
+      },
+      {
+        "code": "NO.002",
+        "name": "将爆米花装入盒子",
+        "versions": [
+          {
+            "version": "0.0.1",
+            "status": "draft",
+            "title": "将爆米花装入盒子",
+            "description": "打开微波炉门，取出爆米花并放入盒子。",
+            "materials": [
+              {
+                "materialId": "mat-microwave",
+                "skuId": "SKU003",
+                "type": "微波炉",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 1,
+                  "unit": "台"
+                },
+                "color": "黑色",
+                "material": "金属/玻璃",
+                "packageType": "设备"
+              },
+              {
+                "materialId": "mat-popcorn",
+                "skuId": "SKU004",
+                "type": "爆米花",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 1,
+                  "unit": "袋"
+                },
+                "color": "黄色",
+                "material": "食品",
+                "packageType": "袋装"
+              }
+            ],
+            "robotState": {
+              "initial": "头部相机能看到微波炉与爆米花",
+              "target": "爆米花放入目标盒子"
+            },
+            "randomization": {
+              "robotInitialState": {
+                "enabled": true,
+                "changeFrequency": "every_record",
+                "randomizedFields": [
+                  {
+                    "field": "initial_position",
+                    "displayName": "initial_position",
+                    "constraints": [
+                      "头部相机能看到所有场景物料"
+                    ]
+                  },
+                  {
+                    "field": "initial_yaw",
+                    "displayName": "initial_yaw",
+                    "constraints": []
+                  }
+                ]
+              },
+              "materialInitialState": {
+                "rules": [
+                  {
+                    "targetMaterials": [
+                      "微波炉"
+                    ],
+                    "changeFrequency": "every_n_records",
+                    "changeIntervalRecords": 1,
+                    "randomizedFields": {
+                      "locations": [],
+                      "poses": [],
+                      "forms": []
+                    },
+                    "constraints": []
+                  }
+                ]
+              },
+              "materialStateDuringOperation": {
+                "rules": [
+                  {
+                    "targetMaterial": "微波炉",
+                    "changeFrequency": "every_record",
+                    "randomizedFields": {
+                      "parameters": [
+                        {
+                          "name": "door_open_angle"
+                        },
+                        {
+                          "name": "power"
+                        },
+                        {
+                          "name": "duration"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "operation": {
+              "stepOrder": "先开门，再取物，再放置",
+              "steps": [
+                {
+                  "order": 1,
+                  "description": "打开微波炉门"
+                },
+                {
+                  "order": 2,
+                  "description": "取出爆米花"
+                },
+                {
+                  "order": 3,
+                  "description": "将爆米花放入盒子"
+                }
+              ],
+              "allowedOperations": [
+                {
+                  "type": "door_operation",
+                  "description": "可调整微波炉门打开角度以便拿取"
+                }
+              ],
+              "forbiddenOperations": [
+                {
+                  "type": "collision",
+                  "description": "禁止门体或夹爪与微波炉产生碰撞"
+                }
+              ]
+            },
+            "objectStates": {
+              "initial": [
+                {
+                  "object": "爆米花",
+                  "allowedLocations": [
+                    {
+                      "location": "微波炉内部",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "微波炉",
+                          "relativePosition": "内部"
+                        }
+                      ],
+                      "supportSurface": "微波炉托盘",
+                      "allowedRegions": [
+                        "中间"
+                      ],
+                      "allowedPose": [
+                        "平放"
+                      ],
+                      "allowedForm": [
+                        "正常"
+                      ],
+                      "constraints": [
+                        "不阻挡微波炉门关闭"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "target": [
+                {
+                  "object": "爆米花",
+                  "requiredLocation": "盒子内部",
+                  "requiredRegions": [
+                    "内部"
+                  ],
+                  "requiredPose": [
+                    "平放"
+                  ],
+                  "requiredForm": [
+                    "正常"
+                  ]
+                }
+              ],
+              "duringOperation": [
+                {
+                  "object": "微波炉",
+                  "parameters": [
+                    {
+                      "name": "door_open_angle",
+                      "displayName": "微波炉门打开角度",
+                      "valueType": "number",
+                      "unit": "degree",
+                      "sampling": {
+                        "mode": "range",
+                        "min": 30,
+                        "max": 90
+                      },
+                      "constraints": [
+                        "门打开角度需要支持机器人拿取物品，不产生碰撞"
+                      ]
+                    },
+                    {
+                      "name": "power",
+                      "displayName": "微波炉设置功率",
+                      "valueType": "enum",
+                      "allowedValues": [
+                        "低火",
+                        "中火",
+                        "高火"
+                      ],
+                      "constraints": [
+                        "功率必须是微波炉可设置的真实档位"
+                      ]
+                    },
+                    {
+                      "name": "duration",
+                      "displayName": "微波炉设置时长",
+                      "valueType": "number",
+                      "unit": "second",
+                      "sampling": {
+                        "mode": "range",
+                        "min": 30,
+                        "max": 180
+                      },
+                      "constraints": [
+                        "时长必须是微波炉可设置的真实时长"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "annotation": {
+              "status": "pending",
+              "note": "待补充标注说明",
+              "actionTags": [
+                "开门",
+                "抓取",
+                "放置"
+              ]
+            },
+            "references": {
+              "recordUrls": [],
+              "attachments": []
+            },
+            "updatedAt": "2026-06-23T03:39:36.449Z",
+            "robotInitialRandomizationRequirements": [
+              "initial_position",
+              "initial_yaw"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "scene_mqq879ay_58d1g6",
+    "name": "商业服务",
+    "description": "",
+    "subscenes": []
+  }
+]

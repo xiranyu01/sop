@@ -1,0 +1,22 @@
+[
+  {
+    "id": "cus-we",
+    "name": "WE",
+    "contact": {
+      "name": "bianca",
+      "phone": "待填写",
+      "email": "contact@example.com"
+    },
+    "notes": "家庭场景样例客户"
+  },
+  {
+    "id": "cus_mqhxju1s_5yhu1j",
+    "name": "mayi",
+    "contact": {
+      "name": "lalala",
+      "phone": "1231231231",
+      "email": ""
+    },
+    "notes": ""
+  }
+]

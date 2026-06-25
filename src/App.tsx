@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   AppData,
@@ -20,6 +20,7 @@ import type {
 type Page = 'requirements' | 'scenes' | 'globalFields' | 'customers' | 'materials' | 'robots';
 
 const pageStorageKey = 'sop-manager-current-page';
+const authStorageKey = 'sop-manager-api-password';
 
 type DataTableColumn<T> = {
   key: string;
@@ -228,7 +229,7 @@ const api = {
 function postJson(body: unknown) {
   return {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(),
     body: JSON.stringify(body),
   };
 }
@@ -236,8 +237,17 @@ function postJson(body: unknown) {
 function putJson(body: unknown) {
   return {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(),
     body: JSON.stringify(body),
+  };
+}
+
+function apiHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  const password = typeof window === 'undefined' ? '' : window.localStorage.getItem(authStorageKey);
+  return {
+    'Content-Type': 'application/json',
+    ...(password ? { Authorization: `Bearer ${password}` } : {}),
+    ...headers,
   };
 }
 
@@ -255,7 +265,13 @@ async function assertJson<T>(res: Response): Promise<T> {
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   try {
-    const res = await fetch(input, init);
+    const res = await fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        ...apiHeaders(),
+      },
+    });
     return assertJson<T>(res);
   } catch (error) {
     if (error instanceof TypeError && error.message === 'Failed to fetch') {
@@ -386,6 +402,7 @@ export default function App() {
   const [data, setData] = useState<AppData>(emptyData);
   const [page, setPageState] = useState<Page>(initialPage);
   const [loading, setLoading] = useState(true);
+  const [locked, setLocked] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [selectedRequirementId, setSelectedRequirementId] = useState<string>('');
@@ -407,11 +424,18 @@ export default function App() {
     try {
       const next = await api.data();
       setData(next);
+      setLocked(false);
       setSelectedRequirementId((current) => current || next.requirements[0]?.id || '');
       setSelectedSceneId((current) => current || next.scenes[0]?.id || '');
       setSelectedSubsceneCode((current) => current || next.scenes[0]?.subscenes[0]?.code || '');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载失败');
+      const message = err instanceof Error ? err.message : '加载失败';
+      if (message.includes('访问密码')) {
+        setLocked(true);
+        setError('');
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -449,13 +473,23 @@ export default function App() {
       setMessage(success);
       return result;
     } catch (err) {
-      setError(err instanceof Error ? err.message : '操作失败');
+      const message = err instanceof Error ? err.message : '操作失败';
+      if (message.includes('访问密码')) {
+        setLocked(true);
+        setError('');
+      } else {
+        setError(message);
+      }
       return undefined;
     }
   }
 
   if (loading) {
     return <div className="loading">正在加载 SOP 需求管理...</div>;
+  }
+
+  if (locked) {
+    return <PasswordGate error={error} onUnlock={() => void load()} />;
   }
 
   return (
@@ -672,6 +706,36 @@ export default function App() {
           />
         )}
       </main>
+    </div>
+  );
+}
+
+function PasswordGate({ error, onUnlock }: { error: string; onUnlock: () => void }) {
+  const [password, setPassword] = useState('');
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    window.localStorage.setItem(authStorageKey, password);
+    onUnlock();
+  }
+
+  return (
+    <div className="auth-screen">
+      <form className="auth-panel" onSubmit={submit}>
+        <div className="brand-mark">SOP</div>
+        <div>
+          <h1>SOP 需求管理</h1>
+          <p>请输入访问密码后继续。</p>
+        </div>
+        {error && <div className="notice error">{error}</div>}
+        <label className="field">
+          <span>访问密码</span>
+          <input type="password" value={password} autoFocus onChange={(event) => setPassword(event.target.value)} />
+        </label>
+        <button className="primary-button" disabled={!password.trim()}>
+          进入系统
+        </button>
+      </form>
     </div>
   );
 }

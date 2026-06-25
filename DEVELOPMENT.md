@@ -87,6 +87,18 @@ pnpm build
 
 注意：公开推送 GitHub 前请检查 `data/` 中是否包含真实客户、电话、邮箱、项目名或内部链接。公开仓库建议先脱敏，或改成样例数据。
 
+线上 Cloudflare 版本不写本地文件，`data/*.json` 只作为 D1 首次初始化的种子数据。运行时数据存储在 D1 的 `app_data` 表：
+
+```sql
+CREATE TABLE IF NOT EXISTS app_data (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+```
+
+当前使用这些 key：`customers`、`materials`、`robotModels`、`scenes`、`requirements`、`globalFields`、`materialStateRules`。
+
 ## 核心概念
 
 ### 客户需求
@@ -135,7 +147,7 @@ pnpm build
 
 ## API 概览
 
-主要 API 定义在 `server/index.ts`。
+主要业务 API 定义在 `server/api.ts`。本地 Express 入口 `server/index.ts` 和 Cloudflare Pages Function `functions/api/[[path]].ts` 都复用这套业务逻辑。
 
 - `GET /api/data`：读取全部本地主数据
 - `POST /api/customers`：新增或更新客户
@@ -151,6 +163,8 @@ pnpm build
 - `DELETE /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version`：删除子场景草稿版本
 - `POST /api/scenes/:sceneId/subscenes/:subsceneCode/confirm`：确认子场景版本
 - `POST /api/requirements/:id/export-yaml`：生成 YAML，并写入 `exports/`
+
+Cloudflare 环境不会写 `exports/` 文件，导出接口只返回 YAML 文本和虚拟路径，前端仍会触发浏览器下载。
 
 ## YAML 导出
 
@@ -232,9 +246,42 @@ YAML：
 - 导出的 YAML 能被 YAML parser 解析。
 - 导出内容包含客户需求中的额外 topic 要求、采集步骤随机性、标注步骤和标注操作要求。
 
-## 推送 GitHub 前检查
+## Cloudflare 部署
 
-当前项目还没有 `.git` 目录。首次推送前建议按下面顺序处理：
+本项目不要用 GitHub Pages 做主部署。GitHub Pages 只能托管静态前端，不能运行 `/api/*`，也不能保存共享数据。
+
+推荐部署方式：
+
+1. 在 Cloudflare Workers & Pages 创建 D1 数据库，例如 `sop-prod`。
+2. 在 D1 控制台执行 [schema.sql](./schema.sql)。
+3. 在 Cloudflare Pages 连接 GitHub 仓库 `xiranyu01/sop`。
+4. Pages 构建配置：
+   - Production branch: `main`
+   - Build command: `pnpm build`
+   - Build output directory: `dist`
+5. Pages Functions 绑定：
+   - D1 binding variable name: `DB`
+   - D1 database: `sop-prod`
+6. Pages 环境变量：
+   - `APP_PASSWORD=<访问密码>`
+   - `NODE_VERSION=22`
+7. 重新部署，访问 `https://<project>.pages.dev`。
+
+首次访问 `/api/data` 时，如果 D1 中没有对应 key，会从 repo 内 `data/*.json` 初始化种子数据。
+
+本地模拟 Pages Functions：
+
+```bash
+pnpm typecheck
+pnpm build
+pnpm pages:dev
+```
+
+`pnpm pages:dev` 会把本地访问密码绑定为 `dev-password`。线上密码必须在 Cloudflare Pages 环境变量中配置 `APP_PASSWORD`。
+
+注意：`wrangler.toml` 中的 `database_id` 是占位值，正式连接 Cloudflare 后需要替换成真实 D1 database id，或者直接在 Cloudflare Dashboard 里配置 Pages 绑定。
+
+## 推送 GitHub 前检查
 
 1. 确认 `data/` 中没有真实客户隐私、内部链接或不适合公开的信息。
 2. 确认 `exports/`、`dist/`、`node_modules/` 不会提交。
@@ -245,27 +292,13 @@ pnpm typecheck
 pnpm build
 ```
 
-4. 初始化并提交：
+4. 提交并推送：
 
 ```bash
-git init
 git add .
 git status --short
-git commit -m "Initial SOP requirement manager"
-```
-
-5. 创建 GitHub 仓库并推送。使用 GitHub CLI 的方式：
-
-```bash
-gh repo create sop-requirement-manager --private --source=. --remote=origin --push
-```
-
-如果已经在 GitHub 上创建好仓库：
-
-```bash
-git remote add origin git@github.com:<your-org-or-user>/sop-requirement-manager.git
-git branch -M main
-git push -u origin main
+git commit -m "<message>"
+git push
 ```
 
 公开仓库建议先用样例数据替换当前 `data/` 内容；私有仓库也建议避免提交真实电话、邮箱和客户未确认的信息。

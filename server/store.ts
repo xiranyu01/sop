@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AppData, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
+import type { AppStore } from './api';
 
 const rootDir = process.cwd();
 const dataDir = path.join(rootDir, 'data');
@@ -92,3 +93,15 @@ export async function writeExport(requirementId: string, version: string, yaml: 
   await writeFile(file, yaml, 'utf-8');
   return file;
 }
+
+export const fileStore: AppStore = {
+  readData,
+  writeCustomers,
+  writeMaterials,
+  writeRobotModels,
+  writeScenes,
+  writeRequirements,
+  writeGlobalFields,
+  writeMaterialStateRules,
+  writeExport,
+};

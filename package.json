@@ -9,6 +9,7 @@
     "client": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
+    "pages:dev": "pnpm build && wrangler pages dev dist --d1 DB=sop-prod --binding APP_PASSWORD=dev-password --compatibility-date=2026-06-25",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.2",
-    "@types/react-dom": "^19.0.2"
+    "@types/react-dom": "^19.0.2",
+    "wrangler": "^4.23.0"
   }
 }

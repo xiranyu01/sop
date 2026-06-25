@@ -1782,8 +1782,8 @@ function RequirementPage({
           </div>
           {durationDelta !== 0 && (
             <div className="notice warning compact-notice">
-              已选子场景目标时长合计 {selectedSubsceneDurationTotal} h，
-              {durationDelta > 0 ? '超出' : '少于'}总目标时长 {Math.abs(durationDelta)} h。
+              总目标时长 {Number(selectedVersion.requiredDurationHours) || 0} h，已选子场景目标时长合计{' '}
+              {selectedSubsceneDurationTotal} h，{durationDelta > 0 ? '超出' : '还差'} {Math.abs(durationDelta)} h。
             </div>
           )}
           {missingSelectedSubscenes.length > 0 && (

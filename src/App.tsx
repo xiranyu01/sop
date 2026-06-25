@@ -182,60 +182,46 @@ const fallbackMaterialRandomOptions: Option[] = [
 
 const api = {
   async data(): Promise<AppData> {
-    const res = await fetch('/api/data');
-    return assertJson<AppData>(res);
+    return fetchJson<AppData>('/api/data');
   },
   async saveCustomer(customer: Customer): Promise<Customer[]> {
-    const res = await fetch('/api/customers', postJson(customer));
-    return assertJson<Customer[]>(res);
+    return fetchJson<Customer[]>('/api/customers', postJson(customer));
   },
   async saveMaterial(material: Material): Promise<Material[]> {
-    const res = await fetch('/api/materials', postJson(material));
-    return assertJson<Material[]>(res);
+    return fetchJson<Material[]>('/api/materials', postJson(material));
   },
   async saveRobot(robot: RobotModel): Promise<RobotModel[]> {
-    const res = await fetch('/api/robot-models', postJson(robot));
-    return assertJson<RobotModel[]>(res);
+    return fetchJson<RobotModel[]>('/api/robot-models', postJson(robot));
   },
   async saveScene(scene: Scene): Promise<Scene[]> {
-    const res = await fetch('/api/scenes', postJson(scene));
-    return assertJson<Scene[]>(res);
+    return fetchJson<Scene[]>('/api/scenes', postJson(scene));
   },
   async saveGlobalField(field: GlobalField): Promise<GlobalField[]> {
-    const res = await fetch('/api/global-fields', postJson(field));
-    return assertJson<GlobalField[]>(res);
+    return fetchJson<GlobalField[]>('/api/global-fields', postJson(field));
   },
   async saveRequirement(id: string, version: VersionPatch<RequirementVersion>): Promise<Requirement[]> {
-    const res = await fetch(`/api/requirements/${id}`, putJson(version));
-    return assertJson<Requirement[]>(res);
+    return fetchJson<Requirement[]>(`/api/requirements/${id}`, putJson(version));
   },
   async deleteRequirementVersion(id: string, version: string): Promise<Requirement[]> {
-    const res = await fetch(`/api/requirements/${id}/versions/${version}`, { method: 'DELETE' });
-    return assertJson<Requirement[]>(res);
+    return fetchJson<Requirement[]>(`/api/requirements/${id}/versions/${version}`, { method: 'DELETE' });
   },
   async createRequirement(version: Partial<RequirementVersion>): Promise<Requirement[]> {
-    const res = await fetch('/api/requirements', postJson(version));
-    return assertJson<Requirement[]>(res);
+    return fetchJson<Requirement[]>('/api/requirements', postJson(version));
   },
   async confirmRequirement(id: string, version: string): Promise<Requirement[]> {
-    const res = await fetch(`/api/requirements/${id}/confirm`, postJson({ version }));
-    return assertJson<Requirement[]>(res);
+    return fetchJson<Requirement[]>(`/api/requirements/${id}/confirm`, postJson({ version }));
   },
   async saveSubscene(sceneId: string, code: string, version: VersionPatch<SubsceneVersion>): Promise<Scene[]> {
-    const res = await fetch(`/api/scenes/${sceneId}/subscenes/${code}/versions`, postJson(version));
-    return assertJson<Scene[]>(res);
+    return fetchJson<Scene[]>(`/api/scenes/${sceneId}/subscenes/${code}/versions`, postJson(version));
   },
   async deleteSubsceneVersion(sceneId: string, code: string, version: string): Promise<Scene[]> {
-    const res = await fetch(`/api/scenes/${sceneId}/subscenes/${code}/versions/${version}`, { method: 'DELETE' });
-    return assertJson<Scene[]>(res);
+    return fetchJson<Scene[]>(`/api/scenes/${sceneId}/subscenes/${code}/versions/${version}`, { method: 'DELETE' });
   },
   async confirmSubscene(sceneId: string, code: string, version: string): Promise<Scene[]> {
-    const res = await fetch(`/api/scenes/${sceneId}/subscenes/${code}/confirm`, postJson({ version }));
-    return assertJson<Scene[]>(res);
+    return fetchJson<Scene[]>(`/api/scenes/${sceneId}/subscenes/${code}/confirm`, postJson({ version }));
   },
   async exportYaml(id: string, version: string): Promise<ExportResult> {
-    const res = await fetch(`/api/requirements/${id}/export-yaml`, postJson({ version }));
-    return assertJson<ExportResult>(res);
+    return fetchJson<ExportResult>(`/api/requirements/${id}/export-yaml`, postJson({ version }));
   },
 };
 
@@ -265,6 +251,18 @@ async function assertJson<T>(res: Response): Promise<T> {
     throw new Error(message);
   }
   return data as T;
+}
+
+async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+  try {
+    const res = await fetch(input, init);
+    return assertJson<T>(res);
+  } catch (error) {
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      throw new Error('本地 API 服务未连接，请用 pnpm dev 同时启动前端和后端后再试');
+    }
+    throw error;
+  }
 }
 
 const emptyData: AppData = {

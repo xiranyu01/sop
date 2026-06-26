@@ -243,12 +243,26 @@ function putJson(body: unknown) {
 }
 
 function apiHeaders(headers: Record<string, string> = {}): Record<string, string> {
-  const password = typeof window === 'undefined' ? '' : window.localStorage.getItem(authStorageKey);
+  const password = storedPassword();
   return {
     'Content-Type': 'application/json',
     ...(password ? { Authorization: `Bearer ${password}` } : {}),
     ...headers,
   };
+}
+
+function storedPassword(): string {
+  return typeof window === 'undefined' ? '' : window.localStorage.getItem(authStorageKey) || '';
+}
+
+function clearStoredPassword() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(authStorageKey);
+  }
+}
+
+function isAuthError(message: string): boolean {
+  return message.includes('访问密码');
 }
 
 async function assertJson<T>(res: Response): Promise<T> {
@@ -430,9 +444,11 @@ export default function App() {
       setSelectedSubsceneCode((current) => current || next.scenes[0]?.subscenes[0]?.code || '');
     } catch (err) {
       const message = err instanceof Error ? err.message : '加载失败';
-      if (message.includes('访问密码')) {
+      if (isAuthError(message)) {
+        const hadPassword = Boolean(storedPassword());
+        clearStoredPassword();
         setLocked(true);
-        setError('');
+        setError(hadPassword ? message : '');
       } else {
         setError(message);
       }
@@ -474,9 +490,10 @@ export default function App() {
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : '操作失败';
-      if (message.includes('访问密码')) {
+      if (isAuthError(message)) {
+        clearStoredPassword();
         setLocked(true);
-        setError('');
+        setError(message);
       } else {
         setError(message);
       }
@@ -715,7 +732,9 @@ function PasswordGate({ error, onUnlock }: { error: string; onUnlock: () => void
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    window.localStorage.setItem(authStorageKey, password);
+    const normalizedPassword = password.trim();
+    if (!normalizedPassword) return;
+    window.localStorage.setItem(authStorageKey, normalizedPassword);
     onUnlock();
   }
 

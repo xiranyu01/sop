@@ -15,6 +15,7 @@ import type {
   Scene,
   Subscene,
   SubsceneVersion,
+  TextItem,
 } from './types';
 
 type Page = 'requirements' | 'scenes' | 'globalFields' | 'customers' | 'materials' | 'robots';
@@ -82,6 +83,19 @@ type Option = {
   label: string;
   category?: string;
   description?: string;
+};
+
+type PrintableSection = {
+  title: string;
+  description?: string;
+  content: string;
+};
+
+type PrintableReport = {
+  title: string;
+  subtitle?: string;
+  fileName: string;
+  sections: PrintableSection[];
 };
 
 const globalFieldGroupLabels: Record<GlobalFieldGroup, string> = {
@@ -354,6 +368,419 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
     textarea.remove();
     return copied;
   }
+}
+
+function exportReportAsPdf(report: PrintableReport) {
+  const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=960,height=720');
+  if (!printWindow) {
+    window.alert('浏览器拦截了导出窗口，请允许弹窗后重试。');
+    return;
+  }
+  printWindow.document.open();
+  printWindow.document.write(renderPrintableReport(report));
+  printWindow.document.close();
+  printWindow.focus();
+  window.setTimeout(() => {
+    printWindow.print();
+  }, 300);
+}
+
+function renderPrintableReport(report: PrintableReport): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>${escapeHtml(report.fileName)}</title>
+  <style>
+    @page { size: A4; margin: 16mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #172033;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 12px;
+      line-height: 1.65;
+    }
+    h1, h2, h3, p { margin: 0; }
+    .report-header {
+      border-bottom: 2px solid #172033;
+      padding-bottom: 14px;
+      margin-bottom: 18px;
+    }
+    .report-header h1 {
+      font-size: 24px;
+      line-height: 1.25;
+    }
+    .report-header p {
+      margin-top: 6px;
+      color: #5f6b7a;
+      font-size: 12px;
+    }
+    section {
+      break-inside: avoid;
+      margin: 0 0 16px;
+    }
+    h2 {
+      border-left: 4px solid #2563eb;
+      padding-left: 8px;
+      margin-bottom: 8px;
+      font-size: 15px;
+    }
+    .section-desc {
+      color: #667085;
+      margin-bottom: 8px;
+    }
+    pre {
+      margin: 0;
+      padding: 10px 12px;
+      border: 1px solid #d8dee8;
+      border-radius: 6px;
+      background: #f8fafc;
+      color: #172033;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: inherit;
+    }
+    .footer {
+      margin-top: 24px;
+      padding-top: 10px;
+      border-top: 1px solid #d8dee8;
+      color: #667085;
+      font-size: 11px;
+    }
+    @media print {
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <header class="report-header">
+    <h1>${escapeHtml(report.title)}</h1>
+    ${report.subtitle ? `<p>${escapeHtml(report.subtitle)}</p>` : ''}
+  </header>
+  ${report.sections
+    .filter((section) => section.content.trim())
+    .map(
+      (section) => `<section>
+    <h2>${escapeHtml(section.title)}</h2>
+    ${section.description ? `<p class="section-desc">${escapeHtml(section.description)}</p>` : ''}
+    <pre>${escapeHtml(section.content)}</pre>
+  </section>`,
+    )
+    .join('')}
+  <div class="footer">由 coScene SOP 需求管理系统生成 · ${escapeHtml(new Date().toLocaleString('zh-CN'))}</div>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string | number | undefined | null): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function reportValue(value: string | number | boolean | undefined | null): string {
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (value === undefined || value === null || value === '') return '-';
+  return String(value);
+}
+
+function reportList(values: Array<string | number | undefined | null> | undefined): string {
+  const items = (values || []).map((value) => String(value ?? '').trim()).filter(Boolean);
+  return items.length ? items.join('、') : '-';
+}
+
+function keyValueReport(rows: Array<[string, string | number | boolean | undefined | null]>): string {
+  return rows.map(([label, value]) => `${label}：${reportValue(value)}`).join('\n');
+}
+
+function numberedReportSteps(steps: OperationStep[] | undefined): string {
+  if (!steps?.length) return '-';
+  return steps.map((step, index) => `${step.order || index + 1}. ${step.description || '-'}`).join('\n');
+}
+
+function textItemsReport(items: TextItem[] | undefined): string {
+  if (!items?.length) return '-';
+  return items.map((item, index) => `${index + 1}. ${item.description || item.type || '-'}`).join('\n');
+}
+
+function operationItemsReport(items: Array<{ operation: string; note: string }> | undefined): string {
+  if (!items?.length) return '-';
+  return items.map((item, index) => `${index + 1}. ${item.operation}${item.note ? `：${item.note}` : ''}`).join('\n');
+}
+
+function forbiddenRequirementReport(groups: RequirementVersion['forbiddenOperations']): string {
+  const lines = groups.flatMap((group) =>
+    group.operations.map((item) => `${group.category ? `${group.category} / ` : ''}${item.operation}${item.note ? `：${item.note}` : ''}`),
+  );
+  return lines.length ? lines.map((line, index) => `${index + 1}. ${line}`).join('\n') : '-';
+}
+
+function formatQuantity(material: SubsceneVersion['materials'][number]): string {
+  const unit = material.quantity.unit || '件';
+  if (material.quantity.mode === 'range') {
+    return `${reportValue(material.quantity.min)}-${reportValue(material.quantity.max)} ${unit}`;
+  }
+  return `${reportValue(material.quantity.value)} ${unit}`;
+}
+
+function materialsReport(materials: SubsceneVersion['materials']): string {
+  if (!materials.length) return '-';
+  return materials
+    .map(
+      (material, index) =>
+        `${index + 1}. ${material.skuId} / ${material.type} / 数量 ${formatQuantity(material)} / 颜色 ${reportValue(
+          material.color,
+        )} / 材质 ${reportValue(material.material)} / 包装 ${reportValue(material.packageType)}`,
+    )
+    .join('\n');
+}
+
+function initialStatesReport(states: SubsceneVersion['objectStates']['initial']): string {
+  const rows = initialStateRows(states);
+  if (!rows.length) return '-';
+  return rows.map((row, index) => `${index + 1}. ${stateRowReport(row, '允许')}`).join('\n');
+}
+
+function targetStatesReport(states: SubsceneVersion['objectStates']['target']): string {
+  const rows = targetStateRows(states);
+  if (!rows.length) return '-';
+  return rows.map((row, index) => `${index + 1}. ${stateRowReport(row, '目标')}`).join('\n');
+}
+
+function stateRowReport(row: InitialLocationRow, label: string): string {
+  return [
+    `${row.object || '-'}`,
+    `${label}一级参照物 ${reportList(row.primaryReferences)}`,
+    `一级相对位置 ${reportList(row.primaryRelativePositions)}`,
+    `支撑面 ${reportList(row.supportSurfaces)}`,
+    `区域 ${reportList(row.regions)}`,
+    `二级参照物 ${reportList(row.secondaryReferences)}`,
+    `二级相对位置 ${reportList(row.secondaryRelativePositions)}`,
+    `姿态 ${reportList(row.poses)}`,
+    `形态 ${reportList(row.forms)}`,
+    `参数 ${reportList(row.parameters)}`,
+    `限制 ${reportList(row.constraints)}`,
+  ].join('；');
+}
+
+function robotRandomizationReport(version: SubsceneVersion): string {
+  const rows = robotInitialRandomizationRows(version.randomization, version.randomizationFrequency);
+  if (!rows.length) return '-';
+  return rows
+    .map(
+      (row, index) =>
+        `${index + 1}. ${row.target}：每 ${row.changeIntervalRecords || 1} 条变换一次；随机字段 ${reportList(
+          row.randomizedFields,
+        )}；限制 ${reportValue(row.constraints)}`,
+    )
+    .join('\n');
+}
+
+function materialRandomizationReport(version: SubsceneVersion): string {
+  const rows = materialInitialRandomizationRows(version.randomization);
+  if (!rows.length) return '-';
+  return rows
+    .map(
+      (row, index) =>
+        `${index + 1}. ${reportList(row.targetMaterials)}：每 ${row.changeIntervalRecords || 1} 条变换一次；随机字段 ${reportList(
+          row.randomizedFields,
+        )}；限制 ${reportValue(row.constraints)}`,
+    )
+    .join('\n');
+}
+
+function stepRandomizationReport(value?: { enabled: boolean; startOrder: number; endOrder: number }): string {
+  if (!value?.enabled) return '未启用';
+  return `第 ${value.startOrder || 1} 步到第 ${value.endOrder || 1} 步顺序可随机`;
+}
+
+function subsceneReportSections(scene: Scene, subscene: Subscene, version: SubsceneVersion): PrintableSection[] {
+  return [
+    {
+      title: '基础信息',
+      content: keyValueReport([
+        ['场景', scene.name],
+        ['子场景编号', subscene.code],
+        ['子场景名称', version.title || subscene.name],
+        ['版本', version.version],
+        ['状态', statusText(version.status)],
+        ['更新时间', formatShortDate(version.updatedAt)],
+        ['描述', version.description],
+      ]),
+    },
+    {
+      title: '机器人与随机性',
+      content: [
+        keyValueReport([
+          ['机器人初始态', version.robotState.initial],
+          ['机器人目标态', version.robotState.target],
+        ]),
+        '',
+        '机器人初始态随机性：',
+        robotRandomizationReport(version),
+      ].join('\n'),
+    },
+    {
+      title: '物料',
+      content: materialsReport(version.materials),
+    },
+    {
+      title: '物料状态',
+      content: ['物料初始状态：', initialStatesReport(version.objectStates.initial), '', '物料目标状态：', targetStatesReport(version.objectStates.target)].join(
+        '\n',
+      ),
+    },
+    {
+      title: '物料随机性',
+      content: materialRandomizationReport(version),
+    },
+    {
+      title: '采集步骤和说明',
+      content: [
+        '采集步骤：',
+        numberedReportSteps(version.operation.steps),
+        '',
+        `采集步骤随机性：${stepRandomizationReport(version.operation.stepRandomization)}`,
+        '',
+        '采集操作要求：',
+        textItemsReport(version.operation.allowedOperations),
+        '',
+        '采集禁止操作：',
+        textItemsReport(version.operation.forbiddenOperations),
+      ].join('\n'),
+    },
+    {
+      title: '标注步骤和说明',
+      content: [
+        keyValueReport([
+          ['标注状态', version.annotation.status],
+          ['动作标签', reportList(version.annotation.actionTags)],
+        ]),
+        '',
+        '标注步骤：',
+        numberedReportSteps(version.annotation.steps),
+        '',
+        '标注操作要求：',
+        textItemsReport(version.annotation.allowedOperations),
+        '',
+        '标注禁止操作：',
+        textItemsReport(version.annotation.forbiddenOperations),
+      ].join('\n'),
+    },
+  ];
+}
+
+function buildSubscenePdfReport(scene: Scene, subscene: Subscene, version: SubsceneVersion): PrintableReport {
+  return {
+    title: `${subscene.code} ${version.title || subscene.name}`,
+    subtitle: `${scene.name} · 子场景版本 v${version.version} · ${statusText(version.status)}`,
+    fileName: `${subscene.code}-${version.version}.pdf`,
+    sections: subsceneReportSections(scene, subscene, version),
+  };
+}
+
+function selectedSubscenesReport(
+  scenes: Scene[],
+  selectedSubscenes: RequirementVersion['selectedSubscenes'],
+): PrintableSection[] {
+  if (!selectedSubscenes.length) {
+    return [{ title: '已选子场景', content: '-' }];
+  }
+  return selectedSubscenes.map((selected, index) => {
+    const target = findSubscene(scenes, selected.subsceneCode, selected.version);
+    const header = keyValueReport([
+      ['场景', selected.sceneName],
+      ['子场景编号', selected.subsceneCode],
+      ['子场景名称', selected.subsceneName],
+      ['引用版本', selected.version],
+      ['引用版本状态', target?.version ? statusText(target.version.status) : '未找到'],
+      ['目标采集时长', `${selected.targetDurationHours || 0} h`],
+    ]);
+    const detail =
+      target?.version && target.subscene
+        ? subsceneReportSections(target.scene, target.subscene, target.version)
+            .map((section) => `【${section.title}】\n${section.content}`)
+            .join('\n\n')
+        : '未找到对应子场景版本，无法展开正文。';
+    return {
+      title: `子场景 ${index + 1}：${selected.subsceneCode} ${selected.subsceneName}`,
+      content: `${header}\n\n${detail}`,
+    };
+  });
+}
+
+function buildRequirementPdfReport(data: AppData, requirement: Requirement, version: RequirementVersion): PrintableReport {
+  const customer = data.customers.find((item) => item.id === version.customerId);
+  const robot = data.robotModels.find((item) => item.id === version.robotModelId);
+  const selectedDurationTotal = version.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0);
+  return {
+    title: version.title,
+    subtitle: `${requirement.id} · 需求版本 v${version.version} · ${statusText(version.status)}`,
+    fileName: `${requirement.id}-${version.version}.pdf`,
+    sections: [
+      {
+        title: '基础信息',
+        content: keyValueReport([
+          ['需求编号', requirement.id],
+          ['需求名称', version.title],
+          ['客户', customer?.name],
+          ['联系人', customer?.contact.name],
+          ['项目名称', version.projectName],
+          ['优先级', version.priority],
+          ['截止日期', formatShortDate(version.deadline)],
+          ['需求状态', statusText(version.status)],
+          ['需求版本', version.version],
+          ['机器人型号', robot ? `${robot.brand} ${robot.model}` : '-'],
+          ['业务目标', version.businessGoal],
+          ['总目标时长', `${version.requiredDurationHours || 0} h`],
+          ['已选子场景时长合计', `${selectedDurationTotal} h`],
+        ]),
+      },
+      {
+        title: '交付 / 标注 / 质检',
+        content: keyValueReport([
+          ['交付方式', version.delivery.method],
+          ['交付格式', reportList(version.delivery.formats)],
+          ['交付语言', reportList(version.delivery.languages.map((item) => `${item.code} ${item.name}`))],
+          ['数据交付结构', version.delivery.dataStructureUrl],
+          ['是否需要标注', version.annotation.required],
+          ['标注类型', reportList(version.annotation.types)],
+          ['是否需要质检', version.qualityInspection.required],
+          ['客户抽检策略', version.qualityInspection.samplingPolicy],
+        ]),
+      },
+      {
+        title: '说明补充',
+        content: keyValueReport([
+          ['客户额外 topic 要求', version.extraTopicRequirementsText],
+          ['全局随机性要求', version.globalRandomizationRequirements],
+          ['附件说明', version.attachmentNotes],
+          ['其他补充说明', version.additionalNotes],
+        ]),
+      },
+      {
+        title: '客户需求层操作要求',
+        content: [
+          '采集操作要求：',
+          operationItemsReport(version.allowedOperations),
+          '',
+          '采集禁止操作：',
+          forbiddenRequirementReport(version.forbiddenOperations),
+          '',
+          '标注操作要求：',
+          operationItemsReport(version.annotation.allowedOperations),
+          '',
+          '标注禁止操作：',
+          operationItemsReport(version.annotation.forbiddenOperations),
+        ].join('\n'),
+      },
+      ...selectedSubscenesReport(data.scenes, version.selectedSubscenes),
+    ],
+  };
 }
 
 function nextReadableId(values: string[], prefix: string): string {
@@ -1576,6 +2003,12 @@ function RequirementPage({
             >
               导出 YAML
             </button>
+            <button
+              className="ghost-button"
+              onClick={() => exportReportAsPdf(buildRequirementPdfReport(data, selectedRequirement, selectedVersion))}
+            >
+              导出 PDF
+            </button>
             {selectedVersion.status === 'confirmed' ? (
               <button className="primary-button" onClick={createDraftFromCurrentVersion}>
                 编辑为草稿
@@ -2386,6 +2819,9 @@ function ScenePage({
                     ))}
                   </select>
                 </label>
+                <button className="ghost-button" onClick={() => exportReportAsPdf(buildSubscenePdfReport(scene, subscene, version))}>
+                  导出 PDF
+                </button>
                 {version.status === 'confirmed' ? (
                   <button className="primary-button" onClick={() => void createDraftFromCurrentSubsceneVersion()}>
                     编辑为草稿

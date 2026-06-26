@@ -5,4 +5,4 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "sop-prod"
-database_id = "replace-with-cloudflare-d1-database-id"
+database_id = "21d042f0-61d8-4344-b9eb-73b43c3c870d"

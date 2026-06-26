@@ -1889,8 +1889,11 @@ function RequirementPage({
     'forbidden_operation',
     selectedVersion.forbiddenOperations.flatMap((group) => group.operations.map((item) => item.operation)),
   );
+  const allowedOperationOptions = fieldOptions(globalFields, 'allowed_operation', selectedAllowedOperations);
   const selectedAnnotationAllowedOperations = selectedVersion.annotation.allowedOperations?.map((item) => item.operation) || [];
   const selectedAnnotationForbiddenOperations = selectedVersion.annotation.forbiddenOperations?.map((item) => item.operation) || [];
+  const annotationAllowedOptions = fieldOptions(globalFields, 'annotation_allowed_operation', selectedAnnotationAllowedOperations);
+  const annotationForbiddenOptions = fieldOptions(globalFields, 'annotation_forbidden_operation', selectedAnnotationForbiddenOperations);
   const yamlDownloadFileName = `${selectedRequirement.id}-${selectedVersion.version}.yaml`;
 
   async function generateYamlPreview(): Promise<ExportResult | undefined> {
@@ -1946,6 +1949,45 @@ function RequirementPage({
       ],
     });
     setSubscenePickerOpen(false);
+  }
+
+  function saveAllowedOperations(operations: string[]) {
+    void onSave({
+      allowedOperations: operations.map((operation) => {
+        const option = allowedOperationOptions.find((item) => item.value === operation);
+        return { operation, note: option?.description || '' };
+      }),
+    });
+  }
+
+  function saveForbiddenOperations(operations: string[]) {
+    void onSave({ forbiddenOperations: forbiddenGroupsFromKeys(operations, forbiddenOptions) });
+  }
+
+  function saveAnnotationAllowedOperations(operations: string[]) {
+    if (!selectedVersion) return;
+    void onSave({
+      annotation: {
+        ...selectedVersion.annotation,
+        allowedOperations: operations.map((operation) => {
+          const option = annotationAllowedOptions.find((item) => item.value === operation);
+          return { operation, note: option?.description || '' };
+        }),
+      },
+    });
+  }
+
+  function saveAnnotationForbiddenOperations(operations: string[]) {
+    if (!selectedVersion) return;
+    void onSave({
+      annotation: {
+        ...selectedVersion.annotation,
+        forbiddenOperations: operations.map((operation) => {
+          const option = annotationForbiddenOptions.find((item) => item.value === operation);
+          return { operation, note: option?.description || '' };
+        }),
+      },
+    });
   }
 
   const subscenePickerModal = subscenePickerOpen && (
@@ -2212,73 +2254,34 @@ function RequirementPage({
                 <p>客户需求层面的采集和标注操作约束</p>
               </div>
               <div className="requirement-operation-grid">
-                <div className="field wide">
-                  <span>采集操作要求</span>
-                  <MultiSelectInput
-                    value={selectedAllowedOperations}
-                    options={fieldOptions(globalFields, 'allowed_operation', selectedAllowedOperations)}
-                    disabled={readonly}
-                    onChange={(operations) =>
-                      void onSave({
-                        allowedOperations: operations.map((operation) => {
-                          const option = fieldOptions(globalFields, 'allowed_operation', [operation]).find((item) => item.value === operation);
-                          return { operation, note: option?.description || '' };
-                        }),
-                      })
-                    }
-                  />
-                </div>
-                <div className="field wide">
-                  <span>采集禁止操作</span>
-                  <MultiSelectInput
-                    value={selectedForbiddenOperations}
-                    options={forbiddenOptions}
-                    disabled={readonly}
-                    onChange={(items) => void onSave({ forbiddenOperations: forbiddenGroupsFromKeys(items, forbiddenOptions) })}
-                  />
-                </div>
-                <div className="field wide">
-                  <span>标注操作要求</span>
-                  <MultiSelectInput
-                    value={selectedAnnotationAllowedOperations}
-                    options={fieldOptions(globalFields, 'annotation_allowed_operation', selectedAnnotationAllowedOperations)}
-                    disabled={readonly}
-                    onChange={(operations) =>
-                      void onSave({
-                        annotation: {
-                          ...selectedVersion.annotation,
-                          allowedOperations: operations.map((operation) => {
-                            const option = fieldOptions(globalFields, 'annotation_allowed_operation', [operation]).find(
-                              (item) => item.value === operation,
-                            );
-                            return { operation, note: option?.description || '' };
-                          }),
-                        },
-                      })
-                    }
-                  />
-                </div>
-                <div className="field wide">
-                  <span>标注禁止操作</span>
-                  <MultiSelectInput
-                    value={selectedAnnotationForbiddenOperations}
-                    options={fieldOptions(globalFields, 'annotation_forbidden_operation', selectedAnnotationForbiddenOperations)}
-                    disabled={readonly}
-                    onChange={(operations) =>
-                      void onSave({
-                        annotation: {
-                          ...selectedVersion.annotation,
-                          forbiddenOperations: operations.map((operation) => {
-                            const option = fieldOptions(globalFields, 'annotation_forbidden_operation', [operation]).find(
-                              (item) => item.value === operation,
-                            );
-                            return { operation, note: option?.description || '' };
-                          }),
-                        },
-                      })
-                    }
-                  />
-                </div>
+                <OperationRequirementGroup
+                  title="采集操作要求"
+                  value={selectedAllowedOperations}
+                  options={allowedOperationOptions}
+                  readOnly={readonly}
+                  onChange={saveAllowedOperations}
+                />
+                <OperationRequirementGroup
+                  title="采集禁止操作"
+                  value={selectedForbiddenOperations}
+                  options={forbiddenOptions}
+                  readOnly={readonly}
+                  onChange={saveForbiddenOperations}
+                />
+                <OperationRequirementGroup
+                  title="标注操作要求"
+                  value={selectedAnnotationAllowedOperations}
+                  options={annotationAllowedOptions}
+                  readOnly={readonly}
+                  onChange={saveAnnotationAllowedOperations}
+                />
+                <OperationRequirementGroup
+                  title="标注禁止操作"
+                  value={selectedAnnotationForbiddenOperations}
+                  options={annotationForbiddenOptions}
+                  readOnly={readonly}
+                  onChange={saveAnnotationForbiddenOperations}
+                />
               </div>
             </section>
           </div>
@@ -3358,6 +3361,80 @@ function MultiSelectField({
       <span>{label}</span>
       <MultiSelectInput value={value} options={options} disabled={disabled} onChange={onChange} />
     </label>
+  );
+}
+
+function OperationRequirementGroup({
+  title,
+  value,
+  options,
+  readOnly,
+  onChange,
+}: {
+  title: string;
+  value: string[];
+  options: Option[];
+  readOnly: boolean;
+  onChange: (value: string[]) => void;
+}) {
+  const [open, setOpen] = useState(!readOnly);
+  const selectedOptions = value.map((item) => options.find((option) => option.value === item) || { value: item, label: item });
+  const allOptions = uniqueOptions([...options, ...selectedOptions]);
+  const visibleOptions = readOnly ? selectedOptions : allOptions;
+  const summary = selectedOptions.length ? selectedOptions.map((option) => option.label).join('、') : '未选择';
+
+  useEffect(() => {
+    setOpen(!readOnly);
+  }, [readOnly]);
+
+  function toggleValue(target: string) {
+    if (readOnly) return;
+    if (value.includes(target)) {
+      onChange(value.filter((item) => item !== target));
+      return;
+    }
+    onChange([...value, target]);
+  }
+
+  function optionDescription(option: Option): string {
+    const description = option.description?.trim() || '';
+    return description && description !== option.label ? description : '';
+  }
+
+  return (
+    <div className={`operation-requirement-group ${open ? 'open' : ''}`}>
+      <button type="button" className="operation-requirement-summary" onClick={() => setOpen((current) => !current)}>
+        <span>
+          <strong>{title}</strong>
+          <small>{readOnly ? summary : `${selectedOptions.length} / ${allOptions.length} 已选`}</small>
+        </span>
+        <b>{open ? '收起' : '展开'}</b>
+      </button>
+      {open && (
+        <div className="operation-requirement-content">
+          {visibleOptions.length === 0 ? (
+            <div className="operation-requirement-empty">{readOnly ? '暂无已选条目' : '暂无可选条目'}</div>
+          ) : (
+            visibleOptions.map((option) =>
+              readOnly ? (
+                <div className="operation-requirement-readonly-item" key={`${title}-${option.value}`}>
+                  <span>{option.category ? `${option.category} / ${option.label}` : option.label}</span>
+                  {optionDescription(option) && <small>{optionDescription(option)}</small>}
+                </div>
+              ) : (
+                <label className="operation-requirement-option" key={`${title}-${option.value}`}>
+                  <input type="checkbox" checked={value.includes(option.value)} onChange={() => toggleValue(option.value)} />
+                  <span>
+                    {option.category ? `${option.category} / ${option.label}` : option.label}
+                    {optionDescription(option) && <small>{optionDescription(option)}</small>}
+                  </span>
+                </label>
+              ),
+            )
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

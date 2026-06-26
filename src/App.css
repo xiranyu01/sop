@@ -957,6 +957,114 @@ button:disabled {
   margin: 0;
 }
 
+.operation-requirement-group {
+  overflow: hidden;
+  border: 1px solid #cfdce9;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.operation-requirement-summary {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  background: #ffffff;
+  color: #172033;
+  cursor: pointer;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.operation-requirement-summary:hover {
+  background: #f6faff;
+}
+
+.operation-requirement-summary span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.operation-requirement-summary strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.operation-requirement-summary small {
+  overflow: hidden;
+  color: #52627a;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-requirement-summary b {
+  color: #66758b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.operation-requirement-content {
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid #e6edf4;
+  padding: 6px;
+}
+
+.operation-requirement-option,
+.operation-requirement-readonly-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-radius: 6px;
+  color: #24364f;
+  padding: 8px;
+}
+
+.operation-requirement-option:hover {
+  background: #eef7ff;
+}
+
+.operation-requirement-option input {
+  margin-top: 3px;
+}
+
+.operation-requirement-option span,
+.operation-requirement-readonly-item span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.operation-requirement-option small,
+.operation-requirement-readonly-item small {
+  color: #66758b;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.operation-requirement-readonly-item {
+  border-bottom: 1px solid #edf2f7;
+}
+
+.operation-requirement-readonly-item:last-child {
+  border-bottom: 0;
+}
+
+.operation-requirement-empty {
+  color: #7b8ca3;
+  padding: 10px 8px;
+}
+
 .requirement-notes-grid .field.wide {
   margin: 0;
 }

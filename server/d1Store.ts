@@ -7,6 +7,7 @@ import robotModelsSeed from '../data/robot-models.json';
 import scenesSeed from '../data/scenes.json';
 import type { AppData, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
 import type { AppStore } from './api';
+import type { AttachmentStore } from './r2AttachmentStore';
 
 export type D1DatabaseLike = {
   prepare(query: string): {
@@ -76,7 +77,7 @@ async function writeKey<T>(db: D1DatabaseLike, key: DataKey, value: T): Promise<
   return value;
 }
 
-export function createD1Store(db: D1DatabaseLike): AppStore {
+export function createD1Store(db: D1DatabaseLike, attachmentStore: AttachmentStore = {}): AppStore {
   return {
     async readData(): Promise<AppData> {
       const values = await Promise.all(dataKeys.map((key) => readKey(db, key)));
@@ -94,5 +95,6 @@ export function createD1Store(db: D1DatabaseLike): AppStore {
     async writeExport(requirementId, version) {
       return `/exports/requirements/${requirementId}/${version}.yaml`;
     },
+    ...attachmentStore,
   };
 }

@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AppData, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
 import type { AppStore } from './api';
 
 const rootDir = process.cwd();
 const dataDir = path.join(rootDir, 'data');
+const uploadsDir = path.join(rootDir, 'uploads');
 
 const files = {
   customers: path.join(dataDir, 'customers.json'),
@@ -94,6 +95,19 @@ export async function writeExport(requirementId: string, version: string, yaml: 
   return file;
 }
 
+function safeUploadPath(storageKey: string): string {
+  const normalized = path.normalize(storageKey).replace(/^(\.\.(\/|\\|$))+/, '');
+  return path.join(uploadsDir, normalized);
+}
+
+function uploadPartPath(storageKey: string, uploadId: string, partNumber: number): string {
+  return path.join(uploadsDir, '.parts', uploadId, `${partNumber}-${path.basename(storageKey)}.part`);
+}
+
+export function localAttachmentPath(storageKey: string): string {
+  return safeUploadPath(storageKey);
+}
+
 export const fileStore: AppStore = {
   readData,
   writeCustomers,
@@ -104,4 +118,31 @@ export const fileStore: AppStore = {
   writeGlobalFields,
   writeMaterialStateRules,
   writeExport,
+  async createAttachmentUpload(input) {
+    const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await mkdir(path.dirname(safeUploadPath(input.storageKey)), { recursive: true });
+    await mkdir(path.join(uploadsDir, '.parts', uploadId), { recursive: true });
+    return { uploadId, storageKey: input.storageKey };
+  },
+  async uploadAttachmentPart(input) {
+    const file = uploadPartPath(input.storageKey, input.uploadId, input.partNumber);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, Buffer.from(input.body));
+    return { etag: `${input.partNumber}-${input.body.byteLength}` };
+  },
+  async completeAttachmentUpload(input) {
+    const target = safeUploadPath(input.storageKey);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, Buffer.alloc(0));
+    for (const part of input.parts.slice().sort((a, b) => a.partNumber - b.partNumber)) {
+      await appendFile(target, await readFile(uploadPartPath(input.storageKey, input.uploadId, part.partNumber)));
+    }
+    await rm(path.join(uploadsDir, '.parts', input.uploadId), { recursive: true, force: true });
+  },
+  async abortAttachmentUpload(input) {
+    await rm(path.join(uploadsDir, '.parts', input.uploadId), { recursive: true, force: true });
+  },
+  async deleteAttachment(storageKey) {
+    await rm(safeUploadPath(storageKey), { force: true });
+  },
 };

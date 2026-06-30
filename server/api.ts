@@ -5,13 +5,14 @@ import type {
   Material,
   MaterialStateRule,
   Requirement,
+  RequirementAttachment,
   RequirementVersion,
   RobotModel,
   Scene,
   SubsceneVersion,
 } from '../src/types';
 import { buildRequirementYaml } from './yamlExport';
-import { canEditStatus, createId, nextPatchVersion, nowIso } from './versioning';
+import { canEditStatus, createId, createShortId, nextPatchVersion, nowIso } from './versioning';
 
 export type AppStore = {
   readData(): Promise<AppData>;
@@ -23,12 +24,19 @@ export type AppStore = {
   writeGlobalFields(globalFields: GlobalField[]): Promise<GlobalField[]>;
   writeMaterialStateRules(materialStateRules: MaterialStateRule[]): Promise<MaterialStateRule[]>;
   writeExport(requirementId: string, version: string, yaml: string): Promise<string>;
+  createAttachmentUpload?(input: AttachmentUploadInput): Promise<AttachmentUploadSession>;
+  uploadAttachmentPart?(input: AttachmentPartInput): Promise<AttachmentPartOutput>;
+  completeAttachmentUpload?(input: AttachmentCompleteInput): Promise<void>;
+  abortAttachmentUpload?(input: AttachmentAbortInput): Promise<void>;
+  deleteAttachment?(storageKey: string): Promise<void>;
 };
 
 export type ApiRequest = {
   method: string;
   pathname: string;
+  search?: string;
   body?: unknown;
+  rawBody?: ArrayBuffer;
   authorization?: string | null;
   auth?: {
     password?: string;
@@ -39,7 +47,43 @@ export type ApiRequest = {
 export type ApiResponse = {
   status: number;
   body: unknown;
+  headers?: Record<string, string>;
 };
+
+export type AttachmentUploadInput = {
+  storageKey: string;
+  contentType: string;
+};
+
+export type AttachmentUploadSession = {
+  uploadId: string;
+  storageKey: string;
+};
+
+export type AttachmentPartInput = {
+  storageKey: string;
+  uploadId: string;
+  partNumber: number;
+  body: ArrayBuffer;
+};
+
+export type AttachmentPartOutput = {
+  etag: string;
+};
+
+export type AttachmentCompleteInput = {
+  storageKey: string;
+  uploadId: string;
+  parts: Array<{ partNumber: number; etag: string }>;
+};
+
+export type AttachmentAbortInput = {
+  storageKey: string;
+  uploadId: string;
+};
+
+const maxAttachmentSize = 1024 * 1024 * 1024;
+const attachmentPartSize = 16 * 1024 * 1024;
 
 function latestVersion<T extends { version: string }>(versions: T[]): T {
   if (versions.length === 0) {
@@ -89,12 +133,17 @@ function nextReadableId(values: string[], prefix: string): string {
   return `${prefix}${maxNumber + 1}`;
 }
 
+function nextShortId(values: string[]): string {
+  return createShortId(values);
+}
+
 function emptySubsceneVersion(patch: Partial<SubsceneVersion> = {}): SubsceneVersion {
   return {
     version: '0.0.1',
     status: 'draft',
     title: patch.title || '新的子场景',
     description: patch.description || '',
+    attachments: patch.attachments || [],
     materials: patch.materials || [],
     robotState: patch.robotState || { initial: '', target: '' },
     robotOperationRequirements: patch.robotOperationRequirements || '',
@@ -114,6 +163,7 @@ function emptySubsceneVersion(patch: Partial<SubsceneVersion> = {}): SubsceneVer
       steps: [],
       stepRandomization: { enabled: false, startOrder: 1, endOrder: 1 },
       allowedOperations: [],
+      acceptableOperations: [],
       forbiddenOperations: [],
     },
     objectStates: patch.objectStates || { initial: [], target: [] },
@@ -135,6 +185,131 @@ function emptySubsceneVersion(patch: Partial<SubsceneVersion> = {}): SubsceneVer
 
 function json(status: number, body: unknown): ApiResponse {
   return { status, body };
+}
+
+function attachmentStorageKey(scope: string, ownerId: string, version: string, attachmentId: string, fileName: string): string {
+  const safeName = fileName.replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_').slice(0, 120) || 'attachment';
+  return `${scope}/${ownerId}/${version}/${attachmentId}-${safeName}`;
+}
+
+function requireAttachmentStore(store: AppStore): asserts store is AppStore &
+  Required<Pick<AppStore, 'createAttachmentUpload' | 'uploadAttachmentPart' | 'completeAttachmentUpload' | 'abortAttachmentUpload' | 'deleteAttachment'>> {
+  if (
+    !store.createAttachmentUpload ||
+    !store.uploadAttachmentPart ||
+    !store.completeAttachmentUpload ||
+    !store.abortAttachmentUpload ||
+    !store.deleteAttachment
+  ) {
+    throw new Error('附件存储未配置');
+  }
+}
+
+function attachmentDownloadUrl(storageKey: string): string {
+  return `/api/attachments/${encodeURIComponent(storageKey)}`;
+}
+
+function attachmentResponse(attachment: RequirementAttachment): RequirementAttachment & { url: string } {
+  return { ...attachment, url: attachmentDownloadUrl(attachment.storageKey) };
+}
+
+function materialWithAttachment(material: Material, attachment: RequirementAttachment): Material {
+  return { ...material, images: [...(material.images || []), attachment] };
+}
+
+function materialWithoutAttachment(material: Material, attachmentId: string): Material {
+  return { ...material, images: (material.images || []).filter((attachment) => attachment.id !== attachmentId) };
+}
+
+function updateRequirementVersion(
+  requirements: Requirement[],
+  requirementId: string,
+  versionNumber: string,
+  updater: (version: RequirementVersion) => RequirementVersion,
+): { nextRequirements: Requirement[]; version?: RequirementVersion; blocked?: ApiResponse } {
+  const requirement = requirements.find((item) => item.id === requirementId);
+  if (!requirement) return { nextRequirements: requirements, blocked: json(404, { message: '找不到客户需求' }) };
+  const target = requirement.versions.find((version) => version.version === versionNumber);
+  if (!target) return { nextRequirements: requirements, blocked: json(404, { message: '找不到客户需求版本' }) };
+  if (target.status !== 'draft') return { nextRequirements: requirements, blocked: json(400, { message: '只能给草稿版本上传附件' }) };
+  const nextVersion = updater(target);
+  const nextRequirement = {
+    ...requirement,
+    versions: requirement.versions.map((version) => (version.version === versionNumber ? nextVersion : version)),
+  };
+  return {
+    nextRequirements: requirements.map((item) => (item.id === requirementId ? nextRequirement : item)),
+    version: nextVersion,
+  };
+}
+
+function unconfirmedSubsceneRefs(data: AppData, version: RequirementVersion): string[] {
+  return version.selectedSubscenes.flatMap((selected) => {
+    const foundVersion = data.scenes
+      .flatMap((scene) => scene.subscenes)
+      .find((subscene) => subscene.code === selected.subsceneCode)
+      ?.versions.find((subsceneVersion) => subsceneVersion.version === selected.version);
+    if (foundVersion?.status === 'confirmed') return [];
+    const status = foundVersion ? '草稿' : '未找到';
+    return [`${selected.sceneName} / ${selected.subsceneName} v${selected.version}（${status}）`];
+  });
+}
+
+function updateSubsceneVersion(
+  scenes: Scene[],
+  sceneId: string,
+  subsceneCode: string,
+  versionNumber: string,
+  updater: (version: SubsceneVersion) => SubsceneVersion,
+): { nextScenes: Scene[]; version?: SubsceneVersion; blocked?: ApiResponse } {
+  const scene = scenes.find((item) => item.id === sceneId);
+  if (!scene) return { nextScenes: scenes, blocked: json(404, { message: '找不到场景' }) };
+  const subscene = scene.subscenes.find((item) => item.code === subsceneCode);
+  if (!subscene) return { nextScenes: scenes, blocked: json(404, { message: '找不到子场景' }) };
+  const target = subscene.versions.find((version) => version.version === versionNumber);
+  if (!target) return { nextScenes: scenes, blocked: json(404, { message: '找不到子场景版本' }) };
+  if (target.status !== 'draft') return { nextScenes: scenes, blocked: json(400, { message: '只能给草稿版本上传附件' }) };
+  const nextVersion = updater(target);
+  return {
+    nextScenes: scenes.map((item) =>
+      item.id === sceneId
+        ? {
+            ...item,
+            subscenes: item.subscenes.map((current) =>
+              current.code === subsceneCode
+                ? {
+                    ...current,
+                    versions: current.versions.map((version) => (version.version === versionNumber ? nextVersion : version)),
+                  }
+                : current,
+            ),
+          }
+        : item,
+    ),
+    version: nextVersion,
+  };
+}
+
+function addAttachmentToVersion(version: RequirementVersion | SubsceneVersion, attachment: RequirementAttachment) {
+  return { ...version, attachments: [...(version.attachments || []), attachment], updatedAt: nowIso() };
+}
+
+function completeAttachmentInVersion(version: RequirementVersion | SubsceneVersion, attachmentId: string) {
+  return {
+    ...version,
+    attachments: (version.attachments || []).map((attachment) =>
+      attachment.id === attachmentId ? { ...attachment, uploadedAt: nowIso() } : attachment,
+    ),
+    updatedAt: nowIso(),
+  };
+}
+
+function removeAttachmentFromVersion(version: RequirementVersion | SubsceneVersion, attachmentId: string) {
+  return {
+    ...version,
+    attachments: (version.attachments || []).filter((attachment) => attachment.id !== attachmentId),
+    updatedAt: nowIso(),
+  };
 }
 
 function assertAuthorized(request: ApiRequest): ApiResponse | undefined {
@@ -182,6 +357,96 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
       return json(200, await store.writeMaterials(replaceById(data.materials, item)));
     }
 
+    const materialImageInit = path.match(/^\/api\/materials\/([^/]+)\/images\/init$/);
+    if (method === 'POST' && materialImageInit) {
+      requireAttachmentStore(store);
+      const data = await store.readData();
+      const materialId = decodeURIComponent(materialImageInit[1]);
+      const material = data.materials.find((item) => item.id === materialId);
+      if (!material) return json(404, { message: '找不到物料' });
+      const body = request.body as { fileName?: string; size?: number; contentType?: string };
+      const fileName = body.fileName?.trim();
+      const size = Number(body.size || 0);
+      const contentType = body.contentType || 'application/octet-stream';
+      if (!fileName) return json(400, { message: '图片名称不能为空' });
+      if (!contentType.startsWith('image/')) return json(400, { message: '只能上传图片文件' });
+      if (!Number.isFinite(size) || size <= 0) return json(400, { message: '图片大小无效' });
+      if (size > maxAttachmentSize) return json(400, { message: '单张图片不能超过 1G' });
+
+      const attachmentId = createId('img');
+      const storageKey = attachmentStorageKey('materials', materialId, 'images', attachmentId, fileName);
+      const attachment: RequirementAttachment = {
+        id: attachmentId,
+        name: fileName,
+        size,
+        contentType,
+        storageKey,
+        uploadedAt: nowIso(),
+      };
+      const session = await store.createAttachmentUpload({ storageKey, contentType });
+      const nextMaterials = data.materials.map((item) => (item.id === materialId ? materialWithAttachment(item, attachment) : item));
+      await store.writeMaterials(nextMaterials);
+      return json(200, {
+        attachmentId,
+        uploadId: session.uploadId,
+        storageKey: session.storageKey,
+        partSize: attachmentPartSize,
+        maxSize: maxAttachmentSize,
+      });
+    }
+
+    const materialImagePart = path.match(/^\/api\/materials\/([^/]+)\/images\/([^/]+)\/parts\/(\d+)$/);
+    if (method === 'PUT' && materialImagePart) {
+      requireAttachmentStore(store);
+      if (!request.rawBody) return json(400, { message: '缺少图片分片内容' });
+      const uploadId = decodeURIComponent(materialImagePart[2]);
+      const partNumber = Number(decodeURIComponent(materialImagePart[3]));
+      const storageKey = new URLSearchParams(request.search || '').get('storageKey') || '';
+      if (!storageKey || !uploadId || !Number.isInteger(partNumber) || partNumber < 1) return json(400, { message: '分片参数无效' });
+      const result = await store.uploadAttachmentPart({ storageKey, uploadId, partNumber, body: request.rawBody });
+      return json(200, result);
+    }
+
+    const materialImageComplete = path.match(/^\/api\/materials\/([^/]+)\/images\/([^/]+)\/complete$/);
+    if (method === 'POST' && materialImageComplete) {
+      requireAttachmentStore(store);
+      const [materialId, attachmentId] = materialImageComplete.slice(1).map(decodeURIComponent);
+      const body = request.body as { uploadId?: string; storageKey?: string; parts?: Array<{ partNumber: number; etag: string }> };
+      if (!body.uploadId || !body.storageKey || !body.parts?.length) return json(400, { message: '图片完成参数无效' });
+      await store.completeAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId, parts: body.parts });
+      const data = await store.readData();
+      const material = data.materials.find((item) => item.id === materialId);
+      const attachment = material?.images?.find((item) => item.id === attachmentId);
+      return json(200, attachment ? attachmentResponse(attachment) : { id: attachmentId });
+    }
+
+    const materialImageAbort = path.match(/^\/api\/materials\/([^/]+)\/images\/([^/]+)\/abort$/);
+    if (method === 'POST' && materialImageAbort) {
+      requireAttachmentStore(store);
+      const [materialId, attachmentId] = materialImageAbort.slice(1).map(decodeURIComponent);
+      const body = request.body as { uploadId?: string; storageKey?: string };
+      if (body.uploadId && body.storageKey) {
+        await store.abortAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId });
+      }
+      const data = await store.readData();
+      const nextMaterials = data.materials.map((item) => (item.id === materialId ? materialWithoutAttachment(item, attachmentId) : item));
+      await store.writeMaterials(nextMaterials);
+      return json(200, { ok: true });
+    }
+
+    const materialImageDelete = path.match(/^\/api\/materials\/([^/]+)\/images\/([^/]+)$/);
+    if (method === 'DELETE' && materialImageDelete) {
+      requireAttachmentStore(store);
+      const [materialId, attachmentId] = materialImageDelete.slice(1).map(decodeURIComponent);
+      const data = await store.readData();
+      const material = data.materials.find((item) => item.id === materialId);
+      const attachment = material?.images?.find((item) => item.id === attachmentId);
+      if (!attachment) return json(404, { message: '找不到图片' });
+      await store.deleteAttachment(attachment.storageKey);
+      const nextMaterials = data.materials.map((item) => (item.id === materialId ? materialWithoutAttachment(item, attachmentId) : item));
+      return json(200, await store.writeMaterials(nextMaterials));
+    }
+
     if (method === 'POST' && path === '/api/robot-models') {
       const data = await store.readData();
       const item = { ...(request.body as Partial<RobotModel>), id: (request.body as Partial<RobotModel>)?.id || createId('robot') } as RobotModel;
@@ -221,7 +486,7 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
       const data = await store.readData();
       const body = request.body as Partial<RequirementVersion>;
       const requirement: Requirement = {
-        id: nextReadableId(data.requirements.map((item) => item.id), 'R'),
+        id: nextShortId(data.requirements.map((item) => item.id)),
         versions: [
           {
             version: '0.0.1',
@@ -232,6 +497,7 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
             deadline: body.deadline || '',
             sourceBaseUrl: body.sourceBaseUrl || '',
             attachmentNotes: body.attachmentNotes || '',
+            attachments: body.attachments || [],
             extraTopicRequirementsText: body.extraTopicRequirementsText || '',
             globalRandomizationRequirements: body.globalRandomizationRequirements || '',
             additionalNotes: body.additionalNotes || '',
@@ -241,6 +507,7 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
             requestedScenes: body.requestedScenes || [],
             requiredDurationHours: body.requiredDurationHours || 0,
             allowedOperations: body.allowedOperations || [],
+            acceptableOperations: body.acceptableOperations || [],
             forbiddenOperations: body.forbiddenOperations || [],
             annotation: body.annotation || { required: true, types: [], allowedOperations: [], forbiddenOperations: [] },
             qualityInspection: body.qualityInspection || { required: true, samplingPolicy: '全量抽检' },
@@ -256,6 +523,243 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
         ],
       };
       return json(200, await store.writeRequirements([...data.requirements, requirement]));
+    }
+
+    const attachmentInit = path.match(/^\/api\/requirements\/([^/]+)\/versions\/([^/]+)\/attachments\/init$/);
+    if (method === 'POST' && attachmentInit) {
+      requireAttachmentStore(store);
+      const data = await store.readData();
+      const [requirementId, versionNumber] = [decodeURIComponent(attachmentInit[1]), decodeURIComponent(attachmentInit[2])];
+      const body = request.body as { fileName?: string; size?: number; contentType?: string };
+      const fileName = body.fileName?.trim();
+      const size = Number(body.size || 0);
+      if (!fileName) return json(400, { message: '附件名称不能为空' });
+      if (!Number.isFinite(size) || size <= 0) return json(400, { message: '附件大小无效' });
+      if (size > maxAttachmentSize) return json(400, { message: '单个附件不能超过 1G' });
+
+      const attachmentId = createId('att');
+      const storageKey = attachmentStorageKey('requirements', requirementId, versionNumber, attachmentId, fileName);
+      const update = updateRequirementVersion(data.requirements, requirementId, versionNumber, (version) => {
+        const attachment: RequirementAttachment = {
+          id: attachmentId,
+          name: fileName,
+          size,
+          contentType: body.contentType || 'application/octet-stream',
+          storageKey,
+          uploadedAt: nowIso(),
+        };
+        return addAttachmentToVersion(version, attachment) as RequirementVersion;
+      });
+      if (update.blocked) return update.blocked;
+      const session = await store.createAttachmentUpload({ storageKey, contentType: body.contentType || 'application/octet-stream' });
+      await store.writeRequirements(update.nextRequirements);
+      return json(200, {
+        attachmentId,
+        uploadId: session.uploadId,
+        storageKey: session.storageKey,
+        partSize: attachmentPartSize,
+        maxSize: maxAttachmentSize,
+      });
+    }
+
+    const attachmentPart = path.match(/^\/api\/requirements\/([^/]+)\/versions\/([^/]+)\/attachments\/([^/]+)\/parts\/(\d+)$/);
+    if (method === 'PUT' && attachmentPart) {
+      requireAttachmentStore(store);
+      if (!request.rawBody) return json(400, { message: '缺少附件分片内容' });
+      const [_requirementId, _versionNumber, uploadId, partNumberText] = attachmentPart.slice(1).map(decodeURIComponent);
+      const storageKey = new URLSearchParams(request.search || '').get('storageKey') || '';
+      const partNumber = Number(partNumberText);
+      if (!storageKey || !uploadId || !Number.isInteger(partNumber) || partNumber < 1) return json(400, { message: '分片参数无效' });
+      const result = await store.uploadAttachmentPart({ storageKey, uploadId, partNumber, body: request.rawBody });
+      return json(200, result);
+    }
+
+    const attachmentComplete = path.match(/^\/api\/requirements\/([^/]+)\/versions\/([^/]+)\/attachments\/([^/]+)\/complete$/);
+    if (method === 'POST' && attachmentComplete) {
+      requireAttachmentStore(store);
+      const [requirementId, versionNumber, attachmentId] = attachmentComplete.slice(1).map(decodeURIComponent);
+      const body = request.body as { uploadId?: string; storageKey?: string; parts?: Array<{ partNumber: number; etag: string }> };
+      if (!body.uploadId || !body.storageKey || !body.parts?.length) return json(400, { message: '附件完成参数无效' });
+      await store.completeAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId, parts: body.parts });
+      const data = await store.readData();
+      const update = updateRequirementVersion(
+        data.requirements,
+        requirementId,
+        versionNumber,
+        (version) => completeAttachmentInVersion(version, attachmentId) as RequirementVersion,
+      );
+      if (update.blocked) return update.blocked;
+      await store.writeRequirements(update.nextRequirements);
+      const attachment = update.version?.attachments?.find((item) => item.id === attachmentId);
+      return json(200, attachment ? attachmentResponse(attachment) : { id: attachmentId });
+    }
+
+    const attachmentAbort = path.match(/^\/api\/requirements\/([^/]+)\/versions\/([^/]+)\/attachments\/([^/]+)\/abort$/);
+    if (method === 'POST' && attachmentAbort) {
+      requireAttachmentStore(store);
+      const [requirementId, versionNumber, attachmentId] = attachmentAbort.slice(1).map(decodeURIComponent);
+      const body = request.body as { uploadId?: string; storageKey?: string };
+      if (body.uploadId && body.storageKey) {
+        await store.abortAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId });
+      }
+      const data = await store.readData();
+      const update = updateRequirementVersion(
+        data.requirements,
+        requirementId,
+        versionNumber,
+        (version) => removeAttachmentFromVersion(version, attachmentId) as RequirementVersion,
+      );
+      if (update.blocked) return update.blocked;
+      await store.writeRequirements(update.nextRequirements);
+      return json(200, { ok: true });
+    }
+
+    const attachmentDelete = path.match(/^\/api\/requirements\/([^/]+)\/versions\/([^/]+)\/attachments\/([^/]+)$/);
+    if (method === 'DELETE' && attachmentDelete) {
+      requireAttachmentStore(store);
+      const [requirementId, versionNumber, attachmentId] = attachmentDelete.slice(1).map(decodeURIComponent);
+      const data = await store.readData();
+      const requirement = data.requirements.find((item) => item.id === requirementId);
+      const version = requirement?.versions.find((item) => item.version === versionNumber);
+      const attachment = version?.attachments?.find((item) => item.id === attachmentId);
+      if (!attachment) return json(404, { message: '找不到附件' });
+      await store.deleteAttachment(attachment.storageKey);
+      const update = updateRequirementVersion(
+        data.requirements,
+        requirementId,
+        versionNumber,
+        (current) => removeAttachmentFromVersion(current, attachmentId) as RequirementVersion,
+      );
+      if (update.blocked) return update.blocked;
+      return json(200, await store.writeRequirements(update.nextRequirements));
+    }
+
+    const subsceneAttachmentInit = path.match(
+      /^\/api\/scenes\/([^/]+)\/subscenes\/([^/]+)\/versions\/([^/]+)\/attachments\/init$/,
+    );
+    if (method === 'POST' && subsceneAttachmentInit) {
+      requireAttachmentStore(store);
+      const data = await store.readData();
+      const [sceneId, subsceneCode, versionNumber] = subsceneAttachmentInit.slice(1).map(decodeURIComponent);
+      const body = request.body as { fileName?: string; size?: number; contentType?: string };
+      const fileName = body.fileName?.trim();
+      const size = Number(body.size || 0);
+      if (!fileName) return json(400, { message: '附件名称不能为空' });
+      if (!Number.isFinite(size) || size <= 0) return json(400, { message: '附件大小无效' });
+      if (size > maxAttachmentSize) return json(400, { message: '单个附件不能超过 1G' });
+
+      const attachmentId = createId('att');
+      const storageKey = attachmentStorageKey('subscenes', `${sceneId}/${subsceneCode}`, versionNumber, attachmentId, fileName);
+      const attachment: RequirementAttachment = {
+        id: attachmentId,
+        name: fileName,
+        size,
+        contentType: body.contentType || 'application/octet-stream',
+        storageKey,
+        uploadedAt: nowIso(),
+      };
+      const update = updateSubsceneVersion(
+        data.scenes,
+        sceneId,
+        subsceneCode,
+        versionNumber,
+        (version) => addAttachmentToVersion(version, attachment) as SubsceneVersion,
+      );
+      if (update.blocked) return update.blocked;
+      const session = await store.createAttachmentUpload({ storageKey, contentType: body.contentType || 'application/octet-stream' });
+      await store.writeScenes(update.nextScenes);
+      return json(200, {
+        attachmentId,
+        uploadId: session.uploadId,
+        storageKey: session.storageKey,
+        partSize: attachmentPartSize,
+        maxSize: maxAttachmentSize,
+      });
+    }
+
+    const subsceneAttachmentPart = path.match(
+      /^\/api\/scenes\/([^/]+)\/subscenes\/([^/]+)\/versions\/([^/]+)\/attachments\/([^/]+)\/parts\/(\d+)$/,
+    );
+    if (method === 'PUT' && subsceneAttachmentPart) {
+      requireAttachmentStore(store);
+      if (!request.rawBody) return json(400, { message: '缺少附件分片内容' });
+      const uploadId = decodeURIComponent(subsceneAttachmentPart[4]);
+      const partNumber = Number(decodeURIComponent(subsceneAttachmentPart[5]));
+      const storageKey = new URLSearchParams(request.search || '').get('storageKey') || '';
+      if (!storageKey || !uploadId || !Number.isInteger(partNumber) || partNumber < 1) return json(400, { message: '分片参数无效' });
+      const result = await store.uploadAttachmentPart({ storageKey, uploadId, partNumber, body: request.rawBody });
+      return json(200, result);
+    }
+
+    const subsceneAttachmentComplete = path.match(
+      /^\/api\/scenes\/([^/]+)\/subscenes\/([^/]+)\/versions\/([^/]+)\/attachments\/([^/]+)\/complete$/,
+    );
+    if (method === 'POST' && subsceneAttachmentComplete) {
+      requireAttachmentStore(store);
+      const [sceneId, subsceneCode, versionNumber, attachmentId] = subsceneAttachmentComplete.slice(1).map(decodeURIComponent);
+      const body = request.body as { uploadId?: string; storageKey?: string; parts?: Array<{ partNumber: number; etag: string }> };
+      if (!body.uploadId || !body.storageKey || !body.parts?.length) return json(400, { message: '附件完成参数无效' });
+      await store.completeAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId, parts: body.parts });
+      const data = await store.readData();
+      const update = updateSubsceneVersion(
+        data.scenes,
+        sceneId,
+        subsceneCode,
+        versionNumber,
+        (version) => completeAttachmentInVersion(version, attachmentId) as SubsceneVersion,
+      );
+      if (update.blocked) return update.blocked;
+      await store.writeScenes(update.nextScenes);
+      const attachment = update.version?.attachments?.find((item) => item.id === attachmentId);
+      return json(200, attachment ? attachmentResponse(attachment) : { id: attachmentId });
+    }
+
+    const subsceneAttachmentAbort = path.match(
+      /^\/api\/scenes\/([^/]+)\/subscenes\/([^/]+)\/versions\/([^/]+)\/attachments\/([^/]+)\/abort$/,
+    );
+    if (method === 'POST' && subsceneAttachmentAbort) {
+      requireAttachmentStore(store);
+      const [sceneId, subsceneCode, versionNumber, attachmentId] = subsceneAttachmentAbort.slice(1).map(decodeURIComponent);
+      const body = request.body as { uploadId?: string; storageKey?: string };
+      if (body.uploadId && body.storageKey) {
+        await store.abortAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId });
+      }
+      const data = await store.readData();
+      const update = updateSubsceneVersion(
+        data.scenes,
+        sceneId,
+        subsceneCode,
+        versionNumber,
+        (version) => removeAttachmentFromVersion(version, attachmentId) as SubsceneVersion,
+      );
+      if (update.blocked) return update.blocked;
+      await store.writeScenes(update.nextScenes);
+      return json(200, { ok: true });
+    }
+
+    const subsceneAttachmentDelete = path.match(
+      /^\/api\/scenes\/([^/]+)\/subscenes\/([^/]+)\/versions\/([^/]+)\/attachments\/([^/]+)$/,
+    );
+    if (method === 'DELETE' && subsceneAttachmentDelete) {
+      requireAttachmentStore(store);
+      const [sceneId, subsceneCode, versionNumber, attachmentId] = subsceneAttachmentDelete.slice(1).map(decodeURIComponent);
+      const data = await store.readData();
+      const scene = data.scenes.find((item) => item.id === sceneId);
+      const version = scene?.subscenes
+        .find((item) => item.code === subsceneCode)
+        ?.versions.find((item) => item.version === versionNumber);
+      const attachment = version?.attachments?.find((item) => item.id === attachmentId);
+      if (!attachment) return json(404, { message: '找不到附件' });
+      await store.deleteAttachment(attachment.storageKey);
+      const update = updateSubsceneVersion(
+        data.scenes,
+        sceneId,
+        subsceneCode,
+        versionNumber,
+        (current) => removeAttachmentFromVersion(current, attachmentId) as SubsceneVersion,
+      );
+      if (update.blocked) return update.blocked;
+      return json(200, await store.writeScenes(update.nextScenes));
     }
 
     const requirementUpdate = path.match(/^\/api\/requirements\/([^/]+)$/);
@@ -301,17 +805,23 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
     const requirementConfirm = path.match(/^\/api\/requirements\/([^/]+)\/confirm$/);
     if (method === 'POST' && requirementConfirm) {
       const data = await store.readData();
+      const requirement = data.requirements.find((item) => item.id === requirementConfirm[1]);
+      if (!requirement) return json(404, { message: '找不到客户需求' });
       const targetVersion = (request.body as { version?: string })?.version;
-      const next = data.requirements.map((requirement) => {
-        if (requirement.id !== requirementConfirm[1]) return requirement;
-        const versionToConfirm = targetVersion || latestVersion(requirement.versions).version;
-        return {
-          ...requirement,
-          versions: requirement.versions.map((version) =>
-            version.version === versionToConfirm ? { ...version, status: 'confirmed' as const, updatedAt: nowIso() } : version,
-          ),
-        };
-      });
+      const versionToConfirm = targetVersion || latestVersion(requirement.versions).version;
+      const target = requirement.versions.find((version) => version.version === versionToConfirm);
+      if (!target) return json(404, { message: '找不到客户需求版本' });
+      const blockedSubscenes = unconfirmedSubsceneRefs(data, target);
+      if (blockedSubscenes.length > 0) {
+        return json(400, { message: `有子场景还没有确认，不能确认需求：${blockedSubscenes.join('；')}` });
+      }
+      const nextRequirement = {
+        ...requirement,
+        versions: requirement.versions.map((version) =>
+          version.version === versionToConfirm ? { ...version, status: 'confirmed' as const, updatedAt: nowIso() } : version,
+        ),
+      };
+      const next = data.requirements.map((item) => (item.id === requirement.id ? nextRequirement : item));
       return json(200, await store.writeRequirements(next));
     }
 

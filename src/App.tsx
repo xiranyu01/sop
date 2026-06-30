@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   AppData,
+  AttachmentUploadInit,
+  AttachmentUploadPart,
   Customer,
   ExportResult,
   GlobalField,
@@ -10,6 +12,7 @@ import type {
   Material,
   OperationStep,
   Requirement,
+  RequirementAttachment,
   RequirementVersion,
   RobotModel,
   Scene,
@@ -37,13 +40,19 @@ type CandidateSubsceneOption = {
   sceneName: string;
   code: string;
   name: string;
-  version: SubsceneVersion;
+  versions: SubsceneVersion[];
+  selectedVersion: SubsceneVersion;
 };
 
 type SubsceneLookupResult = {
   scene: Scene;
   subscene: Subscene;
   version?: SubsceneVersion;
+};
+
+type RequirementReturnTarget = {
+  requirementId: string;
+  version: string;
 };
 
 type VersionPatch<T> = Partial<T> & { baseVersion?: string };
@@ -85,6 +94,11 @@ type Option = {
   description?: string;
 };
 
+type AttachmentStorageStatus = {
+  enabled: boolean;
+  message: string;
+};
+
 type PrintableSection = {
   title: string;
   description?: string;
@@ -108,15 +122,14 @@ const globalFieldGroupLabels: Record<GlobalFieldGroup, string> = {
   form: '形态',
   parameter: '参数',
   allowed_operation: '采集操作要求',
+  acceptable_operation: '不完美但可接受的采集操作',
   forbidden_operation: '采集禁止操作',
   annotation_allowed_operation: '标注操作要求',
   annotation_forbidden_operation: '标注禁止操作',
-  random_frequency: '随机频率',
   random_field: '随机字段',
   robot_random_field: '机器人随机性字段',
   material_random_field: '物料随机性字段',
   annotation_type: '标注类型',
-  action_tag: '动作标签',
   delivery_format: '交付格式',
   delivery_language: '交付语言',
   delivery_method: '交付方式',
@@ -146,18 +159,18 @@ const globalFieldCategoryConfigs: GlobalFieldCategory[] = [
     id: 'randomization',
     label: '随机性',
     description: '机器人与物料随机字段',
-    groups: ['robot_random_field', 'material_random_field', 'random_frequency'],
+    groups: ['robot_random_field', 'material_random_field'],
   },
   {
     id: 'operation',
     label: '采集 / 标注操作',
-    description: '操作要求、禁止操作、动作标签',
+    description: '操作要求、禁止操作',
     groups: [
       'allowed_operation',
+      'acceptable_operation',
       'forbidden_operation',
       'annotation_allowed_operation',
       'annotation_forbidden_operation',
-      'action_tag',
     ],
   },
   {
@@ -194,10 +207,14 @@ const fallbackMaterialRandomOptions: Option[] = [
   { value: 'pose', label: '物料姿态' },
   { value: 'form', label: '物料形态' },
 ];
+const defaultAttachmentStorageStatus: AttachmentStorageStatus = { enabled: true, message: '' };
 
 const api = {
   async data(): Promise<AppData> {
     return fetchJson<AppData>('/api/data');
+  },
+  async storageStatus(): Promise<{ attachments: AttachmentStorageStatus }> {
+    return fetchJson<{ attachments: AttachmentStorageStatus }>('/api/storage-status');
   },
   async saveCustomer(customer: Customer): Promise<Customer[]> {
     return fetchJson<Customer[]>('/api/customers', postJson(customer));
@@ -237,6 +254,145 @@ const api = {
   },
   async exportYaml(id: string, version: string): Promise<ExportResult> {
     return fetchJson<ExportResult>(`/api/requirements/${id}/export-yaml`, postJson({ version }));
+  },
+  async initAttachmentUpload(id: string, version: string, file: File): Promise<AttachmentUploadInit> {
+    return fetchJson<AttachmentUploadInit>(
+      `/api/requirements/${id}/versions/${version}/attachments/init`,
+      postJson({ fileName: file.name, size: file.size, contentType: file.type || 'application/octet-stream' }),
+    );
+  },
+  async uploadAttachmentPart(
+    id: string,
+    version: string,
+    uploadId: string,
+    storageKey: string,
+    partNumber: number,
+    chunk: Blob,
+  ): Promise<AttachmentUploadPart> {
+    return fetchBinaryJson<AttachmentUploadPart>(
+      `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(
+        uploadId,
+      )}/parts/${partNumber}?storageKey=${encodeURIComponent(storageKey)}`,
+      chunk,
+    );
+  },
+  async completeAttachmentUpload(
+    id: string,
+    version: string,
+    attachmentId: string,
+    uploadId: string,
+    storageKey: string,
+    parts: AttachmentUploadPart[],
+  ): Promise<RequirementAttachment & { url: string }> {
+    return fetchJson<RequirementAttachment & { url: string }>(
+      `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(attachmentId)}/complete`,
+      postJson({ uploadId, storageKey, parts }),
+    );
+  },
+  async abortAttachmentUpload(id: string, version: string, attachmentId: string, uploadId: string, storageKey: string): Promise<void> {
+    await fetchJson<{ ok: boolean }>(
+      `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(attachmentId)}/abort`,
+      postJson({ uploadId, storageKey }),
+    );
+  },
+  async deleteAttachment(id: string, version: string, attachmentId: string): Promise<Requirement[]> {
+    return fetchJson<Requirement[]>(
+      `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE' },
+    );
+  },
+  async initSubsceneAttachmentUpload(sceneId: string, code: string, version: string, file: File): Promise<AttachmentUploadInit> {
+    return fetchJson<AttachmentUploadInit>(
+      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(version)}/attachments/init`,
+      postJson({ fileName: file.name, size: file.size, contentType: file.type || 'application/octet-stream' }),
+    );
+  },
+  async uploadSubsceneAttachmentPart(
+    sceneId: string,
+    code: string,
+    version: string,
+    uploadId: string,
+    storageKey: string,
+    partNumber: number,
+    chunk: Blob,
+  ): Promise<AttachmentUploadPart> {
+    return fetchBinaryJson<AttachmentUploadPart>(
+      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
+        version,
+      )}/attachments/${encodeURIComponent(uploadId)}/parts/${partNumber}?storageKey=${encodeURIComponent(storageKey)}`,
+      chunk,
+    );
+  },
+  async completeSubsceneAttachmentUpload(
+    sceneId: string,
+    code: string,
+    version: string,
+    attachmentId: string,
+    uploadId: string,
+    storageKey: string,
+    parts: AttachmentUploadPart[],
+  ): Promise<RequirementAttachment & { url: string }> {
+    return fetchJson<RequirementAttachment & { url: string }>(
+      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
+        version,
+      )}/attachments/${encodeURIComponent(attachmentId)}/complete`,
+      postJson({ uploadId, storageKey, parts }),
+    );
+  },
+  async abortSubsceneAttachmentUpload(sceneId: string, code: string, version: string, attachmentId: string, uploadId: string, storageKey: string): Promise<void> {
+    await fetchJson<{ ok: boolean }>(
+      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
+        version,
+      )}/attachments/${encodeURIComponent(attachmentId)}/abort`,
+      postJson({ uploadId, storageKey }),
+    );
+  },
+  async deleteSubsceneAttachment(sceneId: string, code: string, version: string, attachmentId: string): Promise<Scene[]> {
+    return fetchJson<Scene[]>(
+      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
+        version,
+      )}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE' },
+    );
+  },
+  async initMaterialImageUpload(materialId: string, file: File): Promise<AttachmentUploadInit> {
+    return fetchJson<AttachmentUploadInit>(
+      `/api/materials/${encodeURIComponent(materialId)}/images/init`,
+      postJson({ fileName: file.name, size: file.size, contentType: file.type || 'application/octet-stream' }),
+    );
+  },
+  async uploadMaterialImagePart(
+    materialId: string,
+    uploadId: string,
+    storageKey: string,
+    partNumber: number,
+    chunk: Blob,
+  ): Promise<AttachmentUploadPart> {
+    return fetchBinaryJson<AttachmentUploadPart>(
+      `/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(uploadId)}/parts/${partNumber}?storageKey=${encodeURIComponent(storageKey)}`,
+      chunk,
+    );
+  },
+  async completeMaterialImageUpload(
+    materialId: string,
+    attachmentId: string,
+    uploadId: string,
+    storageKey: string,
+    parts: AttachmentUploadPart[],
+  ): Promise<RequirementAttachment & { url: string }> {
+    return fetchJson<RequirementAttachment & { url: string }>(
+      `/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(attachmentId)}/complete`,
+      postJson({ uploadId, storageKey, parts }),
+    );
+  },
+  async abortMaterialImageUpload(materialId: string, attachmentId: string, uploadId: string, storageKey: string): Promise<void> {
+    await fetchJson<{ ok: boolean }>(
+      `/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(attachmentId)}/abort`,
+      postJson({ uploadId, storageKey }),
+    );
+  },
+  async deleteMaterialImage(materialId: string, attachmentId: string): Promise<Material[]> {
+    return fetchJson<Material[]>(`/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(attachmentId)}`, { method: 'DELETE' });
   },
 };
 
@@ -309,6 +465,15 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promi
   }
 }
 
+async function fetchBinaryJson<T>(input: RequestInfo | URL, body: Blob): Promise<T> {
+  const res = await fetch(input, {
+    method: 'PUT',
+    headers: apiHeaders({ 'Content-Type': body.type || 'application/octet-stream' }),
+    body,
+  });
+  return assertJson<T>(res);
+}
+
 const emptyData: AppData = {
   customers: [],
   materials: [],
@@ -339,8 +504,28 @@ function statusText(status: string): string {
   return status === 'confirmed' ? '已确认' : status === 'archived' ? '已归档' : '草稿';
 }
 
+function shouldShowSuccessToast(message: string): boolean {
+  return !message.includes('已保存');
+}
+
 function formatShortDate(value?: string): string {
   return value ? value.slice(0, 10) : '-';
+}
+
+function safeFileName(value: string): string {
+  return value.replace(/[\\/:*?"<>|\s]+/g, '_').replace(/^_+|_+$/g, '') || 'export';
+}
+
+function formatFileSize(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = size;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }
 
 function matchesQuery(query: string, values: Array<string | number | undefined>): boolean {
@@ -371,18 +556,55 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 }
 
 function exportReportAsPdf(report: PrintableReport) {
-  const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=960,height=720');
-  if (!printWindow) {
-    window.alert('浏览器拦截了导出窗口，请允许弹窗后重试。');
+  const iframe = document.createElement('iframe');
+  iframe.title = report.fileName;
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.opacity = '0';
+
+  let cleaned = false;
+  function cleanup() {
+    if (cleaned) return;
+    cleaned = true;
+    iframe.remove();
+  }
+
+  iframe.onload = () => {
+    const printFrame = iframe.contentWindow;
+    if (!printFrame) {
+      cleanup();
+      window.alert('PDF 导出初始化失败，请刷新页面后重试。');
+      return;
+    }
+    window.setTimeout(() => {
+      try {
+        printFrame.onafterprint = cleanup;
+        printFrame.focus();
+        printFrame.print();
+      } catch {
+        window.alert('无法打开打印对话框，请检查浏览器打印权限后重试。');
+        cleanup();
+      } finally {
+        window.setTimeout(cleanup, 60_000);
+      }
+    }, 100);
+  };
+
+  document.body.appendChild(iframe);
+  const iframeDocument = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!iframeDocument) {
+    cleanup();
+    window.alert('PDF 导出初始化失败，请刷新页面后重试。');
     return;
   }
-  printWindow.document.open();
-  printWindow.document.write(renderPrintableReport(report));
-  printWindow.document.close();
-  printWindow.focus();
-  window.setTimeout(() => {
-    printWindow.print();
-  }, 300);
+  iframeDocument.open();
+  iframeDocument.write(renderPrintableReport(report));
+  iframeDocument.close();
 }
 
 function renderPrintableReport(report: PrintableReport): string {
@@ -502,6 +724,19 @@ function numberedReportSteps(steps: OperationStep[] | undefined): string {
   return steps.map((step, index) => `${step.order || index + 1}. ${step.description || '-'}`).join('\n');
 }
 
+function bilingualReportSteps(steps: OperationStep[] | undefined): string {
+  if (!steps?.length) return '-';
+  return steps
+    .map((step, index) => {
+      const order = step.order || index + 1;
+      const zhSkill = step.atomicSkill ? `；原子技能：${step.atomicSkill}` : '';
+      const enStep = step.englishDescription ? `；EN：${step.englishDescription}` : '';
+      const enSkill = step.englishAtomicSkill ? `；EN Skill：${step.englishAtomicSkill}` : '';
+      return `${order}. ${step.description || '-'}${zhSkill}${enStep}${enSkill}`;
+    })
+    .join('\n');
+}
+
 function textItemsReport(items: TextItem[] | undefined): string {
   if (!items?.length) return '-';
   return items.map((item, index) => `${index + 1}. ${item.description || item.type || '-'}`).join('\n');
@@ -598,13 +833,29 @@ function stepRandomizationReport(value?: { enabled: boolean; startOrder: number;
   return `第 ${value.startOrder || 1} 步到第 ${value.endOrder || 1} 步顺序可随机`;
 }
 
+async function downloadStoredAttachment(attachment: RequirementAttachment) {
+  const res = await fetch(`/api/attachments/${encodeURIComponent(attachment.storageKey)}`, { headers: apiHeaders() });
+  if (!res.ok) {
+    const error = (await res.json().catch(() => ({ message: '下载失败' }))) as { message?: string };
+    throw new Error(error.message || '下载失败');
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = attachment.name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function subsceneReportSections(scene: Scene, subscene: Subscene, version: SubsceneVersion): PrintableSection[] {
   return [
     {
       title: '基础信息',
       content: keyValueReport([
         ['场景', scene.name],
-        ['子场景编号', subscene.code],
         ['子场景名称', version.title || subscene.name],
         ['版本', version.version],
         ['状态', statusText(version.status)],
@@ -656,13 +907,10 @@ function subsceneReportSections(scene: Scene, subscene: Subscene, version: Subsc
     {
       title: '标注步骤和说明',
       content: [
-        keyValueReport([
-          ['标注状态', version.annotation.status],
-          ['动作标签', reportList(version.annotation.actionTags)],
-        ]),
+        keyValueReport([['标注状态', version.annotation.status]]),
         '',
         '标注步骤：',
-        numberedReportSteps(version.annotation.steps),
+        bilingualReportSteps(version.annotation.steps),
         '',
         '标注操作要求：',
         textItemsReport(version.annotation.allowedOperations),
@@ -676,9 +924,9 @@ function subsceneReportSections(scene: Scene, subscene: Subscene, version: Subsc
 
 function buildSubscenePdfReport(scene: Scene, subscene: Subscene, version: SubsceneVersion): PrintableReport {
   return {
-    title: `${subscene.code} ${version.title || subscene.name}`,
+    title: version.title || subscene.name,
     subtitle: `${scene.name} · 子场景版本 v${version.version} · ${statusText(version.status)}`,
-    fileName: `${subscene.code}-${version.version}.pdf`,
+    fileName: `${safeFileName(version.title || subscene.name)}-${version.version}.pdf`,
     sections: subsceneReportSections(scene, subscene, version),
   };
 }
@@ -694,7 +942,6 @@ function selectedSubscenesReport(
     const target = findSubscene(scenes, selected.subsceneCode, selected.version);
     const header = keyValueReport([
       ['场景', selected.sceneName],
-      ['子场景编号', selected.subsceneCode],
       ['子场景名称', selected.subsceneName],
       ['引用版本', selected.version],
       ['引用版本状态', target?.version ? statusText(target.version.status) : '未找到'],
@@ -707,7 +954,7 @@ function selectedSubscenesReport(
             .join('\n\n')
         : '未找到对应子场景版本，无法展开正文。';
     return {
-      title: `子场景 ${index + 1}：${selected.subsceneCode} ${selected.subsceneName}`,
+      title: `子场景 ${index + 1}：${selected.subsceneName}`,
       content: `${header}\n\n${detail}`,
     };
   });
@@ -719,18 +966,16 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
   const selectedDurationTotal = version.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0);
   return {
     title: version.title,
-    subtitle: `${requirement.id} · 需求版本 v${version.version} · ${statusText(version.status)}`,
-    fileName: `${requirement.id}-${version.version}.pdf`,
+    subtitle: `需求版本 v${version.version} · ${statusText(version.status)}`,
+    fileName: `${safeFileName(version.title)}-${version.version}.pdf`,
     sections: [
       {
         title: '基础信息',
         content: keyValueReport([
-          ['需求编号', requirement.id],
           ['需求名称', version.title],
           ['客户', customer?.name],
           ['联系人', customer?.contact.name],
           ['项目名称', version.projectName],
-          ['优先级', version.priority],
           ['截止日期', formatShortDate(version.deadline)],
           ['需求状态', statusText(version.status)],
           ['需求版本', version.version],
@@ -758,7 +1003,6 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
         content: keyValueReport([
           ['客户额外 topic 要求', version.extraTopicRequirementsText],
           ['全局随机性要求', version.globalRandomizationRequirements],
-          ['附件说明', version.attachmentNotes],
           ['其他补充说明', version.additionalNotes],
         ]),
       },
@@ -767,6 +1011,9 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
         content: [
           '采集操作要求：',
           operationItemsReport(version.allowedOperations),
+          '',
+          '不完美但可接受的采集操作：',
+          operationItemsReport(version.acceptableOperations),
           '',
           '采集禁止操作：',
           forbiddenRequirementReport(version.forbiddenOperations),
@@ -804,14 +1051,20 @@ function sceneLatestUpdated(scene: Scene): string {
 }
 
 function nextSubsceneCode(scenes: Scene[]): string {
-  const maxNumber = scenes
-    .flatMap((scene) => scene.subscenes)
-    .reduce((max, subscene) => {
-      const match = subscene.code.match(/\d+/);
-      const value = match ? Number(match[0]) : 0;
-      return Number.isFinite(value) ? Math.max(max, value) : max;
-    }, 0);
-  return `NO.${String(maxNumber + 1).padStart(3, '0')}`;
+  return randomShortCode(scenes.flatMap((scene) => scene.subscenes.map((subscene) => subscene.code)));
+}
+
+function randomShortCode(usedCodes: string[] = [], length = 6): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const used = new Set(usedCodes.map((code) => code.toUpperCase()));
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    let code = '';
+    for (let index = 0; index < length; index += 1) {
+      code += chars[Math.floor(Math.random() * chars.length)];
+    }
+    if (!used.has(code)) return code;
+  }
+  return Date.now().toString(36).slice(-length).toUpperCase();
 }
 
 function today(): string {
@@ -853,10 +1106,27 @@ export default function App() {
   const [selectedSubsceneCode, setSelectedSubsceneCode] = useState('');
   const [selectedSubsceneVersion, setSelectedSubsceneVersion] = useState('');
   const [sceneDetailOpen, setSceneDetailOpen] = useState(false);
+  const [returnToRequirement, setReturnToRequirement] = useState<RequirementReturnTarget | null>(null);
+  const [attachmentStorageStatus, setAttachmentStorageStatus] = useState<AttachmentStorageStatus>(defaultAttachmentStorageStatus);
 
-  function setPage(pageName: Page) {
+  function setPage(pageName: Page, options: { keepDetail?: boolean } = {}) {
     setPageState(pageName);
     window.localStorage.setItem(pageStorageKey, pageName);
+    if (!options.keepDetail) {
+      setRequirementDetailOpen(false);
+      setSceneDetailOpen(false);
+      setReturnToRequirement(null);
+    }
+  }
+
+  function openRequirementFromSubscene() {
+    if (!returnToRequirement) return;
+    setSelectedRequirementId(returnToRequirement.requirementId);
+    setSelectedRequirementVersion(returnToRequirement.version);
+    setRequirementDetailOpen(true);
+    setSceneDetailOpen(false);
+    setReturnToRequirement(null);
+    setPage('requirements', { keepDetail: true });
   }
 
   async function load() {
@@ -864,7 +1134,9 @@ export default function App() {
     setError('');
     try {
       const next = await api.data();
+      const storage = await api.storageStatus().catch(() => ({ attachments: defaultAttachmentStorageStatus }));
       setData(next);
+      setAttachmentStorageStatus(storage.attachments);
       setLocked(false);
       setSelectedRequirementId((current) => current || next.requirements[0]?.id || '');
       setSelectedSceneId((current) => current || next.scenes[0]?.id || '');
@@ -913,7 +1185,9 @@ export default function App() {
     setMessage('');
     try {
       const result = await action();
-      setMessage(success);
+      if (shouldShowSuccessToast(success)) {
+        setMessage(success);
+      }
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : '操作失败';
@@ -1048,14 +1322,18 @@ export default function App() {
               if (!selectedRequirement || !requirementVersion) return undefined;
               return run(() => api.exportYaml(selectedRequirement.id, requirementVersion.version), 'YAML 已导出');
             }}
+            onRun={run}
+            attachmentStorageStatus={attachmentStorageStatus}
+            onRequirementsChange={(requirements) => setData((current) => ({ ...current, requirements }))}
             onOpenSubscene={(code, version) => {
               const target = findSubscene(data.scenes, code, version);
-              if (!target) return;
+              if (!target || !selectedRequirement || !requirementVersion) return;
+              setReturnToRequirement({ requirementId: selectedRequirement.id, version: requirementVersion.version });
               setSelectedSceneId(target.scene.id);
               setSelectedSubsceneCode(target.subscene.code);
               setSelectedSubsceneVersion(version);
               setSceneDetailOpen(true);
-              setPage('scenes');
+              setPage('scenes', { keepDetail: true });
             }}
           />
         )}
@@ -1109,6 +1387,12 @@ export default function App() {
               const result = await run(() => api.confirmSubscene(sceneId, code, version), '子场景版本已确认');
               if (result) setData((current) => ({ ...current, scenes: result }));
             }}
+            onRun={run}
+            attachmentStorageStatus={attachmentStorageStatus}
+            onScenesChange={(scenes) => setData((current) => ({ ...current, scenes }))}
+            returnToRequirement={returnToRequirement}
+            onReturnToRequirement={openRequirementFromSubscene}
+            onClearReturnToRequirement={() => setReturnToRequirement(null)}
           />
         )}
 
@@ -1134,8 +1418,11 @@ export default function App() {
         {page === 'materials' && (
           <MaterialPage
             materials={data.materials}
+            storageStatus={attachmentStorageStatus}
+            onMaterialsChange={(materials) => setData((current) => ({ ...current, materials }))}
             onSave={async (material) => {
-              const result = await run(() => api.saveMaterial(material), '物料信息已保存');
+              const existing = data.materials.find((item) => item.id === material.id);
+              const result = await run(() => api.saveMaterial({ ...material, images: material.images || existing?.images || [] }), '物料信息已保存');
               if (result) setData((current) => ({ ...current, materials: result }));
             }}
           />
@@ -1210,7 +1497,7 @@ function pageTitle(page: Page) {
 function pageHint(page: Page) {
   const map: Record<Page, string> = {
     requirements: '选择客户、机器人和子场景版本，确认后可导出需求 YAML。',
-    scenes: '子场景按唯一编号管理，每个编号可维护多个版本。',
+    scenes: '按场景维护子场景版本，确认后历史版本保持只读。',
     globalFields: '管理 SOP 表单复用字段，子场景会从这里选择标准词表。',
     customers: '管理客户和联系人，供客户需求引用。',
     materials: '管理可复用物料主数据，供子场景版本引用。',
@@ -1392,6 +1679,132 @@ function MultiEnumInput({
   );
 }
 
+function SingleEnumSelect({
+  value,
+  options,
+  placeholder,
+  disabled = false,
+  allowCustom = false,
+  onChange,
+}: {
+  value: string[];
+  options: string[];
+  placeholder?: string;
+  disabled?: boolean;
+  allowCustom?: boolean;
+  onChange: (value: string[]) => void;
+}) {
+  const selectedValue = value[0] || '';
+  const uniqueOptions = Array.from(new Set([...options, selectedValue].filter(Boolean)));
+  const selectedLabel = selectedValue || placeholder || '请选择';
+  const containerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 240 });
+  const [customValue, setCustomValue] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    function updateMenuPosition() {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.max(rect.width, 240);
+      setMenuStyle({
+        left: Math.min(rect.left, Math.max(8, window.innerWidth - width - 8)),
+        top: Math.min(rect.bottom + 4, Math.max(8, window.innerHeight - 268)),
+        width,
+      });
+    }
+    function closeOnOutsideClick(event: MouseEvent) {
+      const target = event.target as Node;
+      if (!containerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    }
+    updateMenuPosition();
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    window.addEventListener('resize', updateMenuPosition);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      window.removeEventListener('resize', updateMenuPosition);
+    };
+  }, [open]);
+
+  function selectValue(nextValue: string) {
+    onChange(nextValue ? [nextValue] : []);
+    setOpen(false);
+  }
+
+  function addCustomValue() {
+    const nextValue = customValue.trim();
+    if (!nextValue) return;
+    selectValue(nextValue);
+    setCustomValue('');
+  }
+
+  if (disabled) {
+    return (
+      <div className="single-enum-select disabled">
+        <div className="single-enum-summary">
+          <span>{selectedValue || '暂无可选项'}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`single-enum-select ${open ? 'open' : ''}`} ref={containerRef}>
+      <button
+        type="button"
+        className="single-enum-summary"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((current) => !current);
+        }}
+      >
+        <span className={selectedValue ? '' : 'single-enum-placeholder'}>{selectedLabel}</span>
+      </button>
+      {open && createPortal(
+        <div className="single-enum-menu" ref={menuRef} style={{ top: menuStyle.top, left: menuStyle.left, width: menuStyle.width }}>
+          <button type="button" className={`single-enum-option ${!selectedValue ? 'selected' : ''}`} onClick={() => selectValue('')}>
+            {placeholder || '请选择'}
+          </button>
+          {uniqueOptions.map((option) => (
+            <button
+              type="button"
+              className={`single-enum-option ${selectedValue === option ? 'selected' : ''}`}
+              key={option}
+              onClick={() => selectValue(option)}
+            >
+              {option}
+            </button>
+          ))}
+          {allowCustom && (
+            <div className="single-enum-custom">
+              <input
+                value={customValue}
+                placeholder="新增当前子场景字段"
+                onChange={(event) => setCustomValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addCustomValue();
+                  }
+                }}
+              />
+              <button type="button" className="ghost-button" onClick={addCustomValue}>
+                新增
+              </button>
+            </div>
+          )}
+        </div>
+      , document.body)}
+    </div>
+  );
+}
+
 function MultiSelectInput({
   value,
   options,
@@ -1548,7 +1961,6 @@ function fieldToOption(field: GlobalField): Option {
   return {
     value: field.value,
     label: field.label || field.value,
-    category: field.category,
     description: field.description,
   };
 }
@@ -1577,6 +1989,9 @@ function RequirementPage({
   onDeleteVersion,
   onConfirm,
   onExport,
+  onRun,
+  attachmentStorageStatus,
+  onRequirementsChange,
   onOpenSubscene,
 }: {
   data: AppData;
@@ -1592,6 +2007,9 @@ function RequirementPage({
   onDeleteVersion: () => Promise<void>;
   onConfirm: () => Promise<void>;
   onExport: () => Promise<ExportResult | undefined>;
+  onRun: <T>(action: () => Promise<T>, success: string) => Promise<T | undefined>;
+  attachmentStorageStatus: AttachmentStorageStatus;
+  onRequirementsChange: (requirements: Requirement[]) => void;
   onOpenSubscene: (code: string, version: string) => void;
 }) {
   const [yamlPreview, setYamlPreview] = useState('');
@@ -1600,18 +2018,24 @@ function RequirementPage({
   const [requirementQuery, setRequirementQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
   const [subscenePickerOpen, setSubscenePickerOpen] = useState(false);
+  const [candidateVersionSelections, setCandidateVersionSelections] = useState<Record<string, string>>({});
+  const [attachmentUpload, setAttachmentUpload] = useState<{ fileName: string; progress: number } | null>(null);
 
   const candidateSubscenes = useMemo(() => {
     const items: CandidateSubsceneOption[] = [];
     for (const scene of data.scenes) {
       for (const subscene of scene.subscenes) {
-        const confirmed = [...subscene.versions].reverse().find((item) => item.status === 'confirmed');
+        const sortedVersions = [...subscene.versions].reverse();
+        const defaultVersion = sortedVersions[0] || latest(subscene.versions);
+        const selectedVersionName = candidateVersionSelections[subscene.code] || defaultVersion.version;
+        const selectedCandidateVersion = subscene.versions.find((item) => item.version === selectedVersionName) || defaultVersion;
         items.push({
           sceneId: scene.id,
           sceneName: scene.name,
           code: subscene.code,
           name: subscene.name,
-          version: confirmed || latest(subscene.versions),
+          versions: sortedVersions,
+          selectedVersion: selectedCandidateVersion,
         });
       }
     }
@@ -1622,7 +2046,7 @@ function RequirementPage({
         item.name.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
         item.sceneName.toLowerCase().includes(subsceneQuery.toLowerCase()),
     );
-  }, [data.scenes, subsceneQuery]);
+  }, [data.scenes, subsceneQuery, candidateVersionSelections]);
 
   const filteredRequirements = data.requirements.filter((requirement) => {
     const current = latest(requirement.versions);
@@ -1632,7 +2056,6 @@ function RequirementPage({
       requirement.id,
       current.title,
       current.projectName,
-      current.priority,
       current.status,
       current.version,
       customer?.name,
@@ -1658,75 +2081,65 @@ function RequirementPage({
   const durationDelta = selectedVersion ? selectedSubsceneDurationTotal - (Number(selectedVersion.requiredDurationHours) || 0) : 0;
   const missingSelectedSubscenes =
     selectedVersion?.selectedSubscenes.filter((item) => !findSubscene(data.scenes, item.subsceneCode, item.version)) || [];
+  const unconfirmedSelectedSubscenes =
+    selectedVersion?.selectedSubscenes.filter((item) => findSubscene(data.scenes, item.subsceneCode, item.version)?.version?.status !== 'confirmed') || [];
 
   const requirementColumns: Array<DataTableColumn<Requirement>> = [
     {
-      key: 'id',
-      title: '需求编号',
-      width: '92px',
-      render: (requirement) => <strong className="table-link">{requirement.id}</strong>,
-    },
-    {
       key: 'title',
       title: '需求名称',
-      width: 'minmax(190px, 1.6fr)',
+      width: 'minmax(160px, 1.6fr)',
       render: (requirement) => latest(requirement.versions).title,
     },
     {
       key: 'customer',
       title: '客户',
-      width: 'minmax(92px, 0.8fr)',
+      width: 'minmax(80px, 0.8fr)',
       render: (requirement) =>
         data.customers.find((item) => item.id === latest(requirement.versions).customerId)?.name || '-',
     },
     {
       key: 'project',
       title: '项目名称',
-      width: 'minmax(130px, 1fr)',
+      width: 'minmax(100px, 1fr)',
       render: (requirement) => latest(requirement.versions).projectName || '-',
-    },
-    {
-      key: 'priority',
-      title: '优先级',
-      width: '76px',
-      render: (requirement) => latest(requirement.versions).priority,
     },
     {
       key: 'status',
       title: '状态',
-      width: '88px',
+      width: '78px',
       render: (requirement) => <StatusBadge status={latest(requirement.versions).status} />,
     },
     {
       key: 'version',
       title: '版本',
-      width: '86px',
+      width: '72px',
       render: (requirement) => `v${latest(requirement.versions).version}`,
     },
     {
       key: 'subscenes',
       title: '子场景',
-      width: '74px',
+      width: '64px',
       align: 'right',
       render: (requirement) => latest(requirement.versions).selectedSubscenes.length,
     },
     {
       key: 'duration',
       title: '总时长',
-      width: '86px',
+      width: '76px',
       align: 'right',
       render: (requirement) => `${latest(requirement.versions).requiredDurationHours || 0} h`,
     },
     {
       key: 'deadline',
       title: '截止日期',
-      width: '108px',
+      width: '112px',
       render: (requirement) => formatShortDate(latest(requirement.versions).deadline),
     },
     {
       key: 'action',
       title: '操作',
-      width: '64px',
+      width: '54px',
       render: (requirement) => (
         <button
           className="text-button"
@@ -1742,12 +2155,6 @@ function RequirementPage({
   ];
 
   const selectedSubsceneColumns: Array<DataTableColumn<RequirementVersion['selectedSubscenes'][number]>> = [
-    {
-      key: 'code',
-      title: '编号',
-      width: '110px',
-      render: (item) => <strong className="table-link">{item.subsceneCode}</strong>,
-    },
     { key: 'name', title: '子场景', width: 'minmax(180px, 1.4fr)', render: (item) => item.subsceneName },
     { key: 'version', title: '版本', width: '90px', render: (item) => `v${item.version}` },
     {
@@ -1765,15 +2172,14 @@ function RequirementPage({
       width: '160px',
       render: (item) => (
         <span className="inline-edit">
-          <input
-            type="number"
+          <InlineNumberInput
             disabled={readonly}
             value={item.targetDurationHours}
-            onChange={(event) => {
+            onCommit={(targetDurationHours) => {
               if (readonly) return;
               const selectedSubscenes = selectedVersion?.selectedSubscenes.map((current) =>
                 current.subsceneCode === item.subsceneCode && current.version === item.version
-                  ? { ...current, targetDurationHours: Number(event.target.value) }
+                  ? { ...current, targetDurationHours }
                   : current,
               );
               if (selectedSubscenes) void onSave({ selectedSubscenes });
@@ -1812,21 +2218,35 @@ function RequirementPage({
   ];
 
   const candidateSubsceneColumns: Array<DataTableColumn<CandidateSubsceneOption>> = [
-    {
-      key: 'code',
-      title: '编号',
-      width: '110px',
-      render: (item) => <strong className="table-link">{item.code}</strong>,
-    },
     { key: 'name', title: '子场景', width: 'minmax(180px, 1.4fr)', render: (item) => item.name },
     { key: 'scene', title: '场景', width: '140px', render: (item) => item.sceneName },
-    { key: 'version', title: '版本', width: '90px', render: (item) => `v${item.version.version}` },
-    { key: 'status', title: '状态', width: '96px', render: (item) => <StatusBadge status={item.version.status} /> },
+    {
+      key: 'version',
+      title: '版本',
+      width: '130px',
+      render: (item) => (
+        <select
+          value={item.selectedVersion.version}
+          onClick={(event) => event.stopPropagation()}
+          onChange={(event) => {
+            event.stopPropagation();
+            setCandidateVersionSelections((current) => ({ ...current, [item.code]: event.target.value }));
+          }}
+        >
+          {item.versions.map((version) => (
+            <option value={version.version} key={version.version}>
+              v{version.version}
+            </option>
+          ))}
+        </select>
+      ),
+    },
+    { key: 'status', title: '状态', width: '96px', render: (item) => <StatusBadge status={item.selectedVersion.status} /> },
     {
       key: 'importStatus',
       title: '导入状态',
       width: '100px',
-      render: (item) => (selectedSubsceneKeys.has(`${item.code}@${item.version.version}`) ? '已导入' : '可导入'),
+      render: (item) => (selectedSubsceneKeys.has(`${item.code}@${item.selectedVersion.version}`) ? '已导入' : '可导入'),
     },
   ];
 
@@ -1856,9 +2276,9 @@ function RequirementPage({
         <section className="panel table-panel">
           <SearchPanel
             title="需求列表"
-            description="按需求编号、需求名称、客户、项目、状态或版本搜索，点击行进入详情页"
+            description="按需求名称、客户、项目、状态或版本搜索，点击行进入详情页"
             query={requirementQuery}
-            placeholder="搜索需求编号、需求名称、客户、项目"
+            placeholder="搜索需求名称、客户、项目"
             count={filteredRequirements.length}
             onQueryChange={setRequirementQuery}
             actions={
@@ -1881,20 +2301,22 @@ function RequirementPage({
 
   const readonly = selectedVersion.status === 'confirmed';
   const selectedAllowedOperations = selectedVersion.allowedOperations.map((item) => item.operation);
+  const selectedAcceptableOperations = (selectedVersion.acceptableOperations || []).map((item) => item.operation);
   const selectedForbiddenOperations = selectedVersion.forbiddenOperations.flatMap((group) =>
-    group.operations.map((item) => item.operation),
+    group.operations.map((item) => (group.category ? `${group.category}/${item.operation}` : item.operation)),
   );
   const forbiddenOptions = fieldOptions(
     globalFields,
     'forbidden_operation',
-    selectedVersion.forbiddenOperations.flatMap((group) => group.operations.map((item) => item.operation)),
+    selectedForbiddenOperations,
   );
   const allowedOperationOptions = fieldOptions(globalFields, 'allowed_operation', selectedAllowedOperations);
+  const acceptableOperationOptions = fieldOptions(globalFields, 'acceptable_operation', selectedAcceptableOperations);
   const selectedAnnotationAllowedOperations = selectedVersion.annotation.allowedOperations?.map((item) => item.operation) || [];
   const selectedAnnotationForbiddenOperations = selectedVersion.annotation.forbiddenOperations?.map((item) => item.operation) || [];
   const annotationAllowedOptions = fieldOptions(globalFields, 'annotation_allowed_operation', selectedAnnotationAllowedOperations);
   const annotationForbiddenOptions = fieldOptions(globalFields, 'annotation_forbidden_operation', selectedAnnotationForbiddenOperations);
-  const yamlDownloadFileName = `${selectedRequirement.id}-${selectedVersion.version}.yaml`;
+  const yamlDownloadFileName = `${safeFileName(selectedVersion.title)}-${selectedVersion.version}.yaml`;
 
   async function generateYamlPreview(): Promise<ExportResult | undefined> {
     const result = await onExport();
@@ -1933,7 +2355,7 @@ function RequirementPage({
 
   function addSubsceneToRequirement(item: CandidateSubsceneOption) {
     if (!selectedVersion || readonly) return;
-    const key = `${item.code}@${item.version.version}`;
+    const key = `${item.code}@${item.selectedVersion.version}`;
     if (selectedSubsceneKeys.has(key)) return;
     void onSave({
       requestedScenes: Array.from(new Set([...selectedVersion.requestedScenes, item.sceneName])),
@@ -1943,7 +2365,7 @@ function RequirementPage({
           subsceneCode: item.code,
           subsceneName: item.name,
           sceneName: item.sceneName,
-          version: item.version.version,
+          version: item.selectedVersion.version,
           targetDurationHours: 0,
         },
       ],
@@ -1951,10 +2373,77 @@ function RequirementPage({
     setSubscenePickerOpen(false);
   }
 
+  async function uploadRequirementAttachment(file: File) {
+    if (!selectedRequirement || !selectedVersion || readonly) return;
+    if (file.size > 1024 * 1024 * 1024) {
+      window.alert('单个附件不能超过 1G');
+      return;
+    }
+    let uploadInit: AttachmentUploadInit | undefined;
+    try {
+      setAttachmentUpload({ fileName: file.name, progress: 0 });
+      uploadInit = await api.initAttachmentUpload(selectedRequirement.id, selectedVersion.version, file);
+      const parts: AttachmentUploadPart[] = [];
+      const totalParts = Math.ceil(file.size / uploadInit.partSize);
+      for (let index = 0; index < totalParts; index += 1) {
+        const start = index * uploadInit.partSize;
+        const end = Math.min(file.size, start + uploadInit.partSize);
+        const part = await api.uploadAttachmentPart(
+          selectedRequirement.id,
+          selectedVersion.version,
+          uploadInit.uploadId,
+          uploadInit.storageKey,
+          index + 1,
+          file.slice(start, end, file.type || 'application/octet-stream'),
+        );
+        parts.push({ partNumber: index + 1, etag: part.etag });
+        setAttachmentUpload({ fileName: file.name, progress: Math.round(((index + 1) / totalParts) * 100) });
+      }
+      await api.completeAttachmentUpload(
+        selectedRequirement.id,
+        selectedVersion.version,
+        uploadInit.attachmentId,
+        uploadInit.uploadId,
+        uploadInit.storageKey,
+        parts,
+      );
+      const nextData = await api.data();
+      onRequirementsChange(nextData.requirements);
+      setYamlPreview('');
+      setExportPath('');
+    } catch (error) {
+      if (uploadInit) {
+        await api.abortAttachmentUpload(
+          selectedRequirement.id,
+          selectedVersion.version,
+          uploadInit.attachmentId,
+          uploadInit.uploadId,
+          uploadInit.storageKey,
+        ).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      setAttachmentUpload(null);
+    }
+  }
+
+  async function downloadRequirementAttachment(attachment: RequirementAttachment) {
+    await downloadStoredAttachment(attachment);
+  }
+
   function saveAllowedOperations(operations: string[]) {
     void onSave({
       allowedOperations: operations.map((operation) => {
         const option = allowedOperationOptions.find((item) => item.value === operation);
+        return { operation, note: option?.description || '' };
+      }),
+    });
+  }
+
+  function saveAcceptableOperations(operations: string[]) {
+    void onSave({
+      acceptableOperations: operations.map((operation) => {
+        const option = acceptableOperationOptions.find((item) => item.value === operation);
         return { operation, note: option?.description || '' };
       }),
     });
@@ -1994,16 +2483,16 @@ function RequirementPage({
     <Modal title="从子场景库添加子场景" onClose={() => setSubscenePickerOpen(false)}>
       <SearchPanel
         title="子场景库"
-        description="按编号、名称或场景搜索，点击行导入子场景版本"
+        description="按名称或场景搜索，点击行导入子场景版本"
         query={subsceneQuery}
-        placeholder="搜索 NO.001、洗漱台整理或场景名称"
+        placeholder="搜索洗漱台整理或场景名称"
         count={candidateSubscenes.length}
         onQueryChange={setSubsceneQuery}
       />
       <DataTable
         rows={candidateSubscenes}
         columns={candidateSubsceneColumns}
-        rowKey={(item) => `${item.code}-${item.version.version}`}
+        rowKey={(item) => item.code}
         emptyText="没有匹配的子场景"
         onRowClick={addSubsceneToRequirement}
       />
@@ -2017,14 +2506,14 @@ function RequirementPage({
           <button className="ghost-button" onClick={closeRequirementDetail}>
             返回需求列表
           </button>
-          <span>客户需求 / {selectedRequirement.id} / v{selectedVersion.version}</span>
+          <span>客户需求 / v{selectedVersion.version}</span>
         </div>
         <section className="panel detail-panel">
           <div className="panel-header">
           <div>
             <h2>{selectedVersion.title}</h2>
             <p>
-              {selectedRequirement.id} · v{selectedVersion.version} · {statusText(selectedVersion.status)}
+              v{selectedVersion.version} · {statusText(selectedVersion.status)}
             </p>
           </div>
           <div className="button-row">
@@ -2060,7 +2549,12 @@ function RequirementPage({
                 <button className="ghost-button danger" onClick={() => void onDeleteVersion()}>
                   删除草稿
                 </button>
-                <button className="primary-button" onClick={() => void onConfirm()}>
+                <button
+                  className="primary-button"
+                  disabled={unconfirmedSelectedSubscenes.length > 0}
+                  title={unconfirmedSelectedSubscenes.length > 0 ? '有子场景还没有确认，不能确认需求' : undefined}
+                  onClick={() => void onConfirm()}
+                >
                   确认版本
                 </button>
               </>
@@ -2069,6 +2563,12 @@ function RequirementPage({
           </div>
 
           {readonly && <div className="notice info">当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
+          {!readonly && unconfirmedSelectedSubscenes.length > 0 && (
+            <div className="notice warning">
+              有 {unconfirmedSelectedSubscenes.length} 个已选子场景还没有确认，不能确认需求：
+              {unconfirmedSelectedSubscenes.map((item) => `${item.sceneName} / ${item.subsceneName} v${item.version}`).join('；')}
+            </div>
+          )}
 
           <div className="requirement-sections">
             <section className="requirement-section">
@@ -2077,8 +2577,7 @@ function RequirementPage({
                 <p>客户、项目、机器人和计划信息</p>
               </div>
               <div className="requirement-section-grid">
-                <Field label="需求编号" value={selectedRequirement.id} disabled onChange={() => undefined} />
-                <Field
+                <CommitField
                   label="需求名称"
                   value={selectedVersion.title}
                   disabled={readonly}
@@ -2103,13 +2602,6 @@ function RequirementPage({
                   options={data.robotModels.map((item) => ({ value: item.id, label: `${item.brand} ${item.model}` }))}
                   disabled={readonly}
                   onChange={(robotModelId) => void onSave({ robotModelId })}
-                />
-                <SelectField
-                  label="优先级"
-                  value={selectedVersion.priority}
-                  options={['P0', 'P1', 'P2', 'P3'].map((item) => ({ value: item, label: item }))}
-                  disabled={readonly}
-                  onChange={(priority) => void onSave({ priority: priority as RequirementVersion['priority'] })}
                 />
                 <Field
                   label="截止日期"
@@ -2212,7 +2704,7 @@ function RequirementPage({
             <section className="requirement-section">
               <div className="requirement-section-header">
                 <h3>说明补充</h3>
-                <p>需求背景、topic、随机性和附件说明</p>
+                <p>需求背景、topic、随机性和补充附件</p>
               </div>
               <div className="requirement-notes-grid">
                 <TextArea
@@ -2233,11 +2725,23 @@ function RequirementPage({
                   disabled={readonly}
                   onChange={(globalRandomizationRequirements) => void onSave({ globalRandomizationRequirements })}
                 />
-                <TextArea
-                  label="附件说明"
-                  value={selectedVersion.attachmentNotes || ''}
+                <AttachmentField
+                  title="客户附件"
+                  hint="单个附件不超过 1G，支持分片上传"
+                  attachments={selectedVersion.attachments || []}
                   disabled={readonly}
-                  onChange={(attachmentNotes) => void onSave({ attachmentNotes })}
+                  storageStatus={attachmentStorageStatus}
+                  upload={attachmentUpload}
+                  onUpload={(file) => onRun(() => uploadRequirementAttachment(file), '附件已上传').then(() => undefined)}
+                  onDownload={(attachment) => onRun(() => downloadRequirementAttachment(attachment), '附件已下载').then(() => undefined)}
+                  onDelete={async (attachmentId) => {
+                    if (!selectedRequirement) return;
+                    const result = await onRun(
+                      () => api.deleteAttachment(selectedRequirement.id, selectedVersion.version, attachmentId),
+                      '附件已删除',
+                    );
+                    if (result) onRequirementsChange(result);
+                  }}
                 />
                 <TextArea
                   label="其他补充说明"
@@ -2253,35 +2757,56 @@ function RequirementPage({
                 <h3>操作要求</h3>
                 <p>客户需求层面的采集和标注操作约束</p>
               </div>
-              <div className="requirement-operation-grid">
-                <OperationRequirementGroup
-                  title="采集操作要求"
-                  value={selectedAllowedOperations}
-                  options={allowedOperationOptions}
-                  readOnly={readonly}
-                  onChange={saveAllowedOperations}
-                />
-                <OperationRequirementGroup
-                  title="采集禁止操作"
-                  value={selectedForbiddenOperations}
-                  options={forbiddenOptions}
-                  readOnly={readonly}
-                  onChange={saveForbiddenOperations}
-                />
-                <OperationRequirementGroup
-                  title="标注操作要求"
-                  value={selectedAnnotationAllowedOperations}
-                  options={annotationAllowedOptions}
-                  readOnly={readonly}
-                  onChange={saveAnnotationAllowedOperations}
-                />
-                <OperationRequirementGroup
-                  title="标注禁止操作"
-                  value={selectedAnnotationForbiddenOperations}
-                  options={annotationForbiddenOptions}
-                  readOnly={readonly}
-                  onChange={saveAnnotationForbiddenOperations}
-                />
+              <div className="requirement-operation-sections">
+                <div className="operation-category">
+                  <div className="operation-category-header">
+                    <h4>采集操作要求</h4>
+                  </div>
+                  <div className="requirement-operation-grid">
+                    <OperationRequirementGroup
+                      title="采集操作要求"
+                      value={selectedAllowedOperations}
+                      options={allowedOperationOptions}
+                      readOnly={readonly}
+                      onChange={saveAllowedOperations}
+                    />
+                    <OperationRequirementGroup
+                      title="不完美但可接受的采集操作"
+                      value={selectedAcceptableOperations}
+                      options={acceptableOperationOptions}
+                      readOnly={readonly}
+                      onChange={saveAcceptableOperations}
+                    />
+                    <OperationRequirementGroup
+                      title="采集禁止操作"
+                      value={selectedForbiddenOperations}
+                      options={forbiddenOptions}
+                      readOnly={readonly}
+                      onChange={saveForbiddenOperations}
+                    />
+                  </div>
+                </div>
+                <div className="operation-category">
+                  <div className="operation-category-header">
+                    <h4>标注操作要求</h4>
+                  </div>
+                  <div className="requirement-operation-grid annotation-operation-grid">
+                    <OperationRequirementGroup
+                      title="标注操作要求"
+                      value={selectedAnnotationAllowedOperations}
+                      options={annotationAllowedOptions}
+                      readOnly={readonly}
+                      onChange={saveAnnotationAllowedOperations}
+                    />
+                    <OperationRequirementGroup
+                      title="标注禁止操作"
+                      value={selectedAnnotationForbiddenOperations}
+                      options={annotationForbiddenOptions}
+                      readOnly={readonly}
+                      onChange={saveAnnotationForbiddenOperations}
+                    />
+                  </div>
+                </div>
               </div>
             </section>
           </div>
@@ -2290,7 +2815,7 @@ function RequirementPage({
           <div className="embedded-table-header">
             <div>
               <h3>已选子场景</h3>
-              <p>按场景分组展示；客户需求锁定具体子场景编号和版本，目标采集时长在这里维护</p>
+              <p>按场景分组展示；客户需求锁定具体子场景版本，目标采集时长在这里维护</p>
             </div>
             <div className="button-row">
               <span className="result-count">{selectedVersion.selectedSubscenes.length} 条</span>
@@ -2380,6 +2905,12 @@ function ScenePage({
   onSaveSubscene,
   onDeleteSubsceneVersion,
   onConfirmSubscene,
+  onRun,
+  attachmentStorageStatus,
+  onScenesChange,
+  returnToRequirement,
+  onReturnToRequirement,
+  onClearReturnToRequirement,
 }: {
   globalFields: GlobalField[];
   materials: Material[];
@@ -2396,6 +2927,12 @@ function ScenePage({
   onSaveSubscene: (sceneId: string, code: string, version: VersionPatch<SubsceneVersion>) => Promise<void>;
   onDeleteSubsceneVersion: (sceneId: string, code: string, version: string) => Promise<void>;
   onConfirmSubscene: (sceneId: string, code: string, version: string) => Promise<void>;
+  onRun: <T>(action: () => Promise<T>, success: string) => Promise<T | undefined>;
+  attachmentStorageStatus: AttachmentStorageStatus;
+  onScenesChange: (scenes: Scene[]) => void;
+  returnToRequirement: RequirementReturnTarget | null;
+  onReturnToRequirement: () => void;
+  onClearReturnToRequirement: () => void;
 }) {
   const [sceneQuery, setSceneQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
@@ -2403,6 +2940,7 @@ function ScenePage({
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false);
   const [sceneEditorOpen, setSceneEditorOpen] = useState(false);
   const [sceneDraft, setSceneDraft] = useState<Scene>(emptyScene());
+  const [attachmentUpload, setAttachmentUpload] = useState<{ fileName: string; progress: number } | null>(null);
   const scene = scenes.find((item) => item.id === selectedSceneId) || scenes[0];
   const subscene = scene?.subscenes.find((item) => item.code === selectedSubsceneCode) || scene?.subscenes[0];
   const version = subscene
@@ -2417,7 +2955,7 @@ function ScenePage({
     onSelectVersion('');
   }, [selectedSubsceneCode, selectedSceneId, selectedVersion, subscene]);
 
-  const filteredScenes = scenes.filter((item) => matchesQuery(sceneQuery, [item.id, item.name, item.description]));
+  const filteredScenes = scenes.filter((item) => matchesQuery(sceneQuery, [item.name, item.description]));
   const filteredSubscenes = scene?.subscenes.filter((item) =>
     matchesQuery(subsceneQuery, [
       item.code,
@@ -2450,53 +2988,47 @@ function ScenePage({
 
   const subsceneColumns: Array<DataTableColumn<Subscene>> = [
     {
-      key: 'code',
-      title: '编号',
-      width: '110px',
-      render: (item) => <strong className="table-link">{item.code}</strong>,
-    },
-    {
       key: 'name',
       title: '子场景',
-      width: 'minmax(180px, 1.5fr)',
+      width: 'minmax(150px, 1.5fr)',
       render: (item) => latest(item.versions).title || item.name,
     },
     {
       key: 'versions',
       title: '版本数',
-      width: '88px',
+      width: '68px',
       align: 'right',
       render: (item) => item.versions.length,
     },
     {
       key: 'latestVersion',
       title: '最新版本',
-      width: '96px',
+      width: '78px',
       render: (item) => `v${latest(item.versions).version}`,
     },
     {
       key: 'status',
       title: '状态',
-      width: '96px',
+      width: '78px',
       render: (item) => <StatusBadge status={latest(item.versions).status} />,
     },
     {
       key: 'materials',
       title: '物料',
-      width: '88px',
+      width: '66px',
       align: 'right',
       render: (item) => `${latest(item.versions).materials.length} 种`,
     },
     {
       key: 'updated',
       title: '最近更新',
-      width: '116px',
+      width: '104px',
       render: (item) => formatShortDate(latest(item.versions).updatedAt),
     },
     {
       key: 'action',
       title: '操作',
-      width: '78px',
+      width: '54px',
       render: (item) => (
         <button
           className="text-button"
@@ -2526,15 +3058,14 @@ function ScenePage({
       render: (item, index) =>
         version && subscene ? (
           <span className="inline-edit">
-            <input
-              type="number"
+            <InlineNumberInput
               disabled={!canEditVersion}
               value={item.quantity.value || 0}
-              onChange={(event) => {
+              onCommit={(quantityValue) => {
                 if (!canEditVersion) return;
                 const nextMaterials = version.materials.map((current, currentIndex) =>
                   currentIndex === index
-                    ? { ...current, quantity: { ...current.quantity, mode: 'fixed' as const, value: Number(event.target.value) } }
+                    ? { ...current, quantity: { ...current.quantity, mode: 'fixed' as const, value: quantityValue } }
                     : current,
                 );
                 void saveCurrentSubscene({ materials: nextMaterials });
@@ -2629,7 +3160,7 @@ function ScenePage({
 
   async function createSubscene() {
     const code = nextSubsceneCode(scenes);
-    await onSaveSubscene(scene.id, code, emptySubsceneVersionDraft(`新子场景 ${code}`));
+    await onSaveSubscene(scene.id, code, emptySubsceneVersionDraft('新的子场景'));
     onSelectSubscene(code);
     onSelectVersion('');
     onDetailOpenChange(true);
@@ -2638,17 +3169,20 @@ function ScenePage({
   function selectScene(id: string) {
     onSelectScene(id);
     onDetailOpenChange(false);
+    onClearReturnToRequirement();
     setMaterialPickerOpen(false);
   }
 
   function openSubsceneDetail(code: string) {
     onSelectSubscene(code);
     onSelectVersion('');
+    onClearReturnToRequirement();
     onDetailOpenChange(true);
   }
 
   function closeSubsceneDetail() {
     onDetailOpenChange(false);
+    onClearReturnToRequirement();
     setMaterialPickerOpen(false);
   }
 
@@ -2667,6 +3201,61 @@ function ScenePage({
     if (!name) return;
     await onSaveScene({ ...sceneDraft, name });
     setSceneEditorOpen(false);
+  }
+
+  async function uploadSubsceneAttachment(file: File) {
+    if (!scene || !subscene || !version || !canEditVersion) return;
+    if (file.size > 1024 * 1024 * 1024) {
+      window.alert('单个附件不能超过 1G');
+      return;
+    }
+    let uploadInit: AttachmentUploadInit | undefined;
+    try {
+      setAttachmentUpload({ fileName: file.name, progress: 0 });
+      uploadInit = await api.initSubsceneAttachmentUpload(scene.id, subscene.code, version.version, file);
+      const parts: AttachmentUploadPart[] = [];
+      const totalParts = Math.ceil(file.size / uploadInit.partSize);
+      for (let index = 0; index < totalParts; index += 1) {
+        const start = index * uploadInit.partSize;
+        const end = Math.min(file.size, start + uploadInit.partSize);
+        const part = await api.uploadSubsceneAttachmentPart(
+          scene.id,
+          subscene.code,
+          version.version,
+          uploadInit.uploadId,
+          uploadInit.storageKey,
+          index + 1,
+          file.slice(start, end, file.type || 'application/octet-stream'),
+        );
+        parts.push({ partNumber: index + 1, etag: part.etag });
+        setAttachmentUpload({ fileName: file.name, progress: Math.round(((index + 1) / totalParts) * 100) });
+      }
+      await api.completeSubsceneAttachmentUpload(
+        scene.id,
+        subscene.code,
+        version.version,
+        uploadInit.attachmentId,
+        uploadInit.uploadId,
+        uploadInit.storageKey,
+        parts,
+      );
+      const nextData = await api.data();
+      onScenesChange(nextData.scenes);
+    } catch (error) {
+      if (uploadInit) {
+        await api.abortSubsceneAttachmentUpload(
+          scene.id,
+          subscene.code,
+          version.version,
+          uploadInit.attachmentId,
+          uploadInit.uploadId,
+          uploadInit.storageKey,
+        ).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      setAttachmentUpload(null);
+    }
   }
 
   const robotStateOptions = fieldOptions(globalFields, 'robot_state', [version?.robotState.initial || '', version?.robotState.target || '']).map((option) => ({
@@ -2796,17 +3385,22 @@ function ScenePage({
       <>
         <div className="detail-page">
           <div className="detail-page-toolbar">
-            <button className="ghost-button" onClick={closeSubsceneDetail}>
-              返回子场景列表
-            </button>
-            <span>{scene.name} / {subscene.code} / v{version.version}</span>
+            <div className="button-row">
+              {returnToRequirement && (
+                <button className="ghost-button" onClick={onReturnToRequirement}>
+                  返回需求页
+                </button>
+              )}
+              <button className="ghost-button" onClick={closeSubsceneDetail}>
+                返回子场景列表
+              </button>
+            </div>
+            <span>{scene.name} / v{version.version}</span>
           </div>
           <section className="panel detail-panel">
             <div className="panel-header">
               <div>
-                <h2>
-                  {subscene.code} {version.title || subscene.name}
-                </h2>
+                <h2>{version.title || subscene.name}</h2>
                 <p>
                   v{version.version} · {statusText(version.status)}
                 </p>
@@ -2844,7 +3438,6 @@ function ScenePage({
             {version.status === 'confirmed' && <div className="notice info">当前子场景已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
             <CollapsibleSection title="基础信息" description="0.0.1 草稿可编辑名称；草稿版本可编辑描述">
               <div className="form-grid compact-fields">
-                <Field label="子场景编号" value={subscene.code} disabled onChange={() => undefined} />
                 <Field
                   label="子场景名称"
                   value={version.title || ''}
@@ -2857,6 +3450,25 @@ function ScenePage({
                 value={version.description || ''}
                 disabled={!canEditDescription}
                 onChange={(description) => void saveCurrentSubscene({ description })}
+              />
+              <AttachmentField
+                title="子场景附件"
+                hint="支持上传图片或视频，单个附件不超过 1G"
+                accept="image/*,video/*"
+                attachments={version.attachments || []}
+                disabled={!canEditVersion}
+                storageStatus={attachmentStorageStatus}
+                upload={attachmentUpload}
+                onUpload={(file) => onRun(() => uploadSubsceneAttachment(file), '子场景附件已上传').then(() => undefined)}
+                onDownload={(attachment) => onRun(() => downloadStoredAttachment(attachment), '附件已下载').then(() => undefined)}
+                onDelete={async (attachmentId) => {
+                  if (!scene || !subscene || !version) return;
+                  const result = await onRun(
+                    () => api.deleteSubsceneAttachment(scene.id, subscene.code, version.version, attachmentId),
+                    '子场景附件已删除',
+                  );
+                  if (result) onScenesChange(result);
+                }}
               />
             </CollapsibleSection>
             <CollapsibleSection title="机器人与随机性" description="机器人初始态、目标态和初始状态随机性">
@@ -2966,10 +3578,16 @@ function ScenePage({
                 disabled={!canEditVersion}
                 onChange={(forbiddenOperations) => void saveCurrentSubscene({ operation: { ...version.operation, forbiddenOperations } })}
               />
+              <LocalTextItemEditor
+                title="不完美但可接受的采集操作"
+                description="仅在当前子场景中生效，可直接新建"
+                items={version.operation.acceptableOperations || []}
+                disabled={!canEditVersion}
+                onChange={(acceptableOperations) => void saveCurrentSubscene({ operation: { ...version.operation, acceptableOperations } })}
+              />
             </CollapsibleSection>
             <CollapsibleSection title="标注步骤和说明" description="标注步骤，以及仅当前子场景生效的标注操作要求与禁止操作">
-              <StepsTextArea
-                label="标注步骤（一行一步）"
+              <AnnotationStepsTable
                 steps={version.annotation.steps || []}
                 disabled={!canEditVersion}
                 onChange={(steps) => void saveCurrentSubscene({ annotation: { ...version.annotation, steps } })}
@@ -3003,7 +3621,7 @@ function ScenePage({
           title="场景目录"
           description="按场景分组展示子场景"
           query={sceneQuery}
-          placeholder="搜索场景名称或 ID"
+          placeholder="搜索场景名称或描述"
           count={filteredScenes.length}
           onQueryChange={setSceneQuery}
           actions={
@@ -3030,8 +3648,8 @@ function ScenePage({
                       key={child.code}
                       onClick={() => openSubsceneDetail(child.code)}
                     >
-                      <strong>{child.code}</strong>
-                      <span>{latest(child.versions).title || child.name}</span>
+                      <strong>{latest(child.versions).title || child.name}</strong>
+                      <span>v{latest(child.versions).version} · {statusText(latest(child.versions).status)}</span>
                     </button>
                   ))}
                 </div>
@@ -3053,7 +3671,6 @@ function ScenePage({
             </button>
           </div>
           <div className="info-grid">
-            <InfoItem label="场景 ID" value={scene.id} />
             <InfoItem label="子场景数" value={scene.subscenes.length} />
             <InfoItem label="最近更新" value={sceneLatestUpdated(scene)} />
           </div>
@@ -3064,7 +3681,7 @@ function ScenePage({
             title="子场景列表"
             description="点击子场景进入详情页"
             query={subsceneQuery}
-            placeholder="搜索编号、名称、状态或版本"
+            placeholder="搜索名称、状态或版本"
             count={filteredSubscenes.length}
             onQueryChange={setSubsceneQuery}
             actions={<button className="primary-button" onClick={() => void createSubscene()}>新建子场景</button>}
@@ -3173,7 +3790,6 @@ function GlobalFieldPage({
       ...patch,
       label,
       value: label,
-      category: '',
     };
     if (!next.label) return false;
     void onSaveField(next);
@@ -3539,6 +4155,126 @@ function StepsTextArea({
   );
 }
 
+function AnnotationStepsTable({
+  steps,
+  disabled,
+  onChange,
+}: {
+  steps: OperationStep[];
+  disabled: boolean;
+  onChange: (steps: OperationStep[]) => void;
+}) {
+  const stepsSignature = JSON.stringify(steps);
+  const [draftSteps, setDraftSteps] = useState<OperationStep[]>(() => normalize(steps));
+
+  useEffect(() => {
+    setDraftSteps(normalize(steps));
+  }, [stepsSignature]);
+
+  function normalize(nextSteps: OperationStep[]) {
+    return nextSteps.map((step, index) => ({ ...step, order: index + 1 }));
+  }
+
+  function commitSteps(nextSteps = draftSteps) {
+    const normalizedSteps = normalize(nextSteps);
+    if (JSON.stringify(normalizedSteps) !== JSON.stringify(normalize(steps))) {
+      onChange(normalizedSteps);
+    }
+  }
+
+  function updateStepDraft(index: number, patch: Partial<OperationStep>) {
+    setDraftSteps((currentSteps) =>
+      normalize(
+        currentSteps.map((step, currentIndex) =>
+          currentIndex === index
+            ? {
+                ...step,
+                ...patch,
+              }
+            : step,
+        ),
+      ),
+    );
+  }
+
+  function addStep() {
+    setDraftSteps((currentSteps) =>
+      normalize([
+        ...currentSteps,
+        { order: currentSteps.length + 1, description: '', atomicSkill: '', englishDescription: '', englishAtomicSkill: '' },
+      ]),
+    );
+  }
+
+  function removeStep(index: number) {
+    const nextSteps = normalize(draftSteps.filter((_, currentIndex) => currentIndex !== index));
+    setDraftSteps(nextSteps);
+    onChange(nextSteps);
+  }
+
+  return (
+    <div className="embedded-table annotation-steps-table">
+      <div className="embedded-table-header">
+        <div>
+          <h3>标注步骤</h3>
+          <p>左侧填写中文步骤和原子技能，右侧填写对应英文</p>
+        </div>
+        <button className="primary-button" disabled={disabled} onClick={addStep}>
+          新增步骤
+        </button>
+      </div>
+      <div className="annotation-steps-grid">
+        <div className="annotation-steps-head">序号</div>
+        <div className="annotation-steps-head">中文步骤</div>
+        <div className="annotation-steps-head">中文原子技能</div>
+        <div className="annotation-steps-head">English Step</div>
+        <div className="annotation-steps-head">English Atomic Skill</div>
+        <div className="annotation-steps-head">操作</div>
+        {draftSteps.length === 0 ? (
+          <div className="annotation-steps-empty">暂无标注步骤</div>
+        ) : (
+          draftSteps.map((step, index) => (
+            <div className="annotation-steps-row" key={`annotation-step-${index}`}>
+              <div className="annotation-step-order">{index + 1}</div>
+              <textarea
+                value={step.description || ''}
+                disabled={disabled}
+                placeholder="中文步骤"
+                onBlur={() => commitSteps()}
+                onChange={(event) => updateStepDraft(index, { description: event.target.value })}
+              />
+              <textarea
+                value={step.atomicSkill || ''}
+                disabled={disabled}
+                placeholder="中文原子技能"
+                onBlur={() => commitSteps()}
+                onChange={(event) => updateStepDraft(index, { atomicSkill: event.target.value })}
+              />
+              <textarea
+                value={step.englishDescription || ''}
+                disabled={disabled}
+                placeholder="English step"
+                onBlur={() => commitSteps()}
+                onChange={(event) => updateStepDraft(index, { englishDescription: event.target.value })}
+              />
+              <textarea
+                value={step.englishAtomicSkill || ''}
+                disabled={disabled}
+                placeholder="English atomic skill"
+                onBlur={() => commitSteps()}
+                onChange={(event) => updateStepDraft(index, { englishAtomicSkill: event.target.value })}
+              />
+              <button className="text-button danger" disabled={disabled} onClick={() => removeStep(index)}>
+                移除
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StepRandomizationEditor({
   title,
   value,
@@ -3655,6 +4391,35 @@ function LocalTextItemEditor({
   disabled: boolean;
   onChange: (items: SubsceneVersion['operation']['allowedOperations']) => void;
 }) {
+  const itemsSignature = JSON.stringify(items);
+  const [draftItems, setDraftItems] = useState<TextItem[]>(items);
+
+  useEffect(() => {
+    setDraftItems(items);
+  }, [itemsSignature]);
+
+  function commitItems(nextItems = draftItems) {
+    if (JSON.stringify(nextItems) !== JSON.stringify(items)) {
+      onChange(nextItems);
+    }
+  }
+
+  function updateItemDraft(index: number, description: string) {
+    setDraftItems((currentItems) =>
+      currentItems.map((current, currentIndex) => (currentIndex === index ? { ...current, description } : current)),
+    );
+  }
+
+  function addItem() {
+    setDraftItems((currentItems) => [...currentItems, { description: '' }]);
+  }
+
+  function removeItem(index: number) {
+    const nextItems = draftItems.filter((_, currentIndex) => currentIndex !== index);
+    setDraftItems(nextItems);
+    onChange(nextItems);
+  }
+
   return (
     <div className="embedded-table">
       <div className="embedded-table-header">
@@ -3665,24 +4430,23 @@ function LocalTextItemEditor({
         <button
           className="primary-button"
           disabled={disabled}
-          onClick={() => onChange([...items, { description: '' }])}
+          onClick={addItem}
         >
           新增
         </button>
       </div>
       <div className="local-item-list">
-        {items.length === 0 && <div className="table-empty">暂无内容</div>}
-        {items.map((item, index) => (
+        {draftItems.length === 0 && <div className="table-empty">暂无内容</div>}
+        {draftItems.map((item, index) => (
           <div className="local-item-row" key={`${title}-${index}`}>
             <input
               value={item.description}
               disabled={disabled}
               placeholder="说明"
-              onChange={(event) =>
-                onChange(items.map((current, currentIndex) => (currentIndex === index ? { ...current, description: event.target.value } : current)))
-              }
+              onBlur={() => commitItems()}
+              onChange={(event) => updateItemDraft(index, event.target.value)}
             />
-            <button className="text-button danger" disabled={disabled} onClick={() => onChange(items.filter((_, currentIndex) => currentIndex !== index))}>
+            <button className="text-button danger" disabled={disabled} onClick={() => removeItem(index)}>
               移除
             </button>
           </div>
@@ -3828,7 +4592,7 @@ function SubsceneStateEditor({
         </label>
         <label>
           <span>二级参照物</span>
-          <MultiEnumInput
+          <SingleEnumSelect
             value={row.secondaryReferences}
             options={valuesForGroup('reference_object', row.secondaryReferences)}
             placeholder="选择参照物"
@@ -3839,7 +4603,7 @@ function SubsceneStateEditor({
         </label>
         <label>
           <span>二级相对位置</span>
-          <MultiEnumInput
+          <SingleEnumSelect
             value={row.secondaryRelativePositions}
             options={valuesForGroup('relative_position', row.secondaryRelativePositions)}
             placeholder="选择相对位置"
@@ -3928,7 +4692,7 @@ function SubsceneStateEditor({
       width: '220px',
       allowOverflow: true,
       render: (row, index) => (
-        <MultiEnumInput
+        <SingleEnumSelect
           value={row.primaryReferences}
           options={valuesForGroup('reference_object', row.primaryReferences)}
           placeholder="选择参照物"
@@ -3944,7 +4708,7 @@ function SubsceneStateEditor({
       width: '220px',
       allowOverflow: true,
       render: (row, index) => (
-        <MultiEnumInput
+        <SingleEnumSelect
           value={row.primaryRelativePositions}
           options={valuesForGroup('relative_position', row.primaryRelativePositions)}
           placeholder="选择相对位置"
@@ -3960,7 +4724,7 @@ function SubsceneStateEditor({
       width: '220px',
       allowOverflow: true,
       render: (row, index) => (
-        <MultiEnumInput
+        <SingleEnumSelect
           value={row.supportSurfaces}
           options={valuesForGroup('support_surface', row.supportSurfaces)}
           placeholder="选择支撑面"
@@ -3973,7 +4737,7 @@ function SubsceneStateEditor({
     {
       key: 'summary',
       title: '详情摘要',
-      width: 'minmax(220px, 1fr)',
+      width: '520px',
       render: (row, index) => (
         <div className="row-summary-stack">
           <button type="button" className="summary-edit-button" onClick={() => toggleExpanded(index)}>
@@ -4164,15 +4928,82 @@ function SubsceneStateEditor({
   );
 }
 
-function MaterialPage({ materials, onSave }: { materials: Material[]; onSave: (material: Material) => Promise<void> }) {
+function MaterialPage({
+  materials,
+  storageStatus,
+  onMaterialsChange,
+  onSave,
+}: {
+  materials: Material[];
+  storageStatus: AttachmentStorageStatus;
+  onMaterialsChange: (materials: Material[]) => void;
+  onSave: (material: Material) => Promise<void>;
+}) {
   const nextSkuId = nextReadableId(
     materials.map((material) => material.skuId),
     'SKU',
   );
   const [draft, setDraft] = useState<Material>(materials[0] || emptyMaterial(nextSkuId));
+  const [imageUpload, setImageUpload] = useState<{ fileName: string; progress: number } | null>(null);
   useEffect(() => {
     setDraft(materials[0] || emptyMaterial(nextSkuId));
   }, [materials, nextSkuId]);
+
+  async function uploadMaterialImage(file: File) {
+    if (!draft.id) {
+      window.alert('请先保存物料，再上传图片');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      window.alert('只能上传图片文件');
+      return;
+    }
+    if (file.size > 1024 * 1024 * 1024) {
+      window.alert('单张图片不能超过 1G');
+      return;
+    }
+    let uploadInit: AttachmentUploadInit | undefined;
+    try {
+      setImageUpload({ fileName: file.name, progress: 0 });
+      uploadInit = await api.initMaterialImageUpload(draft.id, file);
+      const parts: AttachmentUploadPart[] = [];
+      const totalParts = Math.ceil(file.size / uploadInit.partSize);
+      for (let index = 0; index < totalParts; index += 1) {
+        const start = index * uploadInit.partSize;
+        const end = Math.min(file.size, start + uploadInit.partSize);
+        const part = await api.uploadMaterialImagePart(
+          draft.id,
+          uploadInit.uploadId,
+          uploadInit.storageKey,
+          index + 1,
+          file.slice(start, end, file.type || 'application/octet-stream'),
+        );
+        parts.push({ partNumber: index + 1, etag: part.etag });
+        setImageUpload({ fileName: file.name, progress: Math.round(((index + 1) / totalParts) * 100) });
+      }
+      await api.completeMaterialImageUpload(draft.id, uploadInit.attachmentId, uploadInit.uploadId, uploadInit.storageKey, parts);
+      const nextData = await api.data();
+      onMaterialsChange(nextData.materials);
+      const nextDraft = nextData.materials.find((item) => item.id === draft.id);
+      if (nextDraft) setDraft(nextDraft);
+    } catch (error) {
+      if (uploadInit) {
+        await api.abortMaterialImageUpload(draft.id, uploadInit.attachmentId, uploadInit.uploadId, uploadInit.storageKey).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      setImageUpload(null);
+    }
+  }
+
+  async function deleteMaterialImage(attachmentId: string) {
+    if (!draft.id) return;
+    const materials = await api.deleteMaterialImage(draft.id, attachmentId);
+    onMaterialsChange(materials);
+    const nextDraft = materials.find((item) => item.id === draft.id);
+    if (nextDraft) setDraft(nextDraft);
+  }
+
   const columns: Array<DataTableColumn<Material>> = [
     {
       key: 'skuId',
@@ -4186,6 +5017,7 @@ function MaterialPage({ materials, onSave }: { materials: Material[]; onSave: (m
     { key: 'packageType', title: '包装类型', width: '130px', render: (item) => item.packageType || '-' },
     { key: 'size', title: '尺寸', width: 'minmax(180px, 1.4fr)', render: (item) => item.size || '-' },
     { key: 'weight', title: '重量', width: '100px', render: (item) => item.weight || '-' },
+    { key: 'images', title: '图片', width: '80px', align: 'right', render: (item) => item.images?.length || 0 },
   ];
   return (
     <MasterDataPage
@@ -4209,6 +5041,20 @@ function MaterialPage({ materials, onSave }: { materials: Material[]; onSave: (m
       <Field label="包装类型" value={draft.packageType} onChange={(packageType) => setDraft({ ...draft, packageType })} />
       <Field label="尺寸" value={draft.size || ''} onChange={(size) => setDraft({ ...draft, size })} />
       <Field label="重量" value={draft.weight || ''} onChange={(weight) => setDraft({ ...draft, weight })} />
+      <AttachmentField
+        title="物料图片"
+        hint="支持上传图片，单张不超过 1G"
+        uploadLabel="上传图片"
+        emptyText="暂无图片"
+        accept="image/*"
+        attachments={draft.images || []}
+        disabled={!draft.id}
+        storageStatus={draft.id ? storageStatus : { enabled: false, message: '请先保存物料，再上传图片。' }}
+        upload={imageUpload}
+        onUpload={uploadMaterialImage}
+        onDownload={(attachment) => downloadStoredAttachment(attachment)}
+        onDelete={deleteMaterialImage}
+      />
       <button className="primary-button" onClick={() => void onSave(draft.id ? draft : { ...draft, skuId: '' })}>
         保存物料
       </button>
@@ -4352,11 +5198,145 @@ function Field({
   disabled?: boolean;
   onChange: (value: string) => void;
 }) {
+  const [draft, setDraft] = useState(value);
+  const composingRef = useRef(false);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    if (draft !== value) {
+      onChange(draft);
+    }
+  }
+
   return (
     <label className="field">
       <span>{label}</span>
-      <input type={type} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      <input
+        type={type}
+        value={draft}
+        disabled={disabled}
+        onBlur={commit}
+        onChange={(event) => setDraft(event.target.value)}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={(event) => {
+          composingRef.current = false;
+          setDraft(event.currentTarget.value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !composingRef.current) {
+            event.preventDefault();
+            commit();
+            event.currentTarget.blur();
+          }
+        }}
+      />
     </label>
+  );
+}
+
+function CommitField({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  type?: 'text' | 'number' | 'date';
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const composingRef = useRef(false);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    const nextValue = draft.trim();
+    if (nextValue !== value) {
+      onChange(nextValue);
+    }
+  }
+
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        type={type}
+        value={draft}
+        disabled={disabled}
+        onBlur={commit}
+        onChange={(event) => setDraft(event.target.value)}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={(event) => {
+          composingRef.current = false;
+          setDraft(event.currentTarget.value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !composingRef.current) {
+            event.preventDefault();
+            commit();
+            event.currentTarget.blur();
+          }
+        }}
+      />
+    </label>
+  );
+}
+
+function InlineNumberInput({
+  value,
+  disabled = false,
+  min = 0,
+  onCommit,
+}: {
+  value: number;
+  disabled?: boolean;
+  min?: number;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  function commit() {
+    const nextValue = Number(draft);
+    const normalizedValue = Number.isFinite(nextValue) ? Math.max(min, nextValue) : min;
+    const normalizedDraft = String(normalizedValue);
+    setDraft(normalizedDraft);
+    if (normalizedValue !== value) {
+      onCommit(normalizedValue);
+    }
+  }
+
+  return (
+    <input
+      type="number"
+      min={min}
+      value={draft}
+      disabled={disabled}
+      onBlur={commit}
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commit();
+          event.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -4398,11 +5378,131 @@ function TextArea({
   disabled?: boolean;
   onChange: (value: string) => void;
 }) {
+  const [draft, setDraft] = useState(value);
+  const composingRef = useRef(false);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    if (draft !== value) {
+      onChange(draft);
+    }
+  }
+
   return (
     <label className="field wide">
       <span>{label}</span>
-      <textarea value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      <textarea
+        value={draft}
+        disabled={disabled}
+        onBlur={commit}
+        onChange={(event) => setDraft(event.target.value)}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={(event) => {
+          composingRef.current = false;
+          setDraft(event.currentTarget.value);
+        }}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !composingRef.current) {
+            event.preventDefault();
+            commit();
+            event.currentTarget.blur();
+          }
+        }}
+      />
     </label>
+  );
+}
+
+function AttachmentField({
+  title = '客户附件',
+  hint = '单个附件不超过 1G，支持分片上传',
+  uploadLabel = '上传附件',
+  emptyText = '暂无附件',
+  accept,
+  attachments,
+  disabled,
+  storageStatus = defaultAttachmentStorageStatus,
+  upload,
+  onUpload,
+  onDownload,
+  onDelete,
+}: {
+  title?: string;
+  hint?: string;
+  uploadLabel?: string;
+  emptyText?: string;
+  accept?: string;
+  attachments: RequirementAttachment[];
+  disabled: boolean;
+  storageStatus?: AttachmentStorageStatus;
+  upload: { fileName: string; progress: number } | null;
+  onUpload: (file: File) => Promise<void>;
+  onDownload: (attachment: RequirementAttachment) => Promise<void>;
+  onDelete: (attachmentId: string) => Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const uploadDisabled = disabled || Boolean(upload) || !storageStatus.enabled;
+
+  async function pickFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    for (const file of files) {
+      await onUpload(file);
+    }
+  }
+
+  return (
+    <div className="attachment-field">
+      <div className="attachment-panel">
+        <div className="attachment-panel-header">
+          <div>
+            <strong>{title}</strong>
+            <span>{hint}</span>
+          </div>
+          <button className="primary-button" disabled={uploadDisabled} title={!storageStatus.enabled ? storageStatus.message : undefined} onClick={() => inputRef.current?.click()}>
+            {uploadLabel}
+          </button>
+          <input ref={inputRef} type="file" multiple hidden accept={accept} onChange={(event) => void pickFiles(event)} />
+        </div>
+        {!storageStatus.enabled && <div className="attachment-storage-warning">{storageStatus.message}</div>}
+        {upload && (
+          <div className="attachment-upload-progress">
+            <span>{upload.fileName}</span>
+            <progress value={upload.progress} max={100} />
+            <strong>{upload.progress}%</strong>
+          </div>
+        )}
+        {attachments.length === 0 ? (
+          <div className="attachment-empty">{emptyText}</div>
+        ) : (
+          <div className="attachment-list">
+            {attachments.map((attachment) => (
+              <div className="attachment-row" key={attachment.id}>
+                <div>
+                  <strong>{attachment.name}</strong>
+                  <span>
+                    {formatFileSize(attachment.size)} · {formatShortDate(attachment.uploadedAt)}
+                  </span>
+                </div>
+                <div className="button-row">
+                  <button className="text-button" onClick={() => void onDownload(attachment)}>
+                    下载
+                  </button>
+                  <button className="text-button danger" disabled={disabled} onClick={() => void onDelete(attachment.id)}>
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -4424,11 +5524,18 @@ function splitList(value: string | undefined): string[] {
 }
 
 function forbiddenGroupsFromKeys(keys: string[], options: Option[]): RequirementVersion['forbiddenOperations'] {
-  const operations = keys.map((operation) => {
+  const groups = new Map<string, Array<{ operation: string; note: string }>>();
+  keys.forEach((operation) => {
     const option = options.find((item) => item.value === operation);
-    return { operation, note: option?.description || '' };
+    const [category, ...rest] = operation.split('/');
+    const hasCategory = rest.length > 0 && category.trim();
+    const groupName = hasCategory ? category.trim() : '';
+    const operationName = hasCategory ? rest.join('/').trim() : operation;
+    const current = groups.get(groupName) || [];
+    current.push({ operation: operationName, note: option?.description || '' });
+    groups.set(groupName, current);
   });
-  return operations.length ? [{ category: '', operations }] : [];
+  return Array.from(groups.entries()).map(([category, operations]) => ({ category, operations }));
 }
 
 function joinEnum(values: string[]): string {
@@ -4682,6 +5789,7 @@ function emptySubsceneVersionDraft(title = '新的子场景'): Partial<SubsceneV
       steps: [],
       stepRandomization: { enabled: false, startOrder: 1, endOrder: 1 },
       allowedOperations: [],
+      acceptableOperations: [],
       forbiddenOperations: [],
     },
     objectStates: { initial: [], target: [] },
@@ -4716,6 +5824,7 @@ function emptyMaterial(skuId = ''): Material {
     color: '',
     material: '',
     packageType: '',
+    images: [],
   };
 }
 
@@ -4745,7 +5854,6 @@ function emptyGlobalField(group: GlobalFieldGroup = 'reference_object'): GlobalF
     group,
     label: '',
     value: '',
-    category: '',
     description: '',
     status: 'active',
     updatedAt: new Date().toISOString(),

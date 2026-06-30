@@ -5,8 +5,7 @@
     "label": "头部相机能看到全部场景内容与物料",
     "value": "头部相机能看到全部场景内容与物料",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-robot-state-safe-initial",
@@ -14,8 +13,7 @@
     "label": "机器人处于安全初始位",
     "value": "机器人处于安全初始位",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-robot-state-task-complete",
@@ -23,8 +21,7 @@
     "label": "完成最后一步操作的状态",
     "value": "完成最后一步操作的状态",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-reference-object-sink",
@@ -32,8 +29,7 @@
     "label": "洗手盆",
     "value": "洗手盆",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-reference-object-microwave",
@@ -41,8 +37,7 @@
     "label": "微波炉",
     "value": "微波炉",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-relative-left",
@@ -50,8 +45,7 @@
     "label": "左侧",
     "value": "左侧",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-relative-right",
@@ -59,8 +53,7 @@
     "label": "右侧",
     "value": "右侧",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-relative-front",
@@ -68,8 +61,7 @@
     "label": "前侧",
     "value": "前侧",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-relative-surface",
@@ -77,8 +69,7 @@
     "label": "在参照物表面",
     "value": "在参照物表面",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-relative-inside",
@@ -86,8 +77,7 @@
     "label": "在参照物内部",
     "value": "在参照物内部",
     "status": "active",
-    "updatedAt": "2026-06-23T02:31:31.919Z",
-    "category": ""
+    "updatedAt": "2026-06-23T02:31:31.919Z"
   },
   {
     "id": "gf-support-countertop",
@@ -95,8 +85,7 @@
     "label": "台面",
     "value": "台面",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-support-microwave-tray",
@@ -104,8 +93,7 @@
     "label": "微波炉托盘",
     "value": "微波炉托盘",
     "status": "inactive",
-    "updatedAt": "2026-06-22T06:54:07.648Z",
-    "category": ""
+    "updatedAt": "2026-06-22T06:54:07.648Z"
   },
   {
     "id": "gf-region-left",
@@ -113,8 +101,7 @@
     "label": "左侧",
     "value": "左侧",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-region-right",
@@ -122,8 +109,7 @@
     "label": "右侧",
     "value": "右侧",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-region-front",
@@ -131,8 +117,7 @@
     "label": "前侧",
     "value": "前侧",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-region-middle",
@@ -140,8 +125,7 @@
     "label": "中间",
     "value": "中间",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-region-inside",
@@ -149,8 +133,7 @@
     "label": "内部",
     "value": "内部",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-pose-flat",
@@ -158,8 +141,7 @@
     "label": "平放",
     "value": "平放",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-pose-lean",
@@ -167,8 +149,7 @@
     "label": "搭放",
     "value": "搭放",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-form-normal",
@@ -176,8 +157,7 @@
     "label": "正常",
     "value": "正常",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-parameter-door-open-angle",
@@ -185,8 +165,7 @@
     "label": "微波炉门打开角度",
     "value": "door_open_angle",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-parameter-power",
@@ -194,8 +173,7 @@
     "label": "微波炉功率",
     "value": "power",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-parameter-duration",
@@ -203,8 +181,7 @@
     "label": "微波炉设置时长",
     "value": "duration",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-allowed-base-movement",
@@ -213,8 +190,7 @@
     "value": "底盘可移动到安全位置后再执行放置",
     "description": "底盘可移动到安全位置后再执行放置",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-allowed-door-operation",
@@ -223,8 +199,7 @@
     "value": "可调整微波炉门打开角度以便拿取",
     "description": "可调整微波炉门打开角度以便拿取",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-allowed-arm-cooperation",
@@ -232,8 +207,7 @@
     "label": "若单臂无法完成任务，可进行臂间协作",
     "value": "若单臂无法完成任务，可进行臂间协作",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-allowed-height-adjust",
@@ -241,73 +215,259 @@
     "label": "若机器人高度无法完成任务，可调整高度",
     "value": "若机器人高度无法完成任务，可调整高度",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
-  },
-  {
-    "id": "gf-forbidden-collision-push",
-    "group": "forbidden_operation",
-    "label": "禁止碰撞或推动其他物料",
-    "value": "禁止碰撞或推动其他物料",
-    "category": "",
-    "description": "禁止碰撞或推动其他物料",
-    "status": "active",
     "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
-    "id": "gf-forbidden-door-collision",
+    "id": "gf-forbidden-operation-safety-机器人碰撞",
     "group": "forbidden_operation",
-    "label": "禁止门体或夹爪与微波炉产生碰撞",
-    "value": "禁止门体或夹爪与微波炉产生碰撞",
-    "category": "",
-    "description": "禁止门体或夹爪与微波炉产生碰撞",
+    "label": "操作安全/机器人碰撞",
+    "value": "操作安全/机器人碰撞",
+    "description": "",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z"
+    "updatedAt": "2026-06-29T00:00:00.000Z"
   },
   {
-    "id": "gf-forbidden-face",
+    "id": "gf-forbidden-operation-safety-一次夹取多个物品",
     "group": "forbidden_operation",
-    "label": "出现人脸",
-    "value": "出现人脸",
-    "category": "",
+    "label": "操作安全/一次夹取多个物品",
+    "value": "操作安全/一次夹取多个物品",
+    "description": "",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z"
+    "updatedAt": "2026-06-29T00:00:00.000Z"
   },
   {
-    "id": "gf-forbidden-private-data",
+    "id": "gf-forbidden-operation-safety-碰撞-推动-拖拽物料",
     "group": "forbidden_operation",
-    "label": "出现隐私数据信息",
-    "value": "出现隐私数据信息",
-    "category": "",
+    "label": "操作安全/碰撞/推动/拖拽物料",
+    "value": "操作安全/碰撞/推动/拖拽物料",
+    "description": "",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z"
+    "updatedAt": "2026-06-29T00:00:00.000Z"
   },
   {
-    "id": "gf-forbidden-robot-collision",
+    "id": "gf-forbidden-operation-safety-机器移动时进行操作",
     "group": "forbidden_operation",
-    "label": "机器人碰撞",
-    "value": "机器人碰撞",
-    "category": "",
+    "label": "操作安全/机器移动时进行操作",
+    "value": "操作安全/机器移动时进行操作",
+    "description": "",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z"
+    "updatedAt": "2026-06-29T00:00:00.000Z"
   },
   {
-    "id": "gf-forbidden-multi-grasp",
+    "id": "gf-forbidden-operation-safety-夹取物品边缘",
     "group": "forbidden_operation",
-    "label": "一次夹取多个物品",
-    "value": "一次夹取多个物品",
-    "category": "",
+    "label": "操作安全/夹取物品边缘",
+    "value": "操作安全/夹取物品边缘",
+    "description": "",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z"
+    "updatedAt": "2026-06-29T00:00:00.000Z"
   },
   {
-    "id": "gf-random-frequency-every-record",
-    "group": "random_frequency",
-    "label": "每条数据随机",
-    "value": "every_record",
+    "id": "gf-forbidden-privacy-出现人脸",
+    "group": "forbidden_operation",
+    "label": "隐私问题/出现人脸",
+    "value": "隐私问题/出现人脸",
+    "description": "",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-privacy-出现隐私数据信息",
+    "group": "forbidden_operation",
+    "label": "隐私问题/出现隐私数据信息",
+    "value": "隐私问题/出现隐私数据信息",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-task-completeness-任务未完成",
+    "group": "forbidden_operation",
+    "label": "任务完整性/任务未完成",
+    "value": "任务完整性/任务未完成",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-task-completeness-人为干预采集",
+    "group": "forbidden_operation",
+    "label": "任务完整性/人为干预采集",
+    "value": "任务完整性/人为干预采集",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-task-completeness-未将物料置于目标终态",
+    "group": "forbidden_operation",
+    "label": "任务完整性/未将物料置于目标终态",
+    "value": "任务完整性/未将物料置于目标终态",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-data-出现花屏",
+    "group": "forbidden_operation",
+    "label": "数据问题/出现花屏",
+    "value": "数据问题/出现花屏",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-data-出现跳帧",
+    "group": "forbidden_operation",
+    "label": "数据问题/出现跳帧",
+    "value": "数据问题/出现跳帧",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-material-物料缺失",
+    "group": "forbidden_operation",
+    "label": "物料问题/物料缺失",
+    "value": "物料问题/物料缺失",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-material-物料损坏",
+    "group": "forbidden_operation",
+    "label": "物料问题/物料损坏",
+    "value": "物料问题/物料损坏",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-material-物料严重形变",
+    "group": "forbidden_operation",
+    "label": "物料问题/物料严重形变",
+    "value": "物料问题/物料严重形变",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-material-初始位置未看到所有物料",
+    "group": "forbidden_operation",
+    "label": "物料问题/初始位置未看到所有物料",
+    "value": "物料问题/初始位置未看到所有物料",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-material-物料初始状态未静止",
+    "group": "forbidden_operation",
+    "label": "物料问题/物料初始状态未静止",
+    "value": "物料问题/物料初始状态未静止",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-material-物料更换",
+    "group": "forbidden_operation",
+    "label": "物料问题/物料更换",
+    "value": "物料问题/物料更换",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-action-validity-多余手臂动作",
+    "group": "forbidden_operation",
+    "label": "动作有效性/多余手臂动作",
+    "value": "动作有效性/多余手臂动作",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-action-validity-多余底盘移动动作",
+    "group": "forbidden_operation",
+    "label": "动作有效性/多余底盘移动动作",
+    "value": "动作有效性/多余底盘移动动作",
+    "description": "当无法通过前倾、转身、移动手臂、换手完成任务时，可以移动底盘进行操作，否则为多余底盘移动动作",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-action-validity-失误次数-gt2-次",
+    "group": "forbidden_operation",
+    "label": "动作有效性/失误次数 ＞2 次",
+    "value": "动作有效性/失误次数 ＞2 次",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-action-validity-未按顺序夹取物品",
+    "group": "forbidden_operation",
+    "label": "动作有效性/未按顺序夹取物品",
+    "value": "动作有效性/未按顺序夹取物品",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-action-validity-夹取姿态错误",
+    "group": "forbidden_operation",
+    "label": "动作有效性/夹取姿态错误",
+    "value": "动作有效性/夹取姿态错误",
+    "description": "夹爪应一张一合夹取物品",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-action-validity-调整物品时夹爪未闭合",
+    "group": "forbidden_operation",
+    "label": "动作有效性/调整物品时夹爪未闭合",
+    "value": "动作有效性/调整物品时夹爪未闭合",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-action-validity-未采用就近原则夹取物品",
+    "group": "forbidden_operation",
+    "label": "动作有效性/未采用就近原则夹取物品",
+    "value": "动作有效性/未采用就近原则夹取物品",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-visual-画面抖动",
+    "group": "forbidden_operation",
+    "label": "画面问题/画面抖动",
+    "value": "画面问题/画面抖动",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-visual-画面曝光严重",
+    "group": "forbidden_operation",
+    "label": "画面问题/画面曝光严重",
+    "value": "画面问题/画面曝光严重",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-forbidden-visual-画面颜色异常-偏暗",
+    "group": "forbidden_operation",
+    "label": "画面问题/画面颜色异常/偏暗",
+    "value": "画面问题/画面颜色异常/偏暗",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
   },
   {
     "id": "gf-random-field-initial-position",
@@ -315,8 +475,7 @@
     "label": "位置",
     "value": "initial_position",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-random-field-initial-yaw",
@@ -324,8 +483,7 @@
     "label": "朝向",
     "value": "initial_yaw",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-random-field-location",
@@ -333,8 +491,7 @@
     "label": "物料位置",
     "value": "location",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-random-field-pose",
@@ -342,8 +499,7 @@
     "label": "物料姿态",
     "value": "pose",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-random-field-form",
@@ -351,8 +507,7 @@
     "label": "物料形态",
     "value": "form",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-random-field-door-open-angle",
@@ -360,8 +515,7 @@
     "label": "微波炉门打开角度",
     "value": "door_open_angle",
     "status": "inactive",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-random-field-power",
@@ -369,8 +523,7 @@
     "label": "微波炉功率",
     "value": "power",
     "status": "inactive",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-random-field-duration",
@@ -378,8 +531,7 @@
     "label": "微波炉设置时长",
     "value": "duration",
     "status": "inactive",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-annotation-type-semantic",
@@ -387,35 +539,7 @@
     "label": "语义标注",
     "value": "语义标注",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
-  },
-  {
-    "id": "gf-action-tag-grasp",
-    "group": "action_tag",
-    "label": "抓取",
-    "value": "抓取",
-    "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
-  },
-  {
-    "id": "gf-action-tag-place",
-    "group": "action_tag",
-    "label": "放置",
-    "value": "放置",
-    "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
-  },
-  {
-    "id": "gf-action-tag-open-door",
-    "group": "action_tag",
-    "label": "开门",
-    "value": "开门",
-    "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-delivery-format-mcap-json",
@@ -423,8 +547,7 @@
     "label": "mcap",
     "value": "mcap",
     "status": "active",
-    "updatedAt": "2026-06-22T07:18:47.773Z",
-    "category": ""
+    "updatedAt": "2026-06-22T07:18:47.773Z"
   },
   {
     "id": "gf-delivery-language-zh-cn",
@@ -432,8 +555,7 @@
     "label": "简体中文",
     "value": "zh-CN:简体中文",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-delivery-method-amazon",
@@ -441,8 +563,7 @@
     "label": "亚马逊存储",
     "value": "亚马逊存储",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "gf-sampling-policy-full",
@@ -450,15 +571,13 @@
     "label": "全量抽检",
     "value": "全量抽检",
     "status": "active",
-    "updatedAt": "2026-06-22T00:00:00.000Z",
-    "category": ""
+    "updatedAt": "2026-06-22T00:00:00.000Z"
   },
   {
     "id": "field_mqq0zky9_dxh5zn",
     "group": "robot_state",
     "label": "有一个相机能看到全部场景内容与物料",
     "value": "有一个相机能看到全部场景内容与物料",
-    "category": "",
     "description": "",
     "status": "active",
     "updatedAt": "2026-06-23T02:28:51.537Z"
@@ -498,5 +617,257 @@
     "description": "多个独立物体应拆分标注，不应合并为一个对象。",
     "status": "active",
     "updatedAt": "2026-06-23T04:20:41.399Z"
+  },
+  {
+    "id": "gf-acceptable-operation-safety-机器人碰撞",
+    "group": "acceptable_operation",
+    "label": "操作安全/机器人碰撞",
+    "value": "操作安全/机器人碰撞",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-operation-safety-一次夹取多个物品",
+    "group": "acceptable_operation",
+    "label": "操作安全/一次夹取多个物品",
+    "value": "操作安全/一次夹取多个物品",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-operation-safety-碰撞-推动-拖拽物料",
+    "group": "acceptable_operation",
+    "label": "操作安全/碰撞/推动/拖拽物料",
+    "value": "操作安全/碰撞/推动/拖拽物料",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-operation-safety-机器移动时进行操作",
+    "group": "acceptable_operation",
+    "label": "操作安全/机器移动时进行操作",
+    "value": "操作安全/机器移动时进行操作",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-operation-safety-夹取物品边缘",
+    "group": "acceptable_operation",
+    "label": "操作安全/夹取物品边缘",
+    "value": "操作安全/夹取物品边缘",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-privacy-出现人脸",
+    "group": "acceptable_operation",
+    "label": "隐私问题/出现人脸",
+    "value": "隐私问题/出现人脸",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-privacy-出现隐私数据信息",
+    "group": "acceptable_operation",
+    "label": "隐私问题/出现隐私数据信息",
+    "value": "隐私问题/出现隐私数据信息",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-task-completeness-任务未完成",
+    "group": "acceptable_operation",
+    "label": "任务完整性/任务未完成",
+    "value": "任务完整性/任务未完成",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-task-completeness-人为干预采集",
+    "group": "acceptable_operation",
+    "label": "任务完整性/人为干预采集",
+    "value": "任务完整性/人为干预采集",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-task-completeness-未将物料置于目标终态",
+    "group": "acceptable_operation",
+    "label": "任务完整性/未将物料置于目标终态",
+    "value": "任务完整性/未将物料置于目标终态",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-data-出现花屏",
+    "group": "acceptable_operation",
+    "label": "数据问题/出现花屏",
+    "value": "数据问题/出现花屏",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-data-出现跳帧",
+    "group": "acceptable_operation",
+    "label": "数据问题/出现跳帧",
+    "value": "数据问题/出现跳帧",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-material-物料缺失",
+    "group": "acceptable_operation",
+    "label": "物料问题/物料缺失",
+    "value": "物料问题/物料缺失",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-material-物料损坏",
+    "group": "acceptable_operation",
+    "label": "物料问题/物料损坏",
+    "value": "物料问题/物料损坏",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-material-物料严重形变",
+    "group": "acceptable_operation",
+    "label": "物料问题/物料严重形变",
+    "value": "物料问题/物料严重形变",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-material-初始位置未看到所有物料",
+    "group": "acceptable_operation",
+    "label": "物料问题/初始位置未看到所有物料",
+    "value": "物料问题/初始位置未看到所有物料",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-material-物料初始状态未静止",
+    "group": "acceptable_operation",
+    "label": "物料问题/物料初始状态未静止",
+    "value": "物料问题/物料初始状态未静止",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-material-物料更换",
+    "group": "acceptable_operation",
+    "label": "物料问题/物料更换",
+    "value": "物料问题/物料更换",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-action-validity-多余手臂动作",
+    "group": "acceptable_operation",
+    "label": "动作有效性/多余手臂动作",
+    "value": "动作有效性/多余手臂动作",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-action-validity-多余底盘移动动作",
+    "group": "acceptable_operation",
+    "label": "动作有效性/多余底盘移动动作",
+    "value": "动作有效性/多余底盘移动动作",
+    "description": "当无法通过前倾、转身、移动手臂、换手完成任务时，可以移动底盘进行操作，否则为多余底盘移动动作",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-action-validity-失误次数-gt2-次",
+    "group": "acceptable_operation",
+    "label": "动作有效性/失误次数 ＞2 次",
+    "value": "动作有效性/失误次数 ＞2 次",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-action-validity-未按顺序夹取物品",
+    "group": "acceptable_operation",
+    "label": "动作有效性/未按顺序夹取物品",
+    "value": "动作有效性/未按顺序夹取物品",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-action-validity-夹取姿态错误",
+    "group": "acceptable_operation",
+    "label": "动作有效性/夹取姿态错误",
+    "value": "动作有效性/夹取姿态错误",
+    "description": "夹爪应一张一合夹取物品",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-action-validity-调整物品时夹爪未闭合",
+    "group": "acceptable_operation",
+    "label": "动作有效性/调整物品时夹爪未闭合",
+    "value": "动作有效性/调整物品时夹爪未闭合",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-action-validity-未采用就近原则夹取物品",
+    "group": "acceptable_operation",
+    "label": "动作有效性/未采用就近原则夹取物品",
+    "value": "动作有效性/未采用就近原则夹取物品",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-visual-画面抖动",
+    "group": "acceptable_operation",
+    "label": "画面问题/画面抖动",
+    "value": "画面问题/画面抖动",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-visual-画面曝光严重",
+    "group": "acceptable_operation",
+    "label": "画面问题/画面曝光严重",
+    "value": "画面问题/画面曝光严重",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
+  },
+  {
+    "id": "gf-acceptable-visual-画面颜色异常-偏暗",
+    "group": "acceptable_operation",
+    "label": "画面问题/画面颜色异常/偏暗",
+    "value": "画面问题/画面颜色异常/偏暗",
+    "description": "",
+    "status": "active",
+    "updatedAt": "2026-06-29T00:00:00.000Z"
   }
 ]

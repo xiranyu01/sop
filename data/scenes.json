@@ -1169,6 +1169,198 @@
               "attachments": []
             },
             "updatedAt": "2026-06-23T11:52:07.322Z"
+          },
+          {
+            "version": "0.0.5",
+            "status": "draft",
+            "title": "洗漱台整理",
+            "description": "将洗漱台上的牙刷、牙膏等物料整理到指定位置。",
+            "materials": [
+              {
+                "materialId": "mat-toothbrush",
+                "skuId": "SKU001",
+                "type": "牙刷",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 2,
+                  "unit": "件"
+                },
+                "color": "白色",
+                "material": "塑料",
+                "packageType": "无包装"
+              },
+              {
+                "materialId": "mat-toothpaste",
+                "skuId": "SKU002",
+                "type": "牙膏",
+                "quantity": {
+                  "mode": "fixed",
+                  "value": 1,
+                  "unit": "件"
+                },
+                "color": "蓝白色",
+                "material": "软管",
+                "packageType": "管装"
+              }
+            ],
+            "robotState": {
+              "initial": "头部相机能看到全部场景内容与物料",
+              "target": "完成最后一步操作的状态"
+            },
+            "randomization": {
+              "robotInitialState": {
+                "enabled": true,
+                "changeFrequency": "every_record",
+                "randomizedFields": [
+                  {
+                    "field": "initial_position",
+                    "displayName": "初始位置",
+                    "constraints": [
+                      "头部相机能看到所有场景物料",
+                      "不影响机器人安全启动"
+                    ]
+                  },
+                  {
+                    "field": "initial_yaw",
+                    "displayName": "初始朝向",
+                    "constraints": [
+                      "头部相机能看到所有场景物料"
+                    ]
+                  }
+                ]
+              },
+              "materialInitialState": {
+                "rules": [
+                  {
+                    "targetMaterials": [
+                      "牙刷",
+                      "牙膏"
+                    ],
+                    "changeFrequency": "every_record",
+                    "randomizedFields": {
+                      "locations": [
+                        {
+                          "name": "location",
+                          "valueSource": "object_states.initial.allowed_locations"
+                        }
+                      ],
+                      "poses": [
+                        {
+                          "name": "pose",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_pose"
+                        }
+                      ],
+                      "forms": [
+                        {
+                          "name": "form",
+                          "valueSource": "object_states.initial.allowed_locations.allowed_form"
+                        }
+                      ]
+                    },
+                    "constraints": [
+                      "每次采集前需要改变位置",
+                      "仍需满足 object_states.initial 中定义的允许状态"
+                    ]
+                  }
+                ]
+              },
+              "materialStateDuringOperation": {
+                "rules": []
+              }
+            },
+            "operation": {
+              "stepOrder": "按就近原则整理物料",
+              "steps": [
+                {
+                  "order": 1,
+                  "description": "识别洗漱台上的目标物料"
+                },
+                {
+                  "order": 2,
+                  "description": "依次抓取牙刷、牙膏"
+                },
+                {
+                  "order": 3,
+                  "description": "将物料放置到目标区域"
+                }
+              ],
+              "allowedOperations": [
+                {
+                  "type": "base_movement",
+                  "description": "底盘可移动到安全位置后再执行放置"
+                }
+              ],
+              "forbiddenOperations": [
+                {
+                  "type": "forbidden_action",
+                  "description": "禁止碰撞或推动其他物料"
+                }
+              ]
+            },
+            "objectStates": {
+              "initial": [
+                {
+                  "object": "牙刷",
+                  "allowedLocations": [
+                    {
+                      "location": "洗手池周边",
+                      "referencePath": [
+                        {
+                          "level": 1,
+                          "referenceObject": "洗手盆",
+                          "relativePosition": "左侧/右侧/前侧"
+                        }
+                      ],
+                      "supportSurface": "台面",
+                      "allowedRegions": [
+                        "左侧",
+                        "右侧",
+                        "前侧"
+                      ],
+                      "allowedPose": [
+                        "平放",
+                        "搭放"
+                      ],
+                      "allowedForm": [
+                        "正常"
+                      ],
+                      "constraints": [
+                        "不超出台面边缘"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "target": [
+                {
+                  "object": "牙刷",
+                  "requiredLocation": "收纳杯内",
+                  "requiredRegions": [
+                    "内部"
+                  ],
+                  "requiredPose": [
+                    "竖立"
+                  ],
+                  "requiredForm": [
+                    "正常"
+                  ]
+                }
+              ],
+              "duringOperation": []
+            },
+            "annotation": {
+              "status": "pending",
+              "note": "待补充标注说明",
+              "actionTags": [
+                "抓取",
+                "放置"
+              ]
+            },
+            "references": {
+              "recordUrls": [],
+              "attachments": []
+            },
+            "updatedAt": "2026-06-25T09:32:36.926Z"
           }
         ]
       },

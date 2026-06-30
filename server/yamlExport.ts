@@ -72,6 +72,17 @@ function mapMaterials(materials: ScenarioMaterial[]): unknown {
   }));
 }
 
+function mapAttachments(attachments: SubsceneVersion['attachments']): unknown {
+  return (attachments || []).map((attachment) => ({
+    id: attachment.id,
+    name: attachment.name,
+    size: attachment.size,
+    content_type: attachment.contentType,
+    storage_key: attachment.storageKey,
+    uploaded_at: attachment.uploadedAt,
+  }));
+}
+
 function mapObjectStates(states: {
   initial: ObjectInitialState[];
   target: ObjectTargetState[];
@@ -82,9 +93,23 @@ function mapObjectStates(states: {
   });
 }
 
+function mapOperation(operation: SubsceneVersion['operation']): unknown {
+  return toSnakeObject({
+    steps: operation.steps,
+    stepRandomization: operation.stepRandomization,
+    allowedOperations: operation.allowedOperations,
+    acceptableOperations: operation.acceptableOperations || [],
+    forbiddenOperations: operation.forbiddenOperations,
+  });
+}
+
 function mapAnnotation(annotation: SubsceneVersion['annotation']): unknown {
-  const { note: _legacyNote, stepRandomization: _legacyStepRandomization, ...visibleAnnotation } = annotation;
-  return toSnakeObject(visibleAnnotation);
+  return toSnakeObject({
+    status: annotation.status,
+    steps: annotation.steps || [],
+    allowedOperations: annotation.allowedOperations || [],
+    forbiddenOperations: annotation.forbiddenOperations || [],
+  });
 }
 
 function mapScenario(
@@ -100,11 +125,12 @@ function mapScenario(
     scene_name: sceneName,
     sub_scene_name: subscene.title || subscene.description,
     description: subscene.description,
+    attachments: mapAttachments(subscene.attachments),
     target_duration_hours: targetDurationHours,
     materials: mapMaterials(subscene.materials),
     robot_state: toSnakeObject(subscene.robotState),
     randomization: mapRandomization(subscene.randomization),
-    operation: toSnakeObject(subscene.operation),
+    operation: mapOperation(subscene.operation),
     object_states: mapObjectStates(subscene.objectStates),
     annotation: mapAnnotation(subscene.annotation),
     references: toSnakeObject(subscene.references),
@@ -144,7 +170,6 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       priority: version.priority,
       deadline: version.deadline,
       source_base_url: version.sourceBaseUrl || '',
-      attachments: version.attachmentNotes || '',
       additional_notes: version.additionalNotes || '',
     },
     customer: {
@@ -178,6 +203,7 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
         required_duration_hours: version.requiredDurationHours,
         global_randomization_requirements: version.globalRandomizationRequirements || '',
         allowed_operations: version.allowedOperations,
+        acceptable_operations: version.acceptableOperations || [],
         forbidden_operations: version.forbiddenOperations,
       },
       annotation: toSnakeObject(version.annotation),
@@ -185,7 +211,6 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       delivery: toSnakeObject(version.delivery),
     },
     scenarios,
-    open_questions: [],
     traceability: {
       generated_from: `sop-requirement-manager ${new Date().toISOString()}`,
       requirement_id: requirement.id,

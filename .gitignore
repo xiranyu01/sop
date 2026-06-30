@@ -1,6 +1,7 @@
 node_modules
 dist
 exports
+uploads
 .DS_Store
 *.log
 .env

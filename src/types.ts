@@ -13,15 +13,14 @@ export type GlobalFieldGroup =
   | 'form'
   | 'parameter'
   | 'allowed_operation'
+  | 'acceptable_operation'
   | 'forbidden_operation'
   | 'annotation_allowed_operation'
   | 'annotation_forbidden_operation'
-  | 'random_frequency'
   | 'random_field'
   | 'robot_random_field'
   | 'material_random_field'
   | 'annotation_type'
-  | 'action_tag'
   | 'delivery_format'
   | 'delivery_language'
   | 'delivery_method'
@@ -49,6 +48,7 @@ export interface Material {
   packageType: string;
   size?: string;
   weight?: string;
+  images?: RequirementAttachment[];
 }
 
 export interface RobotModel {
@@ -112,6 +112,9 @@ export interface TextItem {
 export interface OperationStep {
   order: number;
   description: string;
+  atomicSkill?: string;
+  englishDescription?: string;
+  englishAtomicSkill?: string;
 }
 
 export interface ReferenceStep {
@@ -183,6 +186,7 @@ export interface SubsceneVersion {
   sceneName?: string;
   subsceneName?: string;
   description: string;
+  attachments?: RequirementAttachment[];
   requiredDurationHours?: number;
   materials: ScenarioMaterial[];
   robotState: {
@@ -202,6 +206,7 @@ export interface SubsceneVersion {
       endOrder: number;
     };
     allowedOperations: TextItem[];
+    acceptableOperations?: TextItem[];
     forbiddenOperations: TextItem[];
   };
   objectStates: {
@@ -250,6 +255,28 @@ export interface RequestedSubscene {
   targetDurationHours: number;
 }
 
+export interface RequirementAttachment {
+  id: string;
+  name: string;
+  size: number;
+  contentType: string;
+  storageKey: string;
+  uploadedAt: string;
+}
+
+export interface AttachmentUploadInit {
+  attachmentId: string;
+  uploadId: string;
+  storageKey: string;
+  partSize: number;
+  maxSize: number;
+}
+
+export interface AttachmentUploadPart {
+  partNumber: number;
+  etag: string;
+}
+
 export interface RequirementVersion {
   version: string;
   status: EntityStatus;
@@ -259,6 +286,7 @@ export interface RequirementVersion {
   deadline: string;
   sourceBaseUrl?: string;
   attachmentNotes?: string;
+  attachments?: RequirementAttachment[];
   extraTopicRequirementsText?: string;
   globalRandomizationRequirements?: string;
   additionalNotes?: string;
@@ -268,6 +296,7 @@ export interface RequirementVersion {
   requestedScenes: string[];
   requiredDurationHours: number;
   allowedOperations: Array<{ operation: string; note: string }>;
+  acceptableOperations?: Array<{ operation: string; note: string }>;
   forbiddenOperations: Array<{ category: string; operations: Array<{ operation: string; note: string }> }>;
   annotation: {
     required: boolean;

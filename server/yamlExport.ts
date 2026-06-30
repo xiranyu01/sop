@@ -23,6 +23,11 @@ function toSnakeObject(input: unknown): unknown {
   }, {});
 }
 
+function toSnakeRecord(input: unknown): Record<string, unknown> {
+  const value = toSnakeObject(input);
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 function keyValueLines(value: string): Record<string, string> {
   return value.split('\n').reduce<Record<string, string>>((acc, line) => {
     const [key, ...rest] = line.split(':');
@@ -40,10 +45,6 @@ function omitKeys(input: object, keys: string[]): Record<string, unknown> {
     }
     return acc;
   }, {});
-}
-
-function mapRandomization(randomization: SubsceneVersion['randomization']): unknown {
-  return toSnakeObject(omitKeys(randomization, ['material' + 'StateDuringOperation']));
 }
 
 function findSubsceneVersion(data: AppData, code: string, version: string): { sceneName: string; subscene: SubsceneVersion } {
@@ -83,14 +84,52 @@ function mapAttachments(attachments: SubsceneVersion['attachments']): unknown {
   }));
 }
 
-function mapObjectStates(states: {
-  initial: ObjectInitialState[];
-  target: ObjectTargetState[];
-}): unknown {
-  return toSnakeObject({
-    initial: states.initial,
-    target: states.target,
+function mapExampleImages(ids: string[] | undefined, attachments: SubsceneVersion['attachments']): unknown {
+  return (ids || []).map((id) => {
+    const attachment = attachments?.find((item) => item.id === id);
+    return {
+      attachment_id: id,
+      name: attachment?.name || '',
+      storage_key: attachment?.storageKey || '',
+    };
   });
+}
+
+function mapObjectStates(
+  states: {
+    initial: ObjectInitialState[];
+    target: ObjectTargetState[];
+  },
+  attachments: SubsceneVersion['attachments'],
+): unknown {
+  return {
+    initial: states.initial.map((state) => ({
+      object: state.object,
+      allowed_locations: state.allowedLocations.map((location) => ({
+        ...omitKeys(toSnakeRecord(location), ['example_image_attachment_ids']),
+        example_images: mapExampleImages(location.exampleImageAttachmentIds, attachments),
+      })),
+    })),
+    target: states.target.map((state) => ({
+      ...omitKeys(toSnakeRecord(state), ['example_image_attachment_ids']),
+      example_images: mapExampleImages(state.exampleImageAttachmentIds, attachments),
+    })),
+  };
+}
+
+function mapRandomization(randomization: SubsceneVersion['randomization'], attachments?: SubsceneVersion['attachments']): unknown {
+  const mapped = toSnakeObject(omitKeys(randomization, ['material' + 'StateDuringOperation'])) as Record<string, unknown>;
+  const materialInitialState = mapped.material_initial_state as { rules?: Array<Record<string, unknown>> } | undefined;
+  if (materialInitialState?.rules) {
+    materialInitialState.rules = materialInitialState.rules.map((rule, index) => {
+      const source = randomization.materialInitialState.rules[index];
+      return {
+        ...omitKeys(rule, ['example_image_attachment_ids']),
+        example_images: mapExampleImages(source?.exampleImageAttachmentIds, attachments),
+      };
+    });
+  }
+  return mapped;
 }
 
 function mapOperation(operation: SubsceneVersion['operation']): unknown {
@@ -129,9 +168,9 @@ function mapScenario(
     target_duration_hours: targetDurationHours,
     materials: mapMaterials(subscene.materials),
     robot_state: toSnakeObject(subscene.robotState),
-    randomization: mapRandomization(subscene.randomization),
+    randomization: mapRandomization(subscene.randomization, subscene.attachments),
     operation: mapOperation(subscene.operation),
-    object_states: mapObjectStates(subscene.objectStates),
+    object_states: mapObjectStates(subscene.objectStates, subscene.attachments),
     annotation: mapAnnotation(subscene.annotation),
     references: toSnakeObject(subscene.references),
   };

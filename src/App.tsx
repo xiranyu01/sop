@@ -68,6 +68,8 @@ type InitialLocationRow = {
   poses: string[];
   forms: string[];
   parameters: string[];
+  collectorInstruction: string;
+  exampleImageAttachmentIds: string[];
   constraints: string[];
 };
 
@@ -77,6 +79,8 @@ type MaterialInitialRandomizationRow = {
   targetMaterials: string[];
   changeIntervalRecords: number;
   randomizedFields: string[];
+  collectorInstruction: string;
+  exampleImageAttachmentIds: string[];
   constraints: string;
 };
 
@@ -104,6 +108,11 @@ type PrintableSection = {
   description?: string;
   content: string;
 };
+
+type StateImageUploadTarget =
+  | { kind: 'initial'; index: number }
+  | { kind: 'target'; index: number }
+  | { kind: 'randomization'; index: number };
 
 type PrintableReport = {
   title: string;
@@ -715,6 +724,56 @@ function reportList(values: Array<string | number | undefined | null> | undefine
   return items.length ? items.join('、') : '-';
 }
 
+function formatImageNames(ids: string[] | undefined, attachments: RequirementAttachment[] | undefined): string {
+  const names = (ids || [])
+    .map((id) => attachments?.find((attachment) => attachment.id === id)?.name || id)
+    .filter(Boolean);
+  return names.length ? names.join('、') : '-';
+}
+
+function stateSentence(row: InitialLocationRow): string {
+  const parts = [`把 ${row.object || '物料'}`];
+  const primary = [row.primaryReferences[0], row.primaryRelativePositions[0]].filter(Boolean).join('的');
+  if (primary) parts.push(`放在 ${primary}`);
+  if (row.supportSurfaces[0]) parts.push(`接触 ${row.supportSurfaces[0]}`);
+  if (row.regions.length) parts.push(`区域为 ${row.regions.join('、')}`);
+  if (row.secondaryReferences[0] || row.secondaryRelativePositions[0]) {
+    parts.push(`更具体位置为 ${[row.secondaryReferences[0], row.secondaryRelativePositions[0]].filter(Boolean).join('的')}`);
+  }
+  if (row.poses.length) parts.push(`姿态为 ${row.poses.join('、')}`);
+  if (row.forms.length) parts.push(`形态为 ${row.forms.join('、')}`);
+  if (row.parameters.length) parts.push(`参数为 ${row.parameters.join('、')}`);
+  return parts.join('，') + '。';
+}
+
+function stateReportLine(row: InitialLocationRow, attachments?: RequirementAttachment[]): string {
+  return [
+    stateSentence(row),
+    row.collectorInstruction ? `采集员说明：${row.collectorInstruction}` : '',
+    row.exampleImageAttachmentIds.length ? `示例图：${formatImageNames(row.exampleImageAttachmentIds, attachments)}` : '',
+    row.constraints.length ? `限制条件：${row.constraints.join('、')}` : '',
+  ]
+    .filter(Boolean)
+    .join('；');
+}
+
+function materialRandomizationSentence(row: MaterialInitialRandomizationRow): string {
+  const materials = row.targetMaterials.length ? row.targetMaterials.join('、') : '所选物料';
+  const fields = row.randomizedFields.length ? row.randomizedFields.join('、') : '位置/姿态/形态';
+  return `${materials} 每 ${row.changeIntervalRecords || 1} 条换一次，需要变化 ${fields}。`;
+}
+
+function materialRandomizationReportLine(row: MaterialInitialRandomizationRow, attachments?: RequirementAttachment[]): string {
+  return [
+    materialRandomizationSentence(row),
+    row.collectorInstruction ? `采集员说明：${row.collectorInstruction}` : '',
+    row.exampleImageAttachmentIds.length ? `示例图：${formatImageNames(row.exampleImageAttachmentIds, attachments)}` : '',
+    row.constraints ? `限制条件：${row.constraints}` : '',
+  ]
+    .filter(Boolean)
+    .join('；');
+}
+
 function keyValueReport(rows: Array<[string, string | number | boolean | undefined | null]>): string {
   return rows.map(([label, value]) => `${label}：${reportValue(value)}`).join('\n');
 }
@@ -774,32 +833,16 @@ function materialsReport(materials: SubsceneVersion['materials']): string {
     .join('\n');
 }
 
-function initialStatesReport(states: SubsceneVersion['objectStates']['initial']): string {
+function initialStatesReport(states: SubsceneVersion['objectStates']['initial'], attachments?: RequirementAttachment[]): string {
   const rows = initialStateRows(states);
   if (!rows.length) return '-';
-  return rows.map((row, index) => `${index + 1}. ${stateRowReport(row, '允许')}`).join('\n');
+  return rows.map((row, index) => `${index + 1}. ${stateReportLine(row, attachments)}`).join('\n');
 }
 
-function targetStatesReport(states: SubsceneVersion['objectStates']['target']): string {
+function targetStatesReport(states: SubsceneVersion['objectStates']['target'], attachments?: RequirementAttachment[]): string {
   const rows = targetStateRows(states);
   if (!rows.length) return '-';
-  return rows.map((row, index) => `${index + 1}. ${stateRowReport(row, '目标')}`).join('\n');
-}
-
-function stateRowReport(row: InitialLocationRow, label: string): string {
-  return [
-    `${row.object || '-'}`,
-    `${label}一级参照物 ${reportList(row.primaryReferences)}`,
-    `一级相对位置 ${reportList(row.primaryRelativePositions)}`,
-    `支撑面 ${reportList(row.supportSurfaces)}`,
-    `区域 ${reportList(row.regions)}`,
-    `二级参照物 ${reportList(row.secondaryReferences)}`,
-    `二级相对位置 ${reportList(row.secondaryRelativePositions)}`,
-    `姿态 ${reportList(row.poses)}`,
-    `形态 ${reportList(row.forms)}`,
-    `参数 ${reportList(row.parameters)}`,
-    `限制 ${reportList(row.constraints)}`,
-  ].join('；');
+  return rows.map((row, index) => `${index + 1}. ${stateReportLine(row, attachments)}`).join('\n');
 }
 
 function robotRandomizationReport(version: SubsceneVersion): string {
@@ -818,14 +861,7 @@ function robotRandomizationReport(version: SubsceneVersion): string {
 function materialRandomizationReport(version: SubsceneVersion): string {
   const rows = materialInitialRandomizationRows(version.randomization);
   if (!rows.length) return '-';
-  return rows
-    .map(
-      (row, index) =>
-        `${index + 1}. ${reportList(row.targetMaterials)}：每 ${row.changeIntervalRecords || 1} 条变换一次；随机字段 ${reportList(
-          row.randomizedFields,
-        )}；限制 ${reportValue(row.constraints)}`,
-    )
-    .join('\n');
+  return rows.map((row, index) => `${index + 1}. ${materialRandomizationReportLine(row, version.attachments)}`).join('\n');
 }
 
 function stepRandomizationReport(value?: { enabled: boolean; startOrder: number; endOrder: number }): string {
@@ -881,9 +917,13 @@ function subsceneReportSections(scene: Scene, subscene: Subscene, version: Subsc
     },
     {
       title: '物料状态',
-      content: ['物料初始状态：', initialStatesReport(version.objectStates.initial), '', '物料目标状态：', targetStatesReport(version.objectStates.target)].join(
-        '\n',
-      ),
+      content: [
+        '物料初始状态：',
+        initialStatesReport(version.objectStates.initial, version.attachments),
+        '',
+        '物料目标状态：',
+        targetStatesReport(version.objectStates.target, version.attachments),
+      ].join('\n'),
     },
     {
       title: '物料随机性',
@@ -3203,11 +3243,11 @@ function ScenePage({
     setSceneEditorOpen(false);
   }
 
-  async function uploadSubsceneAttachment(file: File) {
-    if (!scene || !subscene || !version || !canEditVersion) return;
+  async function uploadSubsceneAttachment(file: File): Promise<RequirementAttachment | undefined> {
+    if (!scene || !subscene || !version || !canEditVersion) return undefined;
     if (file.size > 1024 * 1024 * 1024) {
       window.alert('单个附件不能超过 1G');
-      return;
+      return undefined;
     }
     let uploadInit: AttachmentUploadInit | undefined;
     try {
@@ -3230,7 +3270,7 @@ function ScenePage({
         parts.push({ partNumber: index + 1, etag: part.etag });
         setAttachmentUpload({ fileName: file.name, progress: Math.round(((index + 1) / totalParts) * 100) });
       }
-      await api.completeSubsceneAttachmentUpload(
+      const attachment = await api.completeSubsceneAttachmentUpload(
         scene.id,
         subscene.code,
         version.version,
@@ -3241,6 +3281,7 @@ function ScenePage({
       );
       const nextData = await api.data();
       onScenesChange(nextData.scenes);
+      return attachment;
     } catch (error) {
       if (uploadInit) {
         await api.abortSubsceneAttachmentUpload(
@@ -3545,6 +3586,9 @@ function ScenePage({
                 version={version}
                 materials={version.materials}
                 readOnly={!canEditVersion}
+                storageStatus={attachmentStorageStatus}
+                upload={attachmentUpload}
+                onUploadImage={(file) => onRun(() => uploadSubsceneAttachment(file), '示例图片已上传')}
                 onSave={(patch) => {
                   if (!canEditVersion) return;
                   void saveCurrentSubscene(patch);
@@ -4502,12 +4546,18 @@ function SubsceneStateEditor({
   version,
   materials,
   readOnly,
+  storageStatus,
+  upload,
+  onUploadImage,
   onSave,
 }: {
   globalFields: GlobalField[];
   version: SubsceneVersion;
   materials: SubsceneVersion['materials'];
   readOnly: boolean;
+  storageStatus: AttachmentStorageStatus;
+  upload: { fileName: string; progress: number } | null;
+  onUploadImage: (file: File) => Promise<RequirementAttachment | undefined>;
   onSave: (patch: Partial<SubsceneVersion>) => void;
 }) {
   const rows = initialStateRows(version.objectStates.initial);
@@ -4516,6 +4566,7 @@ function SubsceneStateEditor({
   const materialOptions = materials.map((material) => material.type);
   const [expandedInitialRows, setExpandedInitialRows] = useState<Record<number, boolean>>({});
   const [expandedTargetRows, setExpandedTargetRows] = useState<Record<number, boolean>>({});
+  const [expandedRandomRows, setExpandedRandomRows] = useState<Record<number, boolean>>({});
 
   function valuesForGroup(group: GlobalFieldGroup, currentValues: string[] = []): string[] {
     return fieldOptions(globalFields, group, currentValues).map((option) => option.value);
@@ -4553,19 +4604,40 @@ function SubsceneStateEditor({
     saveMaterialInitialRandomRows(materialInitialRandomRows.map((row, currentIndex) => (currentIndex === index ? { ...row, ...patch } : row)));
   }
 
-  function stateSummary(row: InitialLocationRow): string {
-    return [
-      row.regions.length ? `区域 ${row.regions.join('、')}` : '',
-      row.secondaryReferences.length || row.secondaryRelativePositions.length
-        ? `二级 ${[...row.secondaryReferences, ...row.secondaryRelativePositions].join('、')}`
-        : '',
-      row.poses.length ? `姿态 ${row.poses.join('、')}` : '',
-      row.forms.length ? `形态 ${row.forms.join('、')}` : '',
-      row.parameters.length ? `参数 ${row.parameters.join('、')}` : '',
-      row.constraints.length ? `限制 ${row.constraints.length} 条` : '',
-    ]
-      .filter(Boolean)
-      .join('；');
+  async function bindUploadedImage(target: StateImageUploadTarget, file: File) {
+    if (!file.type.startsWith('image/')) {
+      window.alert('这里只能上传图片');
+      return;
+    }
+    const attachment = await onUploadImage(file);
+    if (!attachment) return;
+    if (target.kind === 'initial') {
+      const row = rows[target.index];
+      updateRow(target.index, { exampleImageAttachmentIds: [...row.exampleImageAttachmentIds, attachment.id] });
+    }
+    if (target.kind === 'target') {
+      const row = targetRows[target.index];
+      updateTargetRow(target.index, { exampleImageAttachmentIds: [...row.exampleImageAttachmentIds, attachment.id] });
+    }
+    if (target.kind === 'randomization') {
+      const row = materialInitialRandomRows[target.index];
+      updateMaterialInitialRandomRow(target.index, { exampleImageAttachmentIds: [...row.exampleImageAttachmentIds, attachment.id] });
+    }
+  }
+
+  function unbindImage(target: StateImageUploadTarget, attachmentId: string) {
+    if (target.kind === 'initial') {
+      const row = rows[target.index];
+      updateRow(target.index, { exampleImageAttachmentIds: row.exampleImageAttachmentIds.filter((id) => id !== attachmentId) });
+    }
+    if (target.kind === 'target') {
+      const row = targetRows[target.index];
+      updateTargetRow(target.index, { exampleImageAttachmentIds: row.exampleImageAttachmentIds.filter((id) => id !== attachmentId) });
+    }
+    if (target.kind === 'randomization') {
+      const row = materialInitialRandomRows[target.index];
+      updateMaterialInitialRandomRow(target.index, { exampleImageAttachmentIds: row.exampleImageAttachmentIds.filter((id) => id !== attachmentId) });
+    }
   }
 
   function stateDetailEditor<T extends InitialLocationRow>({
@@ -4578,331 +4650,441 @@ function SubsceneStateEditor({
     update: (index: number, patch: Partial<T>) => void;
   }) {
     return (
-      <div className="row-detail-grid">
-        <label>
-          <span>区域</span>
-          <MultiEnumInput
-            value={row.regions}
-            options={valuesForGroup('region', row.regions)}
-            placeholder="选择区域"
-            disabled={readOnly}
-            allowCustom
-            onChange={(regions) => update(index, { regions } as Partial<T>)}
-          />
-        </label>
-        <label>
-          <span>二级参照物</span>
-          <SingleEnumSelect
-            value={row.secondaryReferences}
-            options={valuesForGroup('reference_object', row.secondaryReferences)}
-            placeholder="选择参照物"
-            disabled={readOnly}
-            allowCustom
-            onChange={(secondaryReferences) => update(index, { secondaryReferences } as Partial<T>)}
-          />
-        </label>
-        <label>
-          <span>二级相对位置</span>
-          <SingleEnumSelect
-            value={row.secondaryRelativePositions}
-            options={valuesForGroup('relative_position', row.secondaryRelativePositions)}
-            placeholder="选择相对位置"
-            disabled={readOnly}
-            allowCustom
-            onChange={(secondaryRelativePositions) => update(index, { secondaryRelativePositions } as Partial<T>)}
-          />
-        </label>
-        <label>
-          <span>姿态</span>
-          <MultiEnumInput
-            value={row.poses}
-            options={valuesForGroup('pose', row.poses)}
-            placeholder="选择姿态"
-            disabled={readOnly}
-            allowCustom
-            onChange={(poses) => update(index, { poses } as Partial<T>)}
-          />
-        </label>
-        <label>
-          <span>形态</span>
-          <MultiEnumInput
-            value={row.forms}
-            options={valuesForGroup('form', row.forms)}
-            placeholder="选择形态"
-            disabled={readOnly}
-            allowCustom
-            onChange={(forms) => update(index, { forms } as Partial<T>)}
-          />
-        </label>
-        <label>
-          <span>参数</span>
-          <MultiEnumInput
-            value={row.parameters}
-            options={valuesForGroup('parameter', row.parameters)}
-            placeholder="选择参数"
-            disabled={readOnly}
-            allowCustom
-            onChange={(parameters) => update(index, { parameters } as Partial<T>)}
-          />
-        </label>
-        <label className="row-detail-wide">
-          <span>限制条件</span>
-          <LongTextDialogEditor
-            title="物料状态限制条件"
-            value={joinEnum(row.constraints)}
-            disabled={readOnly}
-            placeholder="限制条件"
-            onChange={(constraints) => update(index, { constraints: splitEnum(constraints) } as Partial<T>)}
-          />
-        </label>
+      <div className="state-card-detail">
+        <section>
+          <h4>位置关系</h4>
+          <div className="row-detail-grid">
+            <label>
+              <span>放在/靠近什么</span>
+              <SingleEnumSelect
+                value={row.primaryReferences}
+                options={valuesForGroup('reference_object', row.primaryReferences)}
+                placeholder="选择参照物"
+                disabled={readOnly}
+                allowCustom
+                onChange={(primaryReferences) => update(index, { primaryReferences } as Partial<T>)}
+              />
+            </label>
+            <label>
+              <span>在它的哪里</span>
+              <SingleEnumSelect
+                value={row.primaryRelativePositions}
+                options={valuesForGroup('relative_position', row.primaryRelativePositions)}
+                placeholder="选择相对位置"
+                disabled={readOnly}
+                allowCustom
+                onChange={(primaryRelativePositions) => update(index, { primaryRelativePositions } as Partial<T>)}
+              />
+            </label>
+            <label>
+              <span>接触哪个面</span>
+              <SingleEnumSelect
+                value={row.supportSurfaces}
+                options={valuesForGroup('support_surface', row.supportSurfaces)}
+                placeholder="选择支撑面"
+                disabled={readOnly}
+                allowCustom
+                onChange={(supportSurfaces) => update(index, { supportSurfaces } as Partial<T>)}
+              />
+            </label>
+          </div>
+        </section>
+        <section>
+          <h4>更具体的位置</h4>
+          <div className="row-detail-grid">
+            <label>
+              <span>区域</span>
+              <MultiEnumInput
+                value={row.regions}
+                options={valuesForGroup('region', row.regions)}
+                placeholder="选择区域"
+                disabled={readOnly}
+                allowCustom
+                onChange={(regions) => update(index, { regions } as Partial<T>)}
+              />
+            </label>
+            <label>
+              <span>更靠近什么</span>
+              <SingleEnumSelect
+                value={row.secondaryReferences}
+                options={valuesForGroup('reference_object', row.secondaryReferences)}
+                placeholder="选择参照物"
+                disabled={readOnly}
+                allowCustom
+                onChange={(secondaryReferences) => update(index, { secondaryReferences } as Partial<T>)}
+              />
+            </label>
+            <label>
+              <span>在它的哪里</span>
+              <SingleEnumSelect
+                value={row.secondaryRelativePositions}
+                options={valuesForGroup('relative_position', row.secondaryRelativePositions)}
+                placeholder="选择相对位置"
+                disabled={readOnly}
+                allowCustom
+                onChange={(secondaryRelativePositions) => update(index, { secondaryRelativePositions } as Partial<T>)}
+              />
+            </label>
+          </div>
+        </section>
+        <section>
+          <h4>怎么放</h4>
+          <div className="row-detail-grid">
+            <label>
+              <span>姿态</span>
+              <MultiEnumInput
+                value={row.poses}
+                options={valuesForGroup('pose', row.poses)}
+                placeholder="选择姿态"
+                disabled={readOnly}
+                allowCustom
+                onChange={(poses) => update(index, { poses } as Partial<T>)}
+              />
+            </label>
+            <label>
+              <span>形态</span>
+              <MultiEnumInput
+                value={row.forms}
+                options={valuesForGroup('form', row.forms)}
+                placeholder="选择形态"
+                disabled={readOnly}
+                allowCustom
+                onChange={(forms) => update(index, { forms } as Partial<T>)}
+              />
+            </label>
+            <label>
+              <span>参数</span>
+              <MultiEnumInput
+                value={row.parameters}
+                options={valuesForGroup('parameter', row.parameters)}
+                placeholder="选择参数"
+                disabled={readOnly}
+                allowCustom
+                onChange={(parameters) => update(index, { parameters } as Partial<T>)}
+              />
+            </label>
+          </div>
+        </section>
+        <section>
+          <h4>补充说明</h4>
+          <div className="row-detail-grid">
+            <label className="row-detail-wide">
+              <span>给采集员看的说明</span>
+              <LongTextDialogEditor
+                title="采集员说明"
+                value={row.collectorInstruction}
+                disabled={readOnly}
+                placeholder="例如：牙刷可以放在洗手池台面左侧或右侧，但不要放进水槽里。"
+                onChange={(collectorInstruction) => update(index, { collectorInstruction } as Partial<T>)}
+              />
+            </label>
+            <label className="row-detail-wide">
+              <span>限制条件</span>
+              <LongTextDialogEditor
+                title="物料状态限制条件"
+                value={joinEnum(row.constraints)}
+                disabled={readOnly}
+                placeholder="限制条件"
+                onChange={(constraints) => update(index, { constraints: splitEnum(constraints) } as Partial<T>)}
+              />
+            </label>
+          </div>
+        </section>
       </div>
     );
   }
 
-  function stateColumns<T extends InitialLocationRow>({
-    expandedRows,
+  function imagePanel(target: StateImageUploadTarget, imageIds: string[]) {
+    const images = imageIds
+      .map((id) => version.attachments?.find((attachment) => attachment.id === id))
+      .filter(Boolean) as RequirementAttachment[];
+    const disabled = readOnly || Boolean(upload) || !storageStatus.enabled;
+    return (
+      <div className="state-image-panel">
+        <div className="state-image-header">
+          <span>示例图片</span>
+          <label className={`ghost-button file-label ${disabled ? 'disabled' : ''}`} title={!storageStatus.enabled ? storageStatus.message : undefined}>
+            上传图片
+            <input
+              type="file"
+              hidden
+              accept="image/*"
+              disabled={disabled}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (file) void bindUploadedImage(target, file);
+              }}
+            />
+          </label>
+        </div>
+        {!storageStatus.enabled && <p className="state-image-warning">{storageStatus.message}</p>}
+        {upload && <p className="state-image-warning">正在上传 {upload.fileName}：{upload.progress}%</p>}
+        {images.length === 0 ? (
+          <p className="state-image-empty">暂无示例图</p>
+        ) : (
+          <div className="state-image-list">
+            {images.map((image) => (
+              <div className="state-image-item" key={image.id}>
+                <AttachmentThumbnail attachment={image} />
+                <div>
+                  <strong>{image.name}</strong>
+                  <span>{formatFileSize(image.size)}</span>
+                </div>
+                <button type="button" className="text-button danger" disabled={readOnly} onClick={() => unbindImage(target, image.id)}>
+                  解绑
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function stateCard<T extends InitialLocationRow>({
+    row,
+    index,
+    kind,
+    expanded,
     toggleExpanded,
     update,
     remove,
   }: {
+    row: T;
+    index: number;
+    kind: 'initial' | 'target';
+    expanded: boolean;
+    toggleExpanded: (index: number) => void;
+    update: (index: number, patch: Partial<T>) => void;
+    remove: (index: number) => void;
+  }) {
+    return (
+      <section className="state-card">
+        <div className="state-card-main">
+          <div className="state-card-top">
+            <label>
+              <span>物料</span>
+              <select value={row.object} disabled={readOnly} onChange={(event) => update(index, { object: event.target.value } as Partial<T>)}>
+                <option value="">选择物料</option>
+                {Array.from(new Set([...materialOptions, row.object].filter(Boolean))).map((option) => (
+                  <option value={option} key={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="state-card-actions">
+              <button type="button" className="ghost-button" onClick={() => toggleExpanded(index)}>
+                {expanded ? '收起字段' : '展开编辑'}
+              </button>
+              <button type="button" className="text-button danger" disabled={readOnly} onClick={() => remove(index)}>
+                移除
+              </button>
+            </div>
+          </div>
+          <p className="state-human-summary">{stateSentence(row)}</p>
+          {row.collectorInstruction && <p className="state-instruction">采集员说明：{row.collectorInstruction}</p>}
+          {row.exampleImageAttachmentIds.length > 0 && (
+            <p className="state-image-summary">示例图：{formatImageNames(row.exampleImageAttachmentIds, version.attachments)}</p>
+          )}
+          {expanded && stateDetailEditor({ row, index, update })}
+        </div>
+        {imagePanel({ kind, index }, row.exampleImageAttachmentIds)}
+      </section>
+    );
+  }
+
+  function stateCardList<T extends InitialLocationRow>({
+    title,
+    description,
+    items,
+    kind,
+    expandedRows,
+    toggleExpanded,
+    update,
+    remove,
+    add,
+    emptyText,
+  }: {
+    title: string;
+    description: string;
+    items: T[];
+    kind: 'initial' | 'target';
     expandedRows: Record<number, boolean>;
     toggleExpanded: (index: number) => void;
     update: (index: number, patch: Partial<T>) => void;
     remove: (index: number) => void;
-  }): Array<DataTableColumn<T>> {
-    return [
-    {
-      key: 'object',
-      title: '物料',
-      width: '150px',
-      render: (row, index) => (
-        <select value={row.object} disabled={readOnly} onChange={(event) => update(index, { object: event.target.value } as Partial<T>)}>
-          <option value="">选择物料</option>
-          {Array.from(new Set([...materialOptions, row.object].filter(Boolean))).map((option) => (
-            <option value={option} key={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-      ),
-    },
-    {
-      key: 'primaryReference',
-      title: '一级参照物',
-      width: '220px',
-      allowOverflow: true,
-      render: (row, index) => (
-        <SingleEnumSelect
-          value={row.primaryReferences}
-          options={valuesForGroup('reference_object', row.primaryReferences)}
-          placeholder="选择参照物"
-          disabled={readOnly}
-          allowCustom
-          onChange={(primaryReferences) => update(index, { primaryReferences } as Partial<T>)}
-        />
-      ),
-    },
-    {
-      key: 'primaryRelativePosition',
-      title: '一级相对位置',
-      width: '220px',
-      allowOverflow: true,
-      render: (row, index) => (
-        <SingleEnumSelect
-          value={row.primaryRelativePositions}
-          options={valuesForGroup('relative_position', row.primaryRelativePositions)}
-          placeholder="选择相对位置"
-          disabled={readOnly}
-          allowCustom
-          onChange={(primaryRelativePositions) => update(index, { primaryRelativePositions } as Partial<T>)}
-        />
-      ),
-    },
-    {
-      key: 'supportSurface',
-      title: '支撑面',
-      width: '220px',
-      allowOverflow: true,
-      render: (row, index) => (
-        <SingleEnumSelect
-          value={row.supportSurfaces}
-          options={valuesForGroup('support_surface', row.supportSurfaces)}
-          placeholder="选择支撑面"
-          disabled={readOnly}
-          allowCustom
-          onChange={(supportSurfaces) => update(index, { supportSurfaces } as Partial<T>)}
-        />
-      ),
-    },
-    {
-      key: 'summary',
-      title: '详情摘要',
-      width: '520px',
-      render: (row, index) => (
-        <div className="row-summary-stack">
-          <button type="button" className="summary-edit-button" onClick={() => toggleExpanded(index)}>
-            <span>{stateSummary(row) || '展开填写更多状态字段'}</span>
-          </button>
-          {expandedRows[index] && stateDetailEditor({ row, index, update })}
-        </div>
-      ),
-    },
-    {
-      key: 'action',
-      title: '操作',
-      width: '86px',
-      render: (_row, index) => (
-        <button
-          className="text-button danger"
-          disabled={readOnly}
-          onClick={() => remove(index)}
-        >
-          移除
-        </button>
-      ),
-    },
-  ];
-  }
-
-  const initialStateColumns = stateColumns<InitialLocationRow>({
-    expandedRows: expandedInitialRows,
-    toggleExpanded: (index) => setExpandedInitialRows((current) => ({ ...current, [index]: !current[index] })),
-    update: updateRow,
-    remove: (index) => saveRows(rows.filter((_, currentIndex) => currentIndex !== index)),
-  });
-  const targetStateColumns = stateColumns<TargetStateRow>({
-    expandedRows: expandedTargetRows,
-    toggleExpanded: (index) => setExpandedTargetRows((current) => ({ ...current, [index]: !current[index] })),
-    update: updateTargetRow,
-    remove: (index) => saveTargetRows(targetRows.filter((_, currentIndex) => currentIndex !== index)),
-  });
-
-  const materialInitialRandomColumns: Array<DataTableColumn<MaterialInitialRandomizationRow>> = [
-    {
-      key: 'materials',
-      title: '物料',
-      width: '240px',
-      allowOverflow: true,
-      render: (row, index) => (
-        <MultiEnumInput
-          value={row.targetMaterials}
-          options={materialOptions}
-          placeholder="选择物料"
-          disabled={readOnly}
-          onChange={(targetMaterials) => updateMaterialInitialRandomRow(index, { targetMaterials })}
-        />
-      ),
-    },
-    {
-      key: 'frequency',
-      title: '每多少条变换',
-      width: '140px',
-      render: (row, index) => (
-        <input
-          type="number"
-          min={1}
-          value={row.changeIntervalRecords || 1}
-          disabled={readOnly}
-          onChange={(event) => updateMaterialInitialRandomRow(index, { changeIntervalRecords: Number(event.target.value) || 1 })}
-        />
-      ),
-    },
-    {
-      key: 'fields',
-      title: '随机性要求',
-      width: '260px',
-      allowOverflow: true,
-      render: (row, index) => (
-        <MultiSelectInput
-          value={row.randomizedFields}
-          options={uniqueOptions([
-            ...fieldOptions(globalFields, 'material_random_field', row.randomizedFields),
-            ...fallbackMaterialRandomOptions,
-          ])}
-          disabled={readOnly}
-          onChange={(randomizedFields) => updateMaterialInitialRandomRow(index, { randomizedFields })}
-        />
-      ),
-    },
-    {
-      key: 'constraints',
-      title: '限制条件',
-      width: '260px',
-      render: (row, index) => (
-        <LongTextDialogEditor
-          title="物料初始状态随机性限制条件"
-          value={row.constraints}
-          disabled={readOnly}
-          placeholder="限制条件"
-          onChange={(constraints) => updateMaterialInitialRandomRow(index, { constraints })}
-        />
-      ),
-    },
-    {
-      key: 'action',
-      title: '操作',
-      width: '86px',
-      render: (_row, index) => (
-        <button
-          className="text-button danger"
-          disabled={readOnly}
-          onClick={() => saveMaterialInitialRandomRows(materialInitialRandomRows.filter((_, currentIndex) => currentIndex !== index))}
-        >
-          移除
-        </button>
-      ),
-    },
-  ];
-
-  return (
-    <div className="state-editor">
-      <div className="embedded-table">
+    add: () => void;
+    emptyText: string;
+  }) {
+    return (
+      <div className="embedded-table state-card-section">
         <div className="embedded-table-header">
           <div>
-            <h3>物料初始状态</h3>
-            <p>物料从已选物料中选择；其他字段可从全局字段选择，也可新增当前子场景字段</p>
+            <h3>{title}</h3>
+            <p>{description}</p>
           </div>
-          <button
-            className="primary-button"
-            disabled={readOnly}
-            onClick={() => saveRows([...rows, emptyInitialLocationRow(materialOptions[0] || '')])}
-          >
+          <button className="primary-button" disabled={readOnly} onClick={add}>
             添加状态
           </button>
         </div>
-        <DataTable
-          rows={rows}
-          columns={initialStateColumns}
-          rowKey={(_row, index) => `initial-state-${index}`}
-          emptyText="暂无物料初始状态"
-        />
-      </div>
-      <div className="embedded-table">
-        <div className="embedded-table-header">
-          <div>
-            <h3>物料目标状态</h3>
-            <p>字段与物料初始状态一致，可描述目标位置、参照关系、姿态、形态和参数</p>
+        {items.length === 0 ? (
+          <div className="state-card-empty">{emptyText}</div>
+        ) : (
+          <div className="state-card-list">
+            {items.map((row, index) =>
+              stateCard({
+                row,
+                index,
+                kind,
+                expanded: expandedRows[index] ?? !readOnly,
+                toggleExpanded,
+                update,
+                remove,
+              }),
+            )}
           </div>
-          <button
-            className="primary-button"
-            disabled={readOnly}
-            onClick={() => saveTargetRows([...targetRows, emptyTargetStateRow(materialOptions[0] || '')])}
-          >
-            添加目标状态
-          </button>
-        </div>
-        <DataTable
-          rows={targetRows}
-          columns={targetStateColumns}
-          rowKey={(_row, index) => `target-state-${index}`}
-          emptyText="暂无物料目标状态"
-        />
+        )}
       </div>
-      <div className="embedded-table">
+    );
+  }
+
+  function randomizationCard(row: MaterialInitialRandomizationRow, index: number) {
+    const expanded = expandedRandomRows[index] ?? !readOnly;
+    return (
+      <section className="state-card">
+        <div className="state-card-main">
+          <div className="state-card-top">
+            <div>
+              <h4>物料状态随机性 {index + 1}</h4>
+              <p className="state-human-summary">{materialRandomizationSentence(row)}</p>
+            </div>
+            <div className="state-card-actions">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setExpandedRandomRows((current) => ({ ...current, [index]: !expanded }))}
+              >
+                {expanded ? '收起字段' : '展开编辑'}
+              </button>
+              <button
+                type="button"
+                className="text-button danger"
+                disabled={readOnly}
+                onClick={() => saveMaterialInitialRandomRows(materialInitialRandomRows.filter((_, currentIndex) => currentIndex !== index))}
+              >
+                移除
+              </button>
+            </div>
+          </div>
+          {row.collectorInstruction && <p className="state-instruction">采集员说明：{row.collectorInstruction}</p>}
+          {row.exampleImageAttachmentIds.length > 0 && (
+            <p className="state-image-summary">示例图：{formatImageNames(row.exampleImageAttachmentIds, version.attachments)}</p>
+          )}
+          {expanded && (
+            <div className="state-card-detail">
+              <section>
+                <h4>怎么随机</h4>
+                <div className="row-detail-grid">
+                  <label>
+                    <span>哪些物料</span>
+                    <MultiEnumInput
+                      value={row.targetMaterials}
+                      options={materialOptions}
+                      placeholder="选择物料"
+                      disabled={readOnly}
+                      onChange={(targetMaterials) => updateMaterialInitialRandomRow(index, { targetMaterials })}
+                    />
+                  </label>
+                  <label>
+                    <span>每 N 条换一次</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={row.changeIntervalRecords || 1}
+                      disabled={readOnly}
+                      onChange={(event) => updateMaterialInitialRandomRow(index, { changeIntervalRecords: Number(event.target.value) || 1 })}
+                    />
+                  </label>
+                  <label>
+                    <span>需要变化什么</span>
+                    <MultiSelectInput
+                      value={row.randomizedFields}
+                      options={uniqueOptions([
+                        ...fieldOptions(globalFields, 'material_random_field', row.randomizedFields),
+                        ...fallbackMaterialRandomOptions,
+                      ])}
+                      disabled={readOnly}
+                      onChange={(randomizedFields) => updateMaterialInitialRandomRow(index, { randomizedFields })}
+                    />
+                  </label>
+                </div>
+              </section>
+              <section>
+                <h4>补充说明</h4>
+                <div className="row-detail-grid">
+                  <label className="row-detail-wide">
+                    <span>给采集员看的说明</span>
+                    <LongTextDialogEditor
+                      title="物料状态随机性说明"
+                      value={row.collectorInstruction}
+                      disabled={readOnly}
+                      placeholder="例如：牙刷每条都换到洗手池台面不同区域，不要放进水槽内。"
+                      onChange={(collectorInstruction) => updateMaterialInitialRandomRow(index, { collectorInstruction })}
+                    />
+                  </label>
+                  <label className="row-detail-wide">
+                    <span>限制条件</span>
+                    <LongTextDialogEditor
+                      title="物料初始状态随机性限制条件"
+                      value={row.constraints}
+                      disabled={readOnly}
+                      placeholder="限制条件"
+                      onChange={(constraints) => updateMaterialInitialRandomRow(index, { constraints })}
+                    />
+                  </label>
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
+        {imagePanel({ kind: 'randomization', index }, row.exampleImageAttachmentIds)}
+      </section>
+    );
+  }
+
+  return (
+    <div className="state-editor">
+      {stateCardList<InitialLocationRow>({
+        title: '物料初始状态',
+        description: '给采集员看的位置和摆放要求，先看一句话和图片，需要时再展开字段',
+        items: rows,
+        kind: 'initial',
+        expandedRows: expandedInitialRows,
+        toggleExpanded: (index) => setExpandedInitialRows((current) => ({ ...current, [index]: !current[index] })),
+        update: updateRow,
+        remove: (index) => saveRows(rows.filter((_, currentIndex) => currentIndex !== index)),
+        add: () => saveRows([...rows, emptyInitialLocationRow(materialOptions[0] || '')]),
+        emptyText: '暂无物料初始状态',
+      })}
+      {stateCardList<TargetStateRow>({
+        title: '物料目标状态',
+        description: '描述操作完成后物料应该变成什么样',
+        items: targetRows,
+        kind: 'target',
+        expandedRows: expandedTargetRows,
+        toggleExpanded: (index) => setExpandedTargetRows((current) => ({ ...current, [index]: !current[index] })),
+        update: updateTargetRow,
+        remove: (index) => saveTargetRows(targetRows.filter((_, currentIndex) => currentIndex !== index)),
+        add: () => saveTargetRows([...targetRows, emptyTargetStateRow(materialOptions[0] || '')]),
+        emptyText: '暂无物料目标状态',
+      })}
+      <div className="embedded-table state-card-section">
         <div className="embedded-table-header">
           <div>
             <h3>物料初始状态随机性</h3>
-            <p>不同物料可设置不同随机字段与变换频率</p>
+            <p>说明哪些物料要随机变化、每几条变一次，以及变化到什么范围算合格</p>
           </div>
           <button
             className="primary-button"
@@ -4910,19 +5092,29 @@ function SubsceneStateEditor({
             onClick={() =>
               saveMaterialInitialRandomRows([
                 ...materialInitialRandomRows,
-                { targetMaterials: materialOptions[0] ? [materialOptions[0]] : [], changeIntervalRecords: 1, randomizedFields: [], constraints: '' },
+                {
+                  targetMaterials: materialOptions[0] ? [materialOptions[0]] : [],
+                  changeIntervalRecords: 1,
+                  randomizedFields: [],
+                  collectorInstruction: '',
+                  exampleImageAttachmentIds: [],
+                  constraints: '',
+                },
               ])
             }
           >
             添加随机性
           </button>
         </div>
-        <DataTable
-          rows={materialInitialRandomRows}
-          columns={materialInitialRandomColumns}
-          rowKey={(_row, index) => `material-initial-random-${index}`}
-          emptyText="暂无物料初始状态随机性"
-        />
+        {materialInitialRandomRows.length === 0 ? (
+          <div className="state-card-empty">暂无物料初始状态随机性</div>
+        ) : (
+          <div className="state-card-list">
+            {materialInitialRandomRows.map((row, index) => (
+              <div key={`material-initial-random-${index}`}>{randomizationCard(row, index)}</div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -5506,6 +5698,32 @@ function AttachmentField({
   );
 }
 
+function AttachmentThumbnail({ attachment }: { attachment: RequirementAttachment }) {
+  const [url, setUrl] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = '';
+    fetch(`/api/attachments/${encodeURIComponent(attachment.storageKey)}`, { headers: apiHeaders() })
+      .then((res) => (res.ok ? res.blob() : undefined))
+      .then((blob) => {
+        if (!blob || !active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment.storageKey]);
+
+  if (!url) {
+    return <div className="state-image-thumb-placeholder">图片</div>;
+  }
+  return <img src={url} alt={attachment.name} />;
+}
+
 function keyValueLines(value: string): Record<string, string> {
   return value.split('\n').reduce<Record<string, string>>((acc, line) => {
     const [key, ...rest] = line.split(':');
@@ -5561,6 +5779,8 @@ function emptyInitialLocationRow(object = ''): InitialLocationRow {
     poses: [],
     forms: [],
     parameters: [],
+    collectorInstruction: '',
+    exampleImageAttachmentIds: [],
     constraints: [],
   };
 }
@@ -5581,6 +5801,8 @@ function initialStateRows(states: SubsceneVersion['objectStates']['initial']): I
         poses: location.allowedPose,
         forms: location.allowedForm,
         parameters: (location as { parameters?: string[] }).parameters || [],
+        collectorInstruction: location.collectorInstruction || '',
+        exampleImageAttachmentIds: location.exampleImageAttachmentIds || [],
         constraints: location.constraints,
       };
     }),
@@ -5616,6 +5838,8 @@ function initialStatesFromRows(rows: InitialLocationRow[]): SubsceneVersion['obj
       allowedPose: row.poses,
       allowedForm: row.forms,
       parameters: row.parameters,
+      collectorInstruction: row.collectorInstruction,
+      exampleImageAttachmentIds: row.exampleImageAttachmentIds,
       constraints: row.constraints,
     });
     states.set(row.object, current);
@@ -5638,6 +5862,8 @@ function targetStateRows(states: SubsceneVersion['objectStates']['target']): Tar
       poses: state.requiredPose,
       forms: state.requiredForm,
       parameters: state.parameters || [],
+      collectorInstruction: state.collectorInstruction || '',
+      exampleImageAttachmentIds: state.exampleImageAttachmentIds || [],
       constraints: state.constraints || [],
     };
   });
@@ -5672,6 +5898,8 @@ function targetStatesFromRows(rows: TargetStateRow[]): SubsceneVersion['objectSt
         referencePath,
         supportSurface: joinEnum(row.supportSurfaces),
         parameters: row.parameters,
+        collectorInstruction: row.collectorInstruction,
+        exampleImageAttachmentIds: row.exampleImageAttachmentIds,
         constraints: row.constraints,
       };
     });
@@ -5738,6 +5966,8 @@ function materialInitialRandomizationRows(randomization: SubsceneVersion['random
       ...rule.randomizedFields.poses.map((item) => item.name),
       ...rule.randomizedFields.forms.map((item) => item.name),
     ],
+    collectorInstruction: rule.collectorInstruction || '',
+    exampleImageAttachmentIds: rule.exampleImageAttachmentIds || [],
     constraints: joinEnum(rule.constraints),
   }));
 }
@@ -5760,6 +5990,8 @@ function materialInitialRandomizationFromRows(rows: MaterialInitialRandomization
           .filter((name) => name.includes('form') || name.includes('形态'))
           .map((name) => ({ name, valueSource: 'object_states.initial.allowed_locations.allowed_form' })),
       },
+      collectorInstruction: row.collectorInstruction,
+      exampleImageAttachmentIds: row.exampleImageAttachmentIds,
       constraints: splitEnum(row.constraints),
     }));
 }

@@ -131,6 +131,8 @@ export interface AllowedLocation {
   allowedPose: string[];
   allowedForm: string[];
   parameters?: string[];
+  collectorInstruction?: string;
+  exampleImageAttachmentIds?: string[];
   constraints: string[];
 }
 
@@ -148,6 +150,8 @@ export interface ObjectTargetState {
   referencePath?: ReferenceStep[];
   supportSurface?: string;
   parameters?: string[];
+  collectorInstruction?: string;
+  exampleImageAttachmentIds?: string[];
   constraints?: string[];
 }
 
@@ -174,6 +178,8 @@ export interface Randomization {
         poses: Array<{ name: string; valueSource: string }>;
         forms: Array<{ name: string; valueSource: string }>;
       };
+      collectorInstruction?: string;
+      exampleImageAttachmentIds?: string[];
       constraints: string[];
     }>;
   };

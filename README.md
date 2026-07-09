@@ -1,6 +1,6 @@
 # SOP 需求管理网页
 
-一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.3` YAML，也可以导出 PDF 便于沟通和归档。
+一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.4` YAML，也可以导出 PDF 便于沟通和归档。
 
 线上主部署建议使用 Cloudflare Pages + Pages Functions + D1。GitHub Pages 只能托管静态页面，不能运行本项目的 `/api/*` 写入接口，也不能提供共享数据存储。
 
@@ -21,8 +21,8 @@
 ## Schema 版本
 
 - `app_data_v0.1`：本地 JSON / D1 主数据结构版本。
-- `requirement_yaml_v0.3`：客户需求 YAML 导出结构版本。
-- `task_sop_yaml_v0.1`：任务 SOP YAML 结构版本。
+- `requirement_yaml_v0.4`：客户需求 YAML 导出结构版本。
+- `task_sop_yaml_v0.2`：任务 SOP YAML 结构版本，附件、示例图和物料图片会输出可访问 URL。
 
 这些版本会写入 `data/metadata.json`，也会出现在需求 YAML 的 `schema_versions` 中，后续增删字段时可以按版本做兼容。
 

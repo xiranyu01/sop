@@ -7,11 +7,17 @@ import type {
   Requirement,
   RequirementVersion,
   RequestedSubscene,
+  RequirementAttachment,
   ScenarioMaterial,
   Scene,
   Subscene,
   SubsceneVersion,
+  TextItem,
 } from '../src/types';
+
+type BuildRequirementYamlOptions = {
+  attachmentPublicBaseUrl?: string;
+};
 
 function toSnakeObject(input: unknown): unknown {
   if (Array.isArray(input)) {
@@ -49,6 +55,15 @@ function omitKeys(input: object, keys: string[]): Record<string, unknown> {
     }
     return acc;
   }, {});
+}
+
+function publicAttachmentUrl(publicBaseUrl: string | undefined, storageKey: string): string {
+  if (publicBaseUrl) {
+    const base = publicBaseUrl.replace(/\/+$/, '');
+    const encodedKey = storageKey.split('/').map(encodeURIComponent).join('/');
+    return `${base}/${encodedKey}`;
+  }
+  return `/api/attachments/${encodeURIComponent(storageKey)}`;
 }
 
 function stableHash(value: string): string {
@@ -175,34 +190,58 @@ function findTaskSopVersion(
   throw new Error(`找不到任务 SOP ${requestedSceneName} / ${requestedTitle} 的版本 ${requestedVersion}`);
 }
 
-function mapMaterials(materials: ScenarioMaterial[]): unknown {
+function mapStatus(status: string): string {
+  const statusMap: Record<string, string> = {
+    draft: '草稿',
+    confirmed: '已确认',
+    archived: '已归档',
+    pending: '待补充',
+    ready: '已完成',
+    not_required: '不需要',
+    active: '启用',
+    inactive: '停用',
+  };
+  return statusMap[status] || status;
+}
+
+function mapQuantityMode(mode: string): string {
+  return mode === 'range' ? '范围' : mode === 'fixed' ? '固定' : mode;
+}
+
+function mapMaterials(materials: ScenarioMaterial[], allMaterials: AppData['materials'], options: BuildRequirementYamlOptions): unknown {
   return materials.map((material) => ({
     sku_id: material.skuId,
     material_id: material.materialId,
     type: material.type,
-    quantity: material.quantity,
+    quantity: {
+      ...material.quantity,
+      mode: mapQuantityMode(material.quantity.mode),
+    },
     color: material.color,
     material: material.material,
     package_type: material.packageType,
+    images: mapAttachments(allMaterials.find((item) => item.id === material.materialId)?.images, options),
   }));
 }
 
-function mapAttachments(attachments: SubsceneVersion['attachments']): unknown {
+function mapAttachments(attachments: RequirementAttachment[] | undefined, options: BuildRequirementYamlOptions): unknown {
   return (attachments || []).map((attachment) => ({
     id: attachment.id,
     name: attachment.name,
+    url: publicAttachmentUrl(options.attachmentPublicBaseUrl, attachment.storageKey),
     size: attachment.size,
     content_type: attachment.contentType,
     uploaded_at: attachment.uploadedAt,
   }));
 }
 
-function mapExampleImages(ids: string[] | undefined, attachments: SubsceneVersion['attachments']): unknown {
+function mapExampleImages(ids: string[] | undefined, attachments: SubsceneVersion['attachments'], options: BuildRequirementYamlOptions): unknown {
   return (ids || []).map((id) => {
     const attachment = attachments?.find((item) => item.id === id);
     return {
       attachment_id: id,
       name: attachment?.name || '',
+      url: attachment ? publicAttachmentUrl(options.attachmentPublicBaseUrl, attachment.storageKey) : '',
     };
   });
 }
@@ -213,54 +252,113 @@ function mapObjectStates(
     target: ObjectTargetState[];
   },
   attachments: SubsceneVersion['attachments'],
+  options: BuildRequirementYamlOptions,
 ): unknown {
   return {
     initial: states.initial.map((state) => ({
       object: state.object,
       allowed_locations: state.allowedLocations.map((location) => ({
         ...omitKeys(toSnakeRecord(location), ['example_image_attachment_ids']),
-        example_images: mapExampleImages(location.exampleImageAttachmentIds, attachments),
+        example_images: mapExampleImages(location.exampleImageAttachmentIds, attachments, options),
       })),
     })),
     target: states.target.map((state) => ({
       ...omitKeys(toSnakeRecord(state), ['example_image_attachment_ids']),
-      example_images: mapExampleImages(state.exampleImageAttachmentIds, attachments),
+      example_images: mapExampleImages(state.exampleImageAttachmentIds, attachments, options),
     })),
   };
 }
 
-function mapRandomization(randomization: SubsceneVersion['randomization'], attachments?: SubsceneVersion['attachments']): unknown {
-  const mapped = toSnakeObject(omitKeys(randomization, ['material' + 'StateDuringOperation'])) as Record<string, unknown>;
-  const materialInitialState = mapped.material_initial_state as { rules?: Array<Record<string, unknown>> } | undefined;
-  if (materialInitialState?.rules) {
-    materialInitialState.rules = materialInitialState.rules.map((rule, index) => {
-      const source = randomization.materialInitialState.rules[index];
-      return {
-        ...omitKeys(rule, ['example_image_attachment_ids']),
-        example_images: mapExampleImages(source?.exampleImageAttachmentIds, attachments),
-      };
-    });
-  }
-  return mapped;
+function mapChangeFrequency(frequency: string, interval?: number): string {
+  if (frequency === 'every_record') return '每条变换一次';
+  if (frequency === 'every_n_records') return (interval || 1) <= 1 ? '每条变换一次' : `每 ${interval} 条变换一次`;
+  if (frequency === 'per_batch') return '每批变换一次';
+  if (frequency === 'fixed') return '固定不变';
+  return frequency;
+}
+
+function normalizeRandomFieldName(name: string): string {
+  const normalized = name.toLowerCase();
+  if (normalized.includes('initial_position')) return '初始位置';
+  if (normalized.includes('initial_yaw')) return '初始朝向';
+  if (normalized === 'location' || normalized.includes('位置')) return name.includes('初始') ? name : '物料位置';
+  if (normalized === 'pose' || normalized.includes('姿态')) return name.includes('物料') ? name : '物料姿态';
+  if (normalized === 'form' || normalized.includes('形态')) return name.includes('物料') ? name : '物料形态';
+  return name;
+}
+
+function uniqueValues(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function mapRandomizedFields(
+  fields: Array<{ field?: string; displayName?: string; name?: string; constraints?: string[] }>,
+): Array<{ name: string; constraints: string[] }> {
+  return fields.map((field) => ({
+    name: normalizeRandomFieldName(field.displayName || field.name || field.field || ''),
+    constraints: field.constraints || [],
+  }));
+}
+
+function mapMaterialRandomizedFields(rule: SubsceneVersion['randomization']['materialInitialState']['rules'][number]): string[] {
+  return uniqueValues([
+    ...rule.randomizedFields.locations.map((item) => normalizeRandomFieldName(item.name)),
+    ...rule.randomizedFields.poses.map((item) => normalizeRandomFieldName(item.name)),
+    ...rule.randomizedFields.forms.map((item) => normalizeRandomFieldName(item.name)),
+  ]);
+}
+
+function mapRandomization(
+  randomization: SubsceneVersion['randomization'],
+  attachments: SubsceneVersion['attachments'],
+  options: BuildRequirementYamlOptions,
+): unknown {
+  const robotInitialState = randomization.robotInitialState;
+  return {
+    robot_initial_state: {
+      enabled: robotInitialState.enabled,
+      change_frequency: mapChangeFrequency(robotInitialState.changeFrequency, robotInitialState.changeIntervalRecords),
+      change_interval_records: robotInitialState.changeIntervalRecords || 1,
+      randomized_fields: mapRandomizedFields(robotInitialState.randomizedFields),
+    },
+    material_initial_state: {
+      rules: randomization.materialInitialState.rules.map((rule) => ({
+        target_materials: rule.targetMaterials,
+        change_frequency: mapChangeFrequency(rule.changeFrequency, rule.changeIntervalRecords),
+        change_interval_records: rule.changeIntervalRecords || 1,
+        randomized_fields: mapMaterialRandomizedFields(rule),
+        collector_instruction: rule.collectorInstruction || '',
+        constraints: rule.constraints || [],
+        example_images: mapExampleImages(rule.exampleImageAttachmentIds, attachments, options),
+      })),
+    },
+  };
+}
+
+function mapTextItems(items: TextItem[] | undefined): string[] {
+  return (items || []).map((item) => item.description || item.type || '').filter(Boolean);
 }
 
 function mapOperation(operation: SubsceneVersion['operation']): unknown {
-  return toSnakeObject({
+  const result: Record<string, unknown> = {
     steps: operation.steps,
-    stepRandomization: operation.stepRandomization,
-    allowedOperations: operation.allowedOperations,
-    acceptableOperations: operation.acceptableOperations || [],
-    forbiddenOperations: operation.forbiddenOperations,
-  });
+    allowed_operations: mapTextItems(operation.allowedOperations),
+    acceptable_operations: mapTextItems(operation.acceptableOperations),
+    forbidden_operations: mapTextItems(operation.forbiddenOperations),
+  };
+  if (operation.stepRandomization?.enabled) {
+    result.step_randomization = toSnakeObject(operation.stepRandomization);
+  }
+  return result;
 }
 
 function mapAnnotation(annotation: SubsceneVersion['annotation']): unknown {
-  return toSnakeObject({
-    status: annotation.status,
+  return {
+    status: mapStatus(annotation.status),
     steps: annotation.steps || [],
-    allowedOperations: annotation.allowedOperations || [],
-    forbiddenOperations: annotation.forbiddenOperations || [],
-  });
+    allowed_operations: mapTextItems(annotation.allowedOperations),
+    forbidden_operations: mapTextItems(annotation.forbiddenOperations),
+  };
 }
 
 function mapScenario(
@@ -272,6 +370,8 @@ function mapScenario(
   targetDurationHours: number,
   targetCollectionCount: number | undefined,
   subscene: SubsceneVersion,
+  allMaterials: AppData['materials'],
+  options: BuildRequirementYamlOptions,
 ): unknown {
   return {
     schema_version: taskSopYamlSchemaVersion,
@@ -281,20 +381,25 @@ function mapScenario(
     scene_name: sceneName,
     task_sop_name: taskSopName || subscene.title || subscene.description,
     description: subscene.description,
-    attachments: mapAttachments(subscene.attachments),
+    attachments: mapAttachments(subscene.attachments, options),
     target_duration_hours: targetDurationHours,
     target_collection_count: targetCollectionCount || 0,
-    materials: mapMaterials(subscene.materials),
+    materials: mapMaterials(subscene.materials, allMaterials, options),
     robot_state: toSnakeObject(subscene.robotState),
-    randomization: mapRandomization(subscene.randomization, subscene.attachments),
+    randomization: mapRandomization(subscene.randomization, subscene.attachments, options),
     operation: mapOperation(subscene.operation),
-    object_states: mapObjectStates(subscene.objectStates, subscene.attachments),
+    object_states: mapObjectStates(subscene.objectStates, subscene.attachments, options),
     annotation: mapAnnotation(subscene.annotation),
     references: toSnakeObject(subscene.references),
   };
 }
 
-export function buildRequirementYaml(data: AppData, requirement: Requirement, version: RequirementVersion): string {
+export function buildRequirementYaml(
+  data: AppData,
+  requirement: Requirement,
+  version: RequirementVersion,
+  options: BuildRequirementYamlOptions = {},
+): string {
   const customer = data.customers.find((item) => item.id === version.customerId);
   const robot = data.robotModels.find((item) => item.id === version.robotModelId);
 
@@ -331,6 +436,8 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       selected.targetDurationHours,
       selected.targetCollectionCount,
       taskSop,
+      data.materials,
+      options,
     ),
   );
 
@@ -347,7 +454,7 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       version: sopVersion,
       version_id: refVersionId,
       parent_version_id: refParentVersionId,
-      status: taskSop.status,
+      status: mapStatus(taskSop.status),
     },
   }));
 
@@ -364,11 +471,12 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       version: version.version,
       version_id: version.versionId || requirementVersionId(requirement.id, version.version),
       parent_version_id: version.parentVersionId || requirementParentVersionId(requirement, version.version),
-      status: version.status,
+      status: mapStatus(version.status),
       project_name: version.projectName,
       priority: version.priority,
       deadline: version.deadline,
       source_base_url: version.sourceBaseUrl || '',
+      attachments: mapAttachments(version.attachments, options),
       additional_notes: version.additionalNotes || '',
     },
     customer: {

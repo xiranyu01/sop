@@ -27,7 +27,7 @@ app.get('/api/storage-status', (req, res) => {
     res.status(401).json({ message: '访问密码无效或已过期' });
     return;
   }
-  res.json({ attachments: { enabled: true, message: '' } });
+  res.json({ attachments: { enabled: true, message: '', publicBaseUrl: process.env.R2_PUBLIC_BASE_URL || '' } });
 });
 
 app.get(/^\/api\/attachments\/(.+)$/, (req, res) => {
@@ -47,6 +47,7 @@ app.all('/api/*', async (req, res) => {
     body: Buffer.isBuffer(req.body) ? undefined : req.body,
     rawBody: Buffer.isBuffer(req.body) ? bufferToArrayBuffer(req.body) : undefined,
     authorization: req.header('authorization'),
+    attachmentPublicBaseUrl: process.env.R2_PUBLIC_BASE_URL,
     auth: {
       password: process.env.APP_PASSWORD,
       requireConfigured: false,

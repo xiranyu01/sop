@@ -38,6 +38,7 @@ export type ApiRequest = {
   body?: unknown;
   rawBody?: ArrayBuffer;
   authorization?: string | null;
+  attachmentPublicBaseUrl?: string;
   auth?: {
     password?: string;
     requireConfigured?: boolean;
@@ -1049,7 +1050,9 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
         ? requirement.versions.find((version) => version.version === (request.body as { version?: string }).version)
         : latestVersion(requirement.versions);
       if (!selectedVersion) return json(404, { message: '找不到客户需求版本' });
-      const yaml = buildRequirementYaml(data, requirement, selectedVersion);
+      const yaml = buildRequirementYaml(data, requirement, selectedVersion, {
+        attachmentPublicBaseUrl: request.attachmentPublicBaseUrl,
+      });
       const file = await store.writeExport(requirement.id, selectedVersion.version, yaml);
       return json(200, { yaml, path: file });
     }

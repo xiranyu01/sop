@@ -113,6 +113,7 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
     body,
     rawBody,
     authorization: context.request.headers.get('authorization'),
+    attachmentPublicBaseUrl: context.env.R2_PUBLIC_BASE_URL,
     auth: {
       password: context.env.APP_PASSWORD,
       requireConfigured: true,

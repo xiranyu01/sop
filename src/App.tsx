@@ -2367,10 +2367,11 @@ function RequirementPage({
     {
       key: 'count',
       title: '目标采集数量',
-      width: '160px',
+      width: '210px',
       render: (item) => (
         <span className="inline-edit">
           <InlineNumberInput
+            className="target-count-input"
             disabled={readonly}
             value={item.targetCollectionCount || 0}
             onCommit={(targetCollectionCount) => {
@@ -5698,11 +5699,13 @@ function InlineNumberInput({
   value,
   disabled = false,
   min = 0,
+  className = '',
   onCommit,
 }: {
   value: number;
   disabled?: boolean;
   min?: number;
+  className?: string;
   onCommit: (value: number) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
@@ -5723,6 +5726,7 @@ function InlineNumberInput({
 
   return (
     <input
+      className={className}
       type="number"
       min={min}
       value={draft}

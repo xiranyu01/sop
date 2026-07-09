@@ -1696,6 +1696,10 @@ button:disabled {
   padding: 4px 6px;
 }
 
+.inline-edit input.target-count-input {
+  width: 132px;
+}
+
 .sku-with-image {
   display: inline-flex;
   max-width: 100%;

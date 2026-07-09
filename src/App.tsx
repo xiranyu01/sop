@@ -1681,15 +1681,17 @@ function InfoItem({ label, value }: { label: string; value: ReactNode }) {
 function Modal({
   title,
   children,
+  panelClassName = '',
   onClose,
 }: {
   title: string;
   children: ReactNode;
+  panelClassName?: string;
   onClose: () => void;
 }) {
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="modal-panel" role="dialog" aria-modal="true" aria-label={title}>
+      <section className={`modal-panel ${panelClassName}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="panel-header">
           <h2>{title}</h2>
           <button className="ghost-button" onClick={onClose}>
@@ -5846,7 +5848,7 @@ function AttachmentPreviewModal({
   }, [attachment.storageKey, isImage, isVideo, publicUrl]);
 
   return (
-    <Modal title={`预览：${attachment.name}`} onClose={onClose}>
+    <Modal title={`预览：${attachment.name}`} panelClassName="attachment-preview-panel" onClose={onClose}>
       <div className="attachment-preview-modal">
         <div className="attachment-preview-stage">
           {isImage && previewUrl && <img src={previewUrl} alt={attachment.name} />}

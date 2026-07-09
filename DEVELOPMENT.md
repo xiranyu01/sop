@@ -68,7 +68,7 @@ pnpm build
 │   ├── r2AttachmentStore.ts      # Cloudflare R2 附件存储适配
 │   ├── store.ts                  # 本地 JSON 与 uploads 存储
 │   ├── versioning.ts             # 版本号和 ID 工具
-│   └── yamlExport.ts             # requirement_yaml_v0.2 导出映射
+│   └── yamlExport.ts             # requirement_yaml_v0.3 导出映射
 ├── src/
 │   ├── App.tsx                   # 主要页面和业务交互
 │   ├── App.css                   # 页面样式
@@ -88,6 +88,7 @@ pnpm build
 当前主数据都放在 `data/` 下：
 
 - `data/customers.json`：客户信息
+- `data/metadata.json`：当前数据 schema 与 YAML schema 版本
 - `data/materials.json`：物料信息，物料有自动生成的 `SKU1`、`SKU2` 等 SKU 编号，可保存图片元数据
 - `data/robot-models.json`：机器型号和 topic 信息
 - `data/scenes.json`：场景与任务 SOP 库；场景下包含多个任务 SOP，任务 SOP 有内部随机短编号和多个版本
@@ -237,10 +238,14 @@ Authorization: Bearer <APP_PASSWORD>
 
 ## YAML 导出
 
-当前导出 schema 是 `requirement_yaml_v0.2`，顶层结构为：
+当前导出 schema 是 `requirement_yaml_v0.3`，顶层结构为：
 
 ```yaml
-schema_version: requirement_yaml_v0.2
+schema_version: requirement_yaml_v0.3
+schema_versions:
+  app_data: app_data_v0.1
+  requirement_yaml: requirement_yaml_v0.3
+  task_sop_yaml: task_sop_yaml_v0.1
 requirement: {}
 customer: {}
 robot: {}
@@ -257,6 +262,7 @@ traceability: {}
 - 页面字段和 YAML 字段保持语义一致。
 - 客户需求先保存生产需求项；每个生产需求项再保存任务 SOP 名称、场景名和版本引用，导出时读取对应任务 SOP 版本正文。
 - 需求版本、任务 SOP 引用会导出 `version_id` 和 `parent_version_id`，方便追溯版本关系。
+- `production_requirement_items[].task_sop.schema_version` 和 `task_sop_details[].schema_version` 都会标明任务 SOP schema 版本。
 - 需求 ID 只用于系统追溯，不作为页面主要展示字段；任务 SOP 内部编号不写入客户需求和 YAML。
 - `traceability` 只保留本地应用稳定可提供的信息。
 - 历史遗留字段不主动清理，但导出时不输出已废弃的操作中物料状态结构。

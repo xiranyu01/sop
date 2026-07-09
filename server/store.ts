@@ -1,6 +1,7 @@
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { AppData, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
+import { defaultAppMetadata } from '../src/schemaVersions';
+import type { AppData, AppMetadata, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
 import type { AppStore } from './api';
 
 const rootDir = process.cwd();
@@ -8,6 +9,7 @@ const dataDir = path.join(rootDir, 'data');
 const uploadsDir = path.join(rootDir, 'uploads');
 
 const files = {
+  metadata: path.join(dataDir, 'metadata.json'),
   customers: path.join(dataDir, 'customers.json'),
   materials: path.join(dataDir, 'materials.json'),
   robotModels: path.join(dataDir, 'robot-models.json'),
@@ -36,7 +38,8 @@ async function writeJson<T>(file: string, data: T): Promise<void> {
 }
 
 export async function readData(): Promise<AppData> {
-  const [customers, materials, robotModels, scenes, requirements, globalFields, materialStateRules] = await Promise.all([
+  const [metadata, customers, materials, robotModels, scenes, requirements, globalFields, materialStateRules] = await Promise.all([
+    readJson<AppMetadata>(files.metadata, defaultAppMetadata),
     readJson<Customer[]>(files.customers, []),
     readJson<Material[]>(files.materials, []),
     readJson<RobotModel[]>(files.robotModels, []),
@@ -46,7 +49,7 @@ export async function readData(): Promise<AppData> {
     readJson<MaterialStateRule[]>(files.materialStateRules, []),
   ]);
 
-  return { customers, materials, robotModels, scenes, requirements, globalFields, materialStateRules };
+  return { metadata, customers, materials, robotModels, scenes, requirements, globalFields, materialStateRules };
 }
 
 export async function writeCustomers(customers: Customer[]): Promise<Customer[]> {

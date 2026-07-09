@@ -2,10 +2,12 @@ import customersSeed from '../data/customers.json';
 import globalFieldsSeed from '../data/global-fields.json';
 import materialStateRulesSeed from '../data/material-state-rules.json';
 import materialsSeed from '../data/materials.json';
+import metadataSeed from '../data/metadata.json';
 import requirementsSeed from '../data/requirements.json';
 import robotModelsSeed from '../data/robot-models.json';
 import scenesSeed from '../data/scenes.json';
-import type { AppData, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
+import { defaultAppMetadata } from '../src/schemaVersions';
+import type { AppData, AppMetadata, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
 import type { AppStore } from './api';
 import type { AttachmentStore } from './r2AttachmentStore';
 
@@ -20,6 +22,7 @@ export type D1DatabaseLike = {
 };
 
 const seedData: AppData = {
+  metadata: { ...defaultAppMetadata, ...(metadataSeed as Partial<AppMetadata>) },
   customers: customersSeed as Customer[],
   materials: materialsSeed as Material[],
   robotModels: robotModelsSeed as RobotModel[],
@@ -32,6 +35,7 @@ const seedData: AppData = {
 type DataKey = keyof AppData;
 
 const dataKeys: DataKey[] = [
+  'metadata',
   'customers',
   'materials',
   'robotModels',

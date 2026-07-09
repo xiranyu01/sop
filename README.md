@@ -1,6 +1,6 @@
 # SOP 需求管理网页
 
-一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.2` YAML，也可以导出 PDF 便于沟通和归档。
+一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.3` YAML，也可以导出 PDF 便于沟通和归档。
 
 线上主部署建议使用 Cloudflare Pages + Pages Functions + D1。GitHub Pages 只能托管静态页面，不能运行本项目的 `/api/*` 写入接口，也不能提供共享数据存储。
 
@@ -17,6 +17,14 @@
 - 支持需求附件、任务 SOP 附件和物料图片上传，单个文件最大 1G。
 - 支持 YAML 预览、复制、下载，以及客户需求和任务 SOP PDF 导出。
 - Cloudflare 线上版本使用应用内访问密码保护，适合第一版内部试用。
+
+## Schema 版本
+
+- `app_data_v0.1`：本地 JSON / D1 主数据结构版本。
+- `requirement_yaml_v0.3`：客户需求 YAML 导出结构版本。
+- `task_sop_yaml_v0.1`：任务 SOP YAML 结构版本。
+
+这些版本会写入 `data/metadata.json`，也会出现在需求 YAML 的 `schema_versions` 中，后续增删字段时可以按版本做兼容。
 
 ## 本地启动
 
@@ -42,6 +50,7 @@ pnpm build
 
 - `data/customers.json`：客户信息
 - `data/materials.json`：物料信息，包含自动生成的 SKU 和可选图片元数据
+- `data/metadata.json`：当前数据与 YAML schema 版本
 - `data/robot-models.json`：机器型号和 topic 信息
 - `data/scenes.json`：场景与任务 SOP 库；任务 SOP 内部按随机短编号管理，一个编号可有多个版本
 - `data/requirements.json`：客户需求；保存需求版本、生产需求项和锁定的任务 SOP 版本，不保存任务编号

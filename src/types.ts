@@ -345,7 +345,14 @@ export interface Requirement {
   versions: RequirementVersion[];
 }
 
+export interface AppMetadata {
+  appDataSchemaVersion: string;
+  requirementYamlSchemaVersion: string;
+  taskSopYamlSchemaVersion: string;
+}
+
 export interface AppData {
+  metadata: AppMetadata;
   customers: Customer[];
   materials: Material[];
   robotModels: RobotModel[];

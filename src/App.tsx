@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { defaultAppMetadata } from './schemaVersions';
 import type {
   AppData,
   AttachmentUploadInit,
@@ -495,6 +496,7 @@ async function fetchBinaryJson<T>(input: RequestInfo | URL, body: Blob): Promise
 }
 
 const emptyData: AppData = {
+  metadata: defaultAppMetadata,
   customers: [],
   materials: [],
   robotModels: [],

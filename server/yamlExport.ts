@@ -1,4 +1,5 @@
 import YAML from 'yaml';
+import { appDataSchemaVersion, requirementYamlSchemaVersion, taskSopYamlSchemaVersion } from '../src/schemaVersions';
 import type {
   AppData,
   ObjectInitialState,
@@ -273,6 +274,7 @@ function mapScenario(
   subscene: SubsceneVersion,
 ): unknown {
   return {
+    schema_version: taskSopYamlSchemaVersion,
     version: requestedVersion,
     version_id: taskSopVersionId,
     parent_version_id: taskSopParentVersionId,
@@ -339,6 +341,7 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
     target_duration_hours: selected.targetDurationHours,
     target_collection_count: selected.targetCollectionCount || 0,
     task_sop: {
+      schema_version: taskSopYamlSchemaVersion,
       title: selectedTaskSopTitle(selected) || taskSopName,
       scene_name: selected.taskSop?.sceneName || sceneName,
       version: sopVersion,
@@ -349,7 +352,12 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
   }));
 
   const doc = {
-    schema_version: 'requirement_yaml_v0.2',
+    schema_version: requirementYamlSchemaVersion,
+    schema_versions: {
+      app_data: data.metadata?.appDataSchemaVersion || appDataSchemaVersion,
+      requirement_yaml: data.metadata?.requirementYamlSchemaVersion || requirementYamlSchemaVersion,
+      task_sop_yaml: data.metadata?.taskSopYamlSchemaVersion || taskSopYamlSchemaVersion,
+    },
     requirement: {
       id: requirement.id,
       title: version.title,
@@ -413,6 +421,11 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       requirement_version: version.version,
       requirement_version_id: version.versionId || requirementVersionId(requirement.id, version.version),
       parent_requirement_version_id: version.parentVersionId || requirementParentVersionId(requirement, version.version),
+      schema_versions: {
+        app_data: data.metadata?.appDataSchemaVersion || appDataSchemaVersion,
+        requirement_yaml: data.metadata?.requirementYamlSchemaVersion || requirementYamlSchemaVersion,
+        task_sop_yaml: data.metadata?.taskSopYamlSchemaVersion || taskSopYamlSchemaVersion,
+      },
       task_sop_versions: resolvedItems.map(({ selected, sceneName, taskSopName, sopVersion, refVersionId, refParentVersionId }) => ({
         scene_name: selected.taskSop?.sceneName || sceneName,
         task_sop_name: selectedTaskSopTitle(selected) || taskSopName,

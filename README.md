@@ -49,7 +49,7 @@ pnpm build
 - `exports/requirements/<requirement_id>/<version>.yaml`：本地导出的需求 YAML
 - `uploads/`：本地上传的附件和图片，不提交到 GitHub
 
-线上 Cloudflare 版本会把 JSON 主数据保存到 D1 的 `app_data` key/value 表里；`data/*.json` 只作为首次初始化种子数据。附件、子场景图片/视频和物料图片建议保存到 R2 bucket，并通过 `ATTACHMENTS` binding 提供给 Pages Functions。
+线上 Cloudflare 版本会把 JSON 主数据保存到 D1 的 `app_data` key/value 表里；`data/*.json` 只作为首次初始化种子数据。附件、子场景图片/视频和物料图片建议保存到 R2 bucket：同账号 R2 可通过 `ATTACHMENTS` binding 提供给 Pages Functions，跨账号 R2 可通过 S3 兼容访问参数提供。
 
 ## Cloudflare 部署
 
@@ -63,13 +63,18 @@ pnpm build
 5. 在 Pages 项目里绑定 D1：
    - Variable name: `DB`
    - D1 database: `sop-prod`
-6. 如果启用附件上传，在 Pages 项目里绑定 R2：
+6. 如果启用附件上传，优先在 Pages 项目里绑定同账号 R2：
    - Variable name: `ATTACHMENTS`
    - R2 bucket: `sop-attachments`
-7. 添加环境变量：
+7. 如果附件 bucket 在另一个 Cloudflare 账号，改用 Pages secrets 配置 S3 访问参数：
+   - `R2_S3_ENDPOINT`
+   - `R2_S3_BUCKET`
+   - `R2_S3_ACCESS_KEY_ID`
+   - `R2_S3_SECRET_ACCESS_KEY`
+8. 添加环境变量：
    - `APP_PASSWORD=<访问密码>`
    - `NODE_VERSION=22`
-8. 部署后访问 `https://<project>.pages.dev`，输入访问密码使用。
+9. 部署后访问 `https://<project>.pages.dev`，输入访问密码使用。
 
 本地模拟 Cloudflare Pages Functions：
 

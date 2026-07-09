@@ -126,9 +126,9 @@ CREATE TABLE IF NOT EXISTS app_data (
 - 单个文件最大 1G
 - 默认分片大小 16MB
 - 本地 Express 写入 `uploads/`
-- Cloudflare Pages Functions 写入 R2 bucket
+- Cloudflare Pages Functions 写入 R2 bucket。同账号 bucket 使用 `ATTACHMENTS` binding；跨账号 bucket 使用 R2 S3 兼容 secrets。
 
-线上如果没有绑定 R2 `ATTACHMENTS`，页面会禁用上传入口并显示存储未配置提示；主数据读取、编辑、YAML/PDF 导出仍可使用。
+线上如果没有配置 `ATTACHMENTS`，也没有完整配置 `R2_S3_ENDPOINT` / `R2_S3_BUCKET` / `R2_S3_ACCESS_KEY_ID` / `R2_S3_SECRET_ACCESS_KEY`，页面会禁用上传入口并显示存储未配置提示；主数据读取、编辑、YAML/PDF 导出仍可使用。
 
 物料图片只允许上传 `image/*`。子场景附件支持图片或视频。需求附件不限制具体文件类型。
 
@@ -357,12 +357,13 @@ YAML：
 6. Pages Functions 绑定：
    - D1 binding variable name: `DB`
    - D1 database: `sop-prod`
-   - R2 binding variable name: `ATTACHMENTS`
-   - R2 bucket: `sop-attachments`
-7. Pages 环境变量：
+7. 附件存储二选一：
+   - 同账号 R2：配置 R2 binding variable name `ATTACHMENTS`，bucket 例如 `sop-attachments`
+   - 跨账号 R2：配置 Pages secrets `R2_S3_ENDPOINT`、`R2_S3_BUCKET`、`R2_S3_ACCESS_KEY_ID`、`R2_S3_SECRET_ACCESS_KEY`
+8. Pages 环境变量：
    - `APP_PASSWORD=<访问密码>`
    - `NODE_VERSION=22`
-8. 重新部署，访问 `https://<project>.pages.dev`。
+9. 重新部署，访问 `https://<project>.pages.dev`。
 
 首次访问 `/api/data` 时，如果 D1 中没有对应 key，会从 repo 内 `data/*.json` 初始化种子数据。
 

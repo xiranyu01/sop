@@ -8,7 +8,7 @@ type R2MultipartUploadLike = {
   abort(): Promise<void>;
 };
 
-export type R2ObjectLike = {
+export type AttachmentObject = {
   body: ReadableStream;
   httpMetadata?: {
     contentType?: string;
@@ -18,7 +18,7 @@ export type R2ObjectLike = {
 export type R2BucketLike = {
   createMultipartUpload(key: string, options?: { httpMetadata?: { contentType?: string } }): Promise<R2MultipartUploadLike>;
   resumeMultipartUpload(key: string, uploadId: string): R2MultipartUploadLike;
-  get(key: string): Promise<R2ObjectLike | null>;
+  get(key: string): Promise<AttachmentObject | null>;
   delete(key: string): Promise<void>;
 };
 

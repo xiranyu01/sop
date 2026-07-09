@@ -5,6 +5,7 @@ import type {
   AttachmentUploadInit,
   AttachmentUploadPart,
   Customer,
+  EntityStatus,
   ExportResult,
   GlobalField,
   GlobalFieldGroup,
@@ -1059,26 +1060,30 @@ function selectedSubscenesReport(
   publicBaseUrl?: string,
 ): PrintableSection[] {
   if (!selectedSubscenes.length) {
-    return [{ title: '已选任务 SOP', content: '-' }];
+    return [{ title: '生产需求项', content: '-' }];
   }
   return selectedSubscenes.map((selected, index) => {
     const target = findTaskSop(scenes, selected);
+    const selectedTaskSopName = taskSopLabel(selected);
+    const selectedVersion = taskSopVersion(selected);
     const header = keyValueReport([
-      ['场景', selected.sceneName],
-      ['任务 SOP 名称', selected.subsceneName],
-      ['引用版本', selected.version],
+      ['生产需求项名称', productionItemTitle(selected)],
+      ['生产需求项描述', selected.description],
+      ['需求项场景', productionItemSceneName(selected)],
+      ['选择的任务 SOP', selectedTaskSopName || '未选择'],
+      ['SOP 引用版本', selectedVersion || '-'],
       ['引用版本状态', target?.version ? statusText(target.version.status) : '未找到'],
       ['目标采集时长', `${selected.targetDurationHours || 0} h`],
       ['目标采集数量', `${selected.targetCollectionCount || 0}`],
     ]);
     const detail =
-      target?.version && target.subscene
+      selectedTaskSopName && target?.version && target.subscene
         ? subsceneReportSections(target.scene, target.subscene, target.version, publicBaseUrl)
             .map((section) => `【${section.title}】\n${section.content}`)
             .join('\n\n')
-        : '未找到对应任务 SOP 版本，无法展开正文。';
+        : '未选择或未找到对应任务 SOP 版本，无法展开正文。';
     return {
-      title: `任务 SOP ${index + 1}：${selected.subsceneName}`,
+      title: `生产需求项 ${index + 1}：${productionItemTitle(selected)}`,
       content: `${header}\n\n${detail}`,
       attachments: printableAttachments(target?.version?.attachments, publicBaseUrl),
     };
@@ -1107,7 +1112,7 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
           ['机器人型号', robot ? `${robot.brand} ${robot.model}` : '-'],
           ['业务目标', version.businessGoal],
           ['总目标时长', `${version.requiredDurationHours || 0} h`],
-          ['已选任务 SOP 时长合计', `${selectedDurationTotal} h`],
+          ['生产需求项目标时长合计', `${selectedDurationTotal} h`],
         ]),
       },
       {
@@ -1171,6 +1176,44 @@ function nextReadableId(values: string[], prefix: string): string {
   return `${prefix}${maxNumber + 1}`;
 }
 
+function stableHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).padStart(6, '0').slice(0, 8);
+}
+
+function versionId(objectId: string | undefined, version: string | undefined): string {
+  if (!objectId || !version) return '';
+  return `${objectId}@${version}`;
+}
+
+function versionRank(value: string): number[] {
+  return value.split('.').map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function parentVersionId(objectId: string | undefined, versions: Array<{ version: string }>, currentVersion: string | undefined): string {
+  if (!objectId || !currentVersion) return '';
+  const sortedVersions = [...versions].sort((left, right) => {
+    const leftRank = versionRank(left.version);
+    const rightRank = versionRank(right.version);
+    for (let index = 0; index < Math.max(leftRank.length, rightRank.length); index += 1) {
+      const diff = (leftRank[index] || 0) - (rightRank[index] || 0);
+      if (diff !== 0) return diff;
+    }
+    return left.version.localeCompare(right.version);
+  });
+  const index = sortedVersions.findIndex((item) => item.version === currentVersion);
+  if (index <= 0) return '';
+  return versionId(objectId, sortedVersions[index - 1].version);
+}
+
+function taskSopObjectIdFromParts(sceneId: string, taskSopName: string): string {
+  return `sop_${stableHash(`${sceneId}:${taskSopName}`)}`;
+}
+
 function sceneLatestUpdated(scene: Scene): string {
   const updatedAt = scene.subscenes
     .flatMap((subscene) => subscene.versions.map((version) => version.updatedAt))
@@ -1216,39 +1259,80 @@ function findSubscene(scenes: Scene[], code: string, version?: string): Subscene
 }
 
 function findTaskSop(scenes: Scene[], selected: RequirementVersion['selectedSubscenes'][number]): SubsceneLookupResult | undefined {
+  const ref = selected.taskSop;
   if (selected.subsceneCode) {
     const byCode = findSubscene(scenes, selected.subsceneCode, selected.version);
     if (byCode) return byCode;
   }
   for (const scene of scenes) {
-    if (scene.name !== selected.sceneName) continue;
+    const sceneName = ref?.sceneName || selected.sceneName;
+    if (scene.name !== sceneName) continue;
     const subscene = scene.subscenes.find((item) => {
-      const version = item.versions.find((candidate) => candidate.version === selected.version);
-      return item.name === selected.subsceneName || version?.title === selected.subsceneName;
+      const selectedVersion = ref?.version || selected.version;
+      const selectedTitle = ref?.title || selected.subsceneName;
+      const version = item.versions.find((candidate) => candidate.version === selectedVersion);
+      return item.name === selectedTitle || version?.title === selectedTitle;
     });
     if (!subscene) continue;
     return {
       scene,
       subscene,
-      version: subscene.versions.find((item) => item.version === selected.version),
+      version: subscene.versions.find((item) => item.version === (ref?.version || selected.version)),
     };
   }
   return undefined;
 }
 
-function selectedTaskSopKey(selected: RequirementVersion['selectedSubscenes'][number]): string {
-  return [selected.sceneName, selected.subsceneName, selected.version].join('::');
+function productionItemTitle(item: RequirementVersion['selectedSubscenes'][number]): string {
+  return item.title || item.subsceneName || item.taskSop?.title || '未命名生产需求项';
+}
+
+function productionItemSceneName(item: RequirementVersion['selectedSubscenes'][number]): string {
+  return item.sceneName || item.taskSop?.sceneName || '';
+}
+
+function productionItemKey(item: RequirementVersion['selectedSubscenes'][number]): string {
+  return item.id || [productionItemSceneName(item), productionItemTitle(item), item.taskSop?.version || item.version || ''].join('::');
+}
+
+function taskSopLabel(item: RequirementVersion['selectedSubscenes'][number]): string {
+  return item.taskSop?.title || item.subsceneName || '';
+}
+
+function taskSopVersion(item: RequirementVersion['selectedSubscenes'][number]): string {
+  return item.taskSop?.version || item.version || '';
+}
+
+function taskSopStatus(item: RequirementVersion['selectedSubscenes'][number]): EntityStatus | undefined {
+  return item.taskSop?.status;
+}
+
+function candidateTaskSopReference(candidate: CandidateSubsceneOption) {
+  const sopId = taskSopObjectIdFromParts(candidate.sceneId, candidate.name);
+  return {
+    sceneName: candidate.sceneName,
+    title: candidate.selectedVersion.title || candidate.name,
+    version: candidate.selectedVersion.version,
+    versionId: versionId(sopId, candidate.selectedVersion.version),
+    parentVersionId: parentVersionId(sopId, candidate.versions, candidate.selectedVersion.version),
+    status: candidate.selectedVersion.status,
+  };
 }
 
 function candidateTaskSopKey(candidate: CandidateSubsceneOption): string {
-  return [candidate.sceneName, candidate.selectedVersion.title || candidate.name, candidate.selectedVersion.version].join('::');
+  return [candidate.sceneId, candidate.code, candidate.selectedVersion.version].join('::');
 }
 
-function isSameSelectedTaskSop(
+function isSameTaskSopCandidate(item: RequirementVersion['selectedSubscenes'][number], candidate: CandidateSubsceneOption): boolean {
+  const ref = candidateTaskSopReference(candidate);
+  return taskSopLabel(item) === ref.title && taskSopVersion(item) === ref.version && (item.taskSop?.sceneName || item.sceneName) === ref.sceneName;
+}
+
+function isSameProductionItem(
   left: RequirementVersion['selectedSubscenes'][number],
   right: RequirementVersion['selectedSubscenes'][number],
 ): boolean {
-  return selectedTaskSopKey(left) === selectedTaskSopKey(right);
+  return productionItemKey(left) === productionItemKey(right);
 }
 
 function stripSelectedTaskSopCode(selected: RequirementVersion['selectedSubscenes'][number]): RequirementVersion['selectedSubscenes'][number] {
@@ -1664,7 +1748,7 @@ function pageTitle(page: Page) {
 
 function pageHint(page: Page) {
   const map: Record<Page, string> = {
-    requirements: '选择客户、机器人和任务 SOP 版本，确认后可导出需求 YAML。',
+    requirements: '管理客户需求、生产需求项和对应任务 SOP 版本，确认后可导出需求 YAML。',
     scenes: '按场景维护任务 SOP 版本，确认后历史版本保持只读。',
     globalFields: '管理 SOP 表单复用字段，任务 SOP 会从这里选择标准词表。',
     customers: '管理客户和联系人，供客户需求引用。',
@@ -2193,7 +2277,7 @@ function RequirementPage({
   const [yamlCopyStatus, setYamlCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [requirementQuery, setRequirementQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
-  const [subscenePickerOpen, setSubscenePickerOpen] = useState(false);
+  const [taskSopPickerItemId, setTaskSopPickerItemId] = useState('');
   const [candidateVersionSelections, setCandidateVersionSelections] = useState<Record<string, string>>({});
   const [attachmentUpload, setAttachmentUpload] = useState<{ fileName: string; progress: number } | null>(null);
 
@@ -2220,6 +2304,7 @@ function RequirementPage({
         !subsceneQuery ||
         item.code.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
         item.name.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
+        item.selectedVersion.title.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
         item.sceneName.toLowerCase().includes(subsceneQuery.toLowerCase()),
     );
   }, [data.scenes, subsceneQuery, candidateVersionSelections]);
@@ -2239,13 +2324,14 @@ function RequirementPage({
       robot?.brand,
     ]);
   });
-  const selectedSubsceneKeys = new Set(selectedVersion?.selectedSubscenes.map(selectedTaskSopKey) || []);
+  const taskSopPickerItem = selectedVersion?.selectedSubscenes.find((item) => productionItemKey(item) === taskSopPickerItemId);
   const selectedSubsceneGroups = selectedVersion
     ? Array.from(
         selectedVersion.selectedSubscenes.reduce((groups, item) => {
-          const rows = groups.get(item.sceneName) || [];
+          const sceneName = productionItemSceneName(item) || '未选择场景';
+          const rows = groups.get(sceneName) || [];
           rows.push(item);
-          groups.set(item.sceneName, rows);
+          groups.set(sceneName, rows);
           return groups;
         }, new Map<string, RequirementVersion['selectedSubscenes']>()),
       )
@@ -2254,9 +2340,12 @@ function RequirementPage({
     selectedVersion?.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0) || 0;
   const durationDelta = selectedVersion ? selectedSubsceneDurationTotal - (Number(selectedVersion.requiredDurationHours) || 0) : 0;
   const missingSelectedSubscenes =
-    selectedVersion?.selectedSubscenes.filter((item) => !findTaskSop(data.scenes, item)) || [];
+    selectedVersion?.selectedSubscenes.filter((item) => !taskSopVersion(item) || !findTaskSop(data.scenes, item)) || [];
   const unconfirmedSelectedSubscenes =
-    selectedVersion?.selectedSubscenes.filter((item) => findTaskSop(data.scenes, item)?.version?.status !== 'confirmed') || [];
+    selectedVersion?.selectedSubscenes.filter((item) => {
+      const target = findTaskSop(data.scenes, item);
+      return (target?.version?.status || taskSopStatus(item)) !== 'confirmed';
+    }) || [];
 
   const requirementColumns: Array<DataTableColumn<Requirement>> = [
     {
@@ -2292,8 +2381,8 @@ function RequirementPage({
     },
     {
       key: 'subscenes',
-      title: '任务 SOP',
-      width: '64px',
+      title: '生产需求项',
+      width: '88px',
       align: 'right',
       render: (requirement) => latest(requirement.versions).selectedSubscenes.length,
     },
@@ -2329,15 +2418,89 @@ function RequirementPage({
   ];
 
   const selectedSubsceneColumns: Array<DataTableColumn<RequirementVersion['selectedSubscenes'][number]>> = [
-    { key: 'name', title: '任务 SOP', width: 'minmax(180px, 1.4fr)', render: (item) => item.subsceneName },
-    { key: 'version', title: '版本', width: '90px', render: (item) => `v${item.version}` },
+    {
+      key: 'title',
+      title: '生产需求项',
+      width: 'minmax(190px, 1.2fr)',
+      render: (item) => (
+        <InlineTextInput
+          disabled={readonly}
+          value={productionItemTitle(item)}
+          placeholder="需求项名称"
+          onCommit={(title) => {
+            if (readonly || !selectedVersion) return;
+            const selectedSubscenes = selectedVersion.selectedSubscenes.map((current) =>
+              isSameProductionItem(current, item) ? { ...current, title } : current,
+            );
+            void onSave({ selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode) });
+          }}
+        />
+      ),
+    },
+    {
+      key: 'description',
+      title: '描述',
+      width: '160px',
+      render: (item) => (
+        <LongTextDialogEditor
+          title="生产需求项描述"
+          value={item.description || ''}
+          disabled={readonly}
+          placeholder="填写客户对这个需求项的描述"
+          onChange={(description) => {
+            if (readonly || !selectedVersion) return;
+            const selectedSubscenes = selectedVersion.selectedSubscenes.map((current) =>
+              isSameProductionItem(current, item) ? { ...current, description } : current,
+            );
+            void onSave({ selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode) });
+          }}
+        />
+      ),
+    },
+    {
+      key: 'scene',
+      title: '场景',
+      width: '150px',
+      render: (item) => (
+        <select
+          value={productionItemSceneName(item)}
+          disabled={readonly}
+          onChange={(event) => {
+            if (readonly || !selectedVersion) return;
+            const sceneName = event.target.value;
+            const selectedSubscenes = selectedVersion.selectedSubscenes.map((current) =>
+              isSameProductionItem(current, item) ? { ...current, sceneName } : current,
+            );
+            void onSave({
+              requestedScenes: Array.from(new Set(selectedSubscenes.map((current) => productionItemSceneName(current)).filter(Boolean))),
+              selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode),
+            });
+          }}
+        >
+          <option value="">未选择</option>
+          {data.scenes.map((scene) => (
+            <option value={scene.name} key={scene.id}>
+              {scene.name}
+            </option>
+          ))}
+        </select>
+      ),
+    },
+    {
+      key: 'taskSop',
+      title: '任务 SOP',
+      width: 'minmax(180px, 1fr)',
+      render: (item) => taskSopLabel(item) || <span className="muted-text">未选择任务 SOP</span>,
+    },
+    { key: 'version', title: 'SOP 版本', width: '90px', render: (item) => (taskSopVersion(item) ? `v${taskSopVersion(item)}` : '-') },
     {
       key: 'status',
       title: '状态',
       width: '96px',
       render: (item) => {
         const target = findTaskSop(data.scenes, item);
-        return target?.version ? <StatusBadge status={target.version.status} /> : '未找到';
+        const status = target?.version?.status || taskSopStatus(item);
+        return status ? <StatusBadge status={status} /> : '未选择';
       },
     },
     {
@@ -2352,7 +2515,7 @@ function RequirementPage({
             onCommit={(targetDurationHours) => {
               if (readonly) return;
               const selectedSubscenes = selectedVersion?.selectedSubscenes.map((current) =>
-                isSameSelectedTaskSop(current, item)
+                isSameProductionItem(current, item)
                   ? { ...current, targetDurationHours }
                   : current,
               );
@@ -2376,7 +2539,7 @@ function RequirementPage({
             onCommit={(targetCollectionCount) => {
               if (readonly) return;
               const selectedSubscenes = selectedVersion?.selectedSubscenes.map((current) =>
-                isSameSelectedTaskSop(current, item)
+                isSameProductionItem(current, item)
                   ? { ...current, targetCollectionCount }
                   : current,
               );
@@ -2390,15 +2553,23 @@ function RequirementPage({
     {
       key: 'action',
       title: '操作',
-      width: '118px',
+      width: '186px',
       render: (item) => (
         <span className="table-action-row">
+          <button
+            className="text-button"
+            disabled={readonly}
+            onClick={() => setTaskSopPickerItemId(productionItemKey(item))}
+          >
+            选择 SOP
+          </button>
           <button
             className="text-button"
             disabled={!findTaskSop(data.scenes, item)}
             onClick={() => {
               const target = findTaskSop(data.scenes, item);
-              if (target) onOpenSubscene(target.subscene.code, item.version);
+              const version = taskSopVersion(item);
+              if (target && version) onOpenSubscene(target.subscene.code, version);
             }}
           >
             查看
@@ -2410,7 +2581,7 @@ function RequirementPage({
               if (readonly || !selectedVersion) return;
               void onSave({
                 selectedSubscenes: selectedVersion.selectedSubscenes.filter(
-                  (current) => !isSameSelectedTaskSop(current, item),
+                  (current) => !isSameProductionItem(current, item),
                 ).map(stripSelectedTaskSopCode),
               });
             }}
@@ -2449,9 +2620,9 @@ function RequirementPage({
     { key: 'status', title: '状态', width: '96px', render: (item) => <StatusBadge status={item.selectedVersion.status} /> },
     {
       key: 'importStatus',
-      title: '导入状态',
+      title: '选择状态',
       width: '100px',
-      render: (item) => (selectedSubsceneKeys.has(candidateTaskSopKey(item)) ? '已导入' : '可导入'),
+      render: (item) => (taskSopPickerItem && isSameTaskSopCandidate(taskSopPickerItem, item) ? '当前选择' : '可选择'),
     },
   ];
 
@@ -2558,24 +2729,45 @@ function RequirementPage({
     void onSave({});
   }
 
-  function addSubsceneToRequirement(item: CandidateSubsceneOption) {
+  function addProductionRequirementItem() {
     if (!selectedVersion || readonly) return;
-    const key = candidateTaskSopKey(item);
-    if (selectedSubsceneKeys.has(key)) return;
+    const usedIds = selectedVersion.selectedSubscenes.map((item) => (item.id || '').replace(/^pri_/i, '')).filter(Boolean);
+    const id = `pri_${randomShortCode(usedIds, 6).toLowerCase()}`;
+    const nextItems = [
+      ...selectedVersion.selectedSubscenes,
+      {
+        id,
+        title: `生产需求项 ${selectedVersion.selectedSubscenes.length + 1}`,
+        description: '',
+        sceneName: '',
+        targetDurationHours: 0,
+        targetCollectionCount: 0,
+      },
+    ];
     void onSave({
-      requestedScenes: Array.from(new Set([...selectedVersion.requestedScenes, item.sceneName])),
-      selectedSubscenes: [
-        ...selectedVersion.selectedSubscenes,
-        {
-          subsceneName: item.selectedVersion.title || item.name,
-          sceneName: item.sceneName,
-          version: item.selectedVersion.version,
-          targetDurationHours: 0,
-          targetCollectionCount: 0,
-        },
-      ],
+      selectedSubscenes: nextItems.map(stripSelectedTaskSopCode),
     });
-    setSubscenePickerOpen(false);
+  }
+
+  function selectTaskSopForProductionItem(candidate: CandidateSubsceneOption) {
+    if (!selectedVersion || readonly || !taskSopPickerItem) return;
+    const ref = candidateTaskSopReference(candidate);
+    const selectedSubscenes = selectedVersion.selectedSubscenes.map((current) =>
+      isSameProductionItem(current, taskSopPickerItem)
+        ? {
+            ...current,
+            sceneName: current.sceneName || ref.sceneName,
+            subsceneName: ref.title,
+            version: ref.version,
+            taskSop: ref,
+          }
+        : current,
+    );
+    void onSave({
+      requestedScenes: Array.from(new Set(selectedSubscenes.map((current) => productionItemSceneName(current)).filter(Boolean))),
+      selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode),
+    });
+    setTaskSopPickerItemId('');
   }
 
   async function uploadRequirementAttachment(file: File) {
@@ -2684,11 +2876,11 @@ function RequirementPage({
     });
   }
 
-  const subscenePickerModal = subscenePickerOpen && (
-    <Modal title="从任务 SOP 库添加任务 SOP" onClose={() => setSubscenePickerOpen(false)}>
+  const taskSopPickerModal = taskSopPickerItem && (
+    <Modal title={`为“${productionItemTitle(taskSopPickerItem)}”选择任务 SOP`} onClose={() => setTaskSopPickerItemId('')}>
       <SearchPanel
         title="任务 SOP 库"
-        description="按名称或场景搜索，点击行导入任务 SOP 版本"
+        description="按名称或场景搜索，点击行选择这个生产需求项要使用的任务 SOP 版本"
         query={subsceneQuery}
         placeholder="搜索洗漱台整理或场景名称"
         count={candidateSubscenes.length}
@@ -2699,7 +2891,7 @@ function RequirementPage({
         columns={candidateSubsceneColumns}
         rowKey={candidateTaskSopKey}
         emptyText="没有匹配的任务 SOP"
-        onRowClick={addSubsceneToRequirement}
+        onRowClick={selectTaskSopForProductionItem}
       />
     </Modal>
   );
@@ -2770,8 +2962,14 @@ function RequirementPage({
           {readonly && <div className="notice info">当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
           {!readonly && unconfirmedSelectedSubscenes.length > 0 && (
             <div className="notice warning">
-              有 {unconfirmedSelectedSubscenes.length} 个已选任务 SOP 还没有确认，不能确认需求：
-              {unconfirmedSelectedSubscenes.map((item) => `${item.sceneName} / ${item.subsceneName} v${item.version}`).join('；')}
+              有 {unconfirmedSelectedSubscenes.length} 个生产需求项未选择任务 SOP，或选择的任务 SOP 还没有确认，不能确认需求：
+              {unconfirmedSelectedSubscenes
+                .map((item) => {
+                  const label = taskSopLabel(item);
+                  const version = taskSopVersion(item);
+                  return `${productionItemTitle(item)}${label ? ` / ${label} v${version || '-'}` : ' / 未选择任务 SOP'}`;
+                })
+                .join('；')}
             </div>
           )}
 
@@ -3019,42 +3217,42 @@ function RequirementPage({
         <div className="embedded-table">
           <div className="embedded-table-header">
             <div>
-              <h3>已选任务 SOP</h3>
-              <p>按场景分组展示；客户需求锁定具体任务 SOP 版本，目标采集时长在这里维护</p>
+              <h3>生产需求项</h3>
+              <p>先维护客户要做的需求项，再为每条需求项选择对应的任务 SOP 版本</p>
             </div>
             <div className="button-row">
               <span className="result-count">{selectedVersion.selectedSubscenes.length} 条</span>
-              <button className="primary-button" disabled={readonly} onClick={() => setSubscenePickerOpen(true)}>
-                添加任务 SOP
+              <button className="primary-button" disabled={readonly} onClick={addProductionRequirementItem}>
+                添加生产需求项
               </button>
             </div>
           </div>
           {durationDelta !== 0 && (
             <div className="notice warning compact-notice">
-              总目标时长 {Number(selectedVersion.requiredDurationHours) || 0} h，已选任务 SOP 目标时长合计{' '}
+              总目标时长 {Number(selectedVersion.requiredDurationHours) || 0} h，生产需求项目标时长合计{' '}
               {selectedSubsceneDurationTotal} h，{durationDelta > 0 ? '超出' : '还差'} {Math.abs(durationDelta)} h。
             </div>
           )}
           {missingSelectedSubscenes.length > 0 && (
             <div className="notice error compact-notice">
-              有 {missingSelectedSubscenes.length} 个已选任务 SOP 版本未找到，修正引用后才能导出 YAML。
+              有 {missingSelectedSubscenes.length} 个生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到，修正后才能导出 YAML。
             </div>
           )}
           {selectedSubsceneGroups.length === 0 ? (
-            <div className="table-empty">当前客户需求还没有添加任务 SOP</div>
+            <div className="table-empty">当前客户需求还没有生产需求项</div>
           ) : (
             <div className="subscene-group-list">
               {selectedSubsceneGroups.map(([sceneName, rows]) => (
                 <section className="subscene-group" key={sceneName}>
                   <div className="subscene-group-header">
                     <strong>{sceneName}</strong>
-                    <span>{rows.length} 个任务 SOP</span>
+                    <span>{rows.length} 个生产需求项</span>
                   </div>
                   <DataTable
                     rows={rows}
                     columns={selectedSubsceneColumns}
-                    rowKey={selectedTaskSopKey}
-                    emptyText="当前场景下没有任务 SOP"
+                    rowKey={productionItemKey}
+                    emptyText="当前场景下没有生产需求项"
                   />
                 </section>
               ))}
@@ -3089,7 +3287,7 @@ function RequirementPage({
           </div>
         </section>
       </div>
-      {subscenePickerModal}
+      {taskSopPickerModal}
     </>
   );
 }
@@ -5792,6 +5990,60 @@ function CommitField({
         }}
       />
     </label>
+  );
+}
+
+function InlineTextInput({
+  value,
+  placeholder = '',
+  disabled = false,
+  className = '',
+  onCommit,
+}: {
+  value: string;
+  placeholder?: string;
+  disabled?: boolean;
+  className?: string;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const composingRef = useRef(false);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    const nextValue = draft.trim();
+    if (nextValue !== value) {
+      onCommit(nextValue);
+    }
+  }
+
+  return (
+    <input
+      className={className}
+      type="text"
+      value={draft}
+      placeholder={placeholder}
+      disabled={disabled}
+      onBlur={commit}
+      onChange={(event) => setDraft(event.target.value)}
+      onCompositionStart={() => {
+        composingRef.current = true;
+      }}
+      onCompositionEnd={(event) => {
+        composingRef.current = false;
+        setDraft(event.currentTarget.value);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' && !composingRef.current) {
+          event.preventDefault();
+          commit();
+          event.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 

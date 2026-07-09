@@ -1,6 +1,6 @@
 # SOP 需求管理网页
 
-一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.1` YAML，也可以导出 PDF 便于沟通和归档。
+一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.2` YAML，也可以导出 PDF 便于沟通和归档。
 
 线上主部署建议使用 Cloudflare Pages + Pages Functions + D1。GitHub Pages 只能托管静态页面，不能运行本项目的 `/api/*` 写入接口，也不能提供共享数据存储。
 
@@ -11,7 +11,8 @@
 - 物料自动生成 SKU 编号，支持上传物料图片。
 - 场景下管理多个任务 SOP；任务 SOP 有内部随机短编号和多版本，页面、客户需求、YAML 都不保存或展示任务编号。
 - 任务 SOP 可配置物料、物料初始/目标状态、机器人状态、随机性、采集步骤、标注步骤、操作要求和附件。
-- 客户需求可选择具体任务 SOP 版本并填写目标采集时长；确认需求前会校验所选任务 SOP 版本是否已确认。
+- 客户需求可添加多个生产需求项；每个需求项可维护名称、描述、场景、目标采集时长、目标采集数量，并单独选择要使用的任务 SOP 版本。
+- 确认客户需求前会校验每个生产需求项是否已选择已确认的任务 SOP 版本。
 - 已确认版本只读；再次编辑会自动生成新的草稿补丁版本，草稿版本可以删除。
 - 支持需求附件、任务 SOP 附件和物料图片上传，单个文件最大 1G。
 - 支持 YAML 预览、复制、下载，以及客户需求和任务 SOP PDF 导出。
@@ -43,7 +44,7 @@ pnpm build
 - `data/materials.json`：物料信息，包含自动生成的 SKU 和可选图片元数据
 - `data/robot-models.json`：机器型号和 topic 信息
 - `data/scenes.json`：场景与任务 SOP 库；任务 SOP 内部按随机短编号管理，一个编号可有多个版本
-- `data/requirements.json`：客户需求；保存需求版本和锁定的任务 SOP 版本，不保存任务编号
+- `data/requirements.json`：客户需求；保存需求版本、生产需求项和锁定的任务 SOP 版本，不保存任务编号
 - `data/global-fields.json`：全局字段词表
 - `data/material-state-rules.json`：历史兼容数据，当前物料状态规则主要在任务 SOP 内维护
 - `exports/requirements/<requirement_id>/<version>.yaml`：本地导出的需求 YAML

@@ -253,13 +253,26 @@ export interface Scene {
   subscenes: Subscene[];
 }
 
-export interface RequestedSubscene {
-  subsceneCode?: string;
-  subsceneName: string;
+export interface TaskSopReference {
   sceneName: string;
+  title: string;
   version: string;
+  versionId?: string;
+  parentVersionId?: string;
+  status?: EntityStatus;
+}
+
+export interface RequestedSubscene {
+  id?: string;
+  title?: string;
+  description?: string;
+  subsceneCode?: string;
+  subsceneName?: string;
+  sceneName: string;
+  version?: string;
   targetDurationHours: number;
   targetCollectionCount?: number;
+  taskSop?: TaskSopReference;
 }
 
 export interface RequirementAttachment {
@@ -286,6 +299,8 @@ export interface AttachmentUploadPart {
 
 export interface RequirementVersion {
   version: string;
+  versionId?: string;
+  parentVersionId?: string;
   status: EntityStatus;
   title: string;
   projectName: string;

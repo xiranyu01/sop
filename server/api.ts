@@ -219,7 +219,45 @@ function stripSelectedTaskSopCode(selected: RequirementVersion['selectedSubscene
 }
 
 function stripTaskSopCodes(selectedSubscenes: RequirementVersion['selectedSubscenes'] = []): RequirementVersion['selectedSubscenes'] {
-  return selectedSubscenes.map(stripSelectedTaskSopCode);
+  return selectedSubscenes.map((selected, index) => {
+    const stripped = stripSelectedTaskSopCode(selected);
+    return {
+      ...stripped,
+      id: stripped.id || createId('pri'),
+      title: stripped.title || stripped.subsceneName || stripped.taskSop?.title || `生产需求项 ${index + 1}`,
+      description: stripped.description || '',
+      sceneName: stripped.sceneName || stripped.taskSop?.sceneName || '',
+      targetDurationHours: Number(stripped.targetDurationHours) || 0,
+      targetCollectionCount: Number(stripped.targetCollectionCount) || 0,
+    };
+  });
+}
+
+function versionRank(value: string): number[] {
+  return value.split('.').map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function requirementVersionId(requirementId: string, version: string): string {
+  return `${requirementId}@${version}`;
+}
+
+function previousRequirementVersion(requirement: Requirement, versionNumber: string): RequirementVersion | undefined {
+  const sortedVersions = [...requirement.versions].sort((left, right) => {
+    const leftRank = versionRank(left.version);
+    const rightRank = versionRank(right.version);
+    for (let index = 0; index < Math.max(leftRank.length, rightRank.length); index += 1) {
+      const diff = (leftRank[index] || 0) - (rightRank[index] || 0);
+      if (diff !== 0) return diff;
+    }
+    return left.version.localeCompare(right.version);
+  });
+  const index = sortedVersions.findIndex((item) => item.version === versionNumber);
+  return index > 0 ? sortedVersions[index - 1] : undefined;
+}
+
+function requirementParentVersionId(requirement: Requirement, versionNumber: string): string {
+  const previous = previousRequirementVersion(requirement, versionNumber);
+  return previous ? requirementVersionId(requirement.id, previous.version) : '';
 }
 
 function materialWithAttachment(material: Material, attachment: RequirementAttachment): Material {
@@ -253,20 +291,25 @@ function updateRequirementVersion(
 }
 
 function findSelectedTaskSopVersion(data: AppData, selected: RequirementVersion['selectedSubscenes'][number]): SubsceneVersion | undefined {
+  const requestedVersion = selected.taskSop?.version || selected.version;
+  const requestedSceneName = selected.taskSop?.sceneName || selected.sceneName;
+  const requestedTitle = selected.taskSop?.title || selected.subsceneName;
+  if (!requestedVersion || !requestedTitle) return undefined;
+
   if (selected.subsceneCode) {
     const foundByCode = data.scenes
       .flatMap((scene) => scene.subscenes)
       .find((subscene) => subscene.code === selected.subsceneCode)
-      ?.versions.find((subsceneVersion) => subsceneVersion.version === selected.version);
+      ?.versions.find((subsceneVersion) => subsceneVersion.version === requestedVersion);
     if (foundByCode) return foundByCode;
   }
 
   for (const scene of data.scenes) {
-    if (selected.sceneName && scene.name !== selected.sceneName) continue;
+    if (requestedSceneName && scene.name !== requestedSceneName) continue;
     for (const subscene of scene.subscenes) {
-      const foundVersion = subscene.versions.find((subsceneVersion) => subsceneVersion.version === selected.version);
+      const foundVersion = subscene.versions.find((subsceneVersion) => subsceneVersion.version === requestedVersion);
       if (!foundVersion) continue;
-      if (subscene.name === selected.subsceneName || foundVersion.title === selected.subsceneName) {
+      if (subscene.name === requestedTitle || foundVersion.title === requestedTitle) {
         return foundVersion;
       }
     }
@@ -276,10 +319,16 @@ function findSelectedTaskSopVersion(data: AppData, selected: RequirementVersion[
 
 function unconfirmedTaskSopRefs(data: AppData, version: RequirementVersion): string[] {
   return version.selectedSubscenes.flatMap((selected) => {
+    const productionItemTitle = selected.title || selected.subsceneName || selected.taskSop?.title || '未命名生产需求项';
+    const taskSopTitle = selected.taskSop?.title || selected.subsceneName;
+    const taskSopVersion = selected.taskSop?.version || selected.version;
+    if (!taskSopTitle || !taskSopVersion) {
+      return [`${productionItemTitle}（未选择任务 SOP）`];
+    }
     const foundVersion = findSelectedTaskSopVersion(data, selected);
     if (foundVersion?.status === 'confirmed') return [];
     const status = foundVersion ? '草稿' : '未找到';
-    return [`${selected.sceneName} / ${selected.subsceneName} v${selected.version}（${status}）`];
+    return [`${productionItemTitle} / ${taskSopTitle} v${taskSopVersion}（${status}）`];
   });
 }
 
@@ -513,11 +562,14 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
     if (method === 'POST' && path === '/api/requirements') {
       const data = await store.readData();
       const body = request.body as Partial<RequirementVersion>;
+      const requirementId = nextShortId(data.requirements.map((item) => item.id));
       const requirement: Requirement = {
-        id: nextShortId(data.requirements.map((item) => item.id)),
+        id: requirementId,
         versions: [
           {
             version: '0.0.1',
+            versionId: requirementVersionId(requirementId, '0.0.1'),
+            parentVersionId: '',
             status: 'draft',
             title: body.title || '未命名客户需求',
             projectName: body.projectName || '',
@@ -802,11 +854,16 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
       };
       const current = findTargetVersion(requirement.versions, baseVersion);
       const editable = canEditStatus(current.status);
+      const nextVersionNumber = editable ? current.version : nextAvailablePatchVersion(requirement.versions, current.version);
       const nextVersion: RequirementVersion = {
         ...current,
         ...normalizedPatch,
         selectedSubscenes: stripTaskSopCodes(normalizedPatch.selectedSubscenes || current.selectedSubscenes),
-        version: editable ? current.version : nextAvailablePatchVersion(requirement.versions, current.version),
+        version: nextVersionNumber,
+        versionId: requirementVersionId(requirement.id, nextVersionNumber),
+        parentVersionId: editable
+          ? current.parentVersionId || requirementParentVersionId(requirement, nextVersionNumber)
+          : requirementVersionId(requirement.id, current.version),
         status: editable ? current.status : 'draft',
         updatedAt: nowIso(),
       };
@@ -855,6 +912,8 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
             ? {
                 ...version,
                 selectedSubscenes: stripTaskSopCodes(version.selectedSubscenes),
+                versionId: version.versionId || requirementVersionId(requirement.id, version.version),
+                parentVersionId: version.parentVersionId || requirementParentVersionId(requirement, version.version),
                 status: 'confirmed' as const,
                 updatedAt: nowIso(),
               }

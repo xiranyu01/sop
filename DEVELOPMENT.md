@@ -68,7 +68,7 @@ pnpm build
 │   ├── r2AttachmentStore.ts      # Cloudflare R2 附件存储适配
 │   ├── store.ts                  # 本地 JSON 与 uploads 存储
 │   ├── versioning.ts             # 版本号和 ID 工具
-│   └── yamlExport.ts             # requirement_yaml_v0.1 导出映射
+│   └── yamlExport.ts             # requirement_yaml_v0.2 导出映射
 ├── src/
 │   ├── App.tsx                   # 主要页面和业务交互
 │   ├── App.css                   # 页面样式
@@ -91,7 +91,7 @@ pnpm build
 - `data/materials.json`：物料信息，物料有自动生成的 `SKU1`、`SKU2` 等 SKU 编号，可保存图片元数据
 - `data/robot-models.json`：机器型号和 topic 信息
 - `data/scenes.json`：场景与任务 SOP 库；场景下包含多个任务 SOP，任务 SOP 有内部随机短编号和多个版本
-- `data/requirements.json`：客户需求；保存需求版本、客户、机器人、全局要求、附件、已选任务 SOP 引用和目标采集时长，不保存任务编号
+- `data/requirements.json`：客户需求；保存需求版本、客户、机器人、全局要求、附件、生产需求项、每个生产需求项选择的任务 SOP 引用和目标采集时长/数量，不保存任务编号
 - `data/global-fields.json`：全局字段词表；用于机器人状态、随机性字段、交付语言、质检策略、采集/标注操作要求等可复用枚举
 - `data/material-state-rules.json`：历史兼容文件；当前物料状态规则主要在任务 SOP 里直接维护
 
@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS app_data (
 - 草稿版本可以直接编辑，也可以删除，但至少保留一个版本。
 - 确认后的客户需求只读。
 - 编辑已确认客户需求时，会自动复制并生成新的补丁版本草稿，例如 `0.0.1 -> 0.0.2`。
-- 客户需求确认前会校验所有已选任务 SOP 版本；如果存在草稿或找不到的任务 SOP 版本，会拒绝确认并提示原因。
+- 客户需求确认前会校验所有生产需求项是否已选择已确认的任务 SOP 版本；如果存在未选择、草稿或找不到的任务 SOP 版本，会拒绝确认并提示原因。
 - 任务 SOP 版本规则与客户需求一致。
 - 任务 SOP `0.0.1` 草稿可以编辑名称和描述；非 `0.0.1` 草稿只允许编辑版本描述等正文内容，不改历史任务 SOP 名称。
 - 客户需求引用具体任务 SOP 名称和版本号，任务 SOP 发布新版不会自动影响历史客户需求。
@@ -237,15 +237,16 @@ Authorization: Bearer <APP_PASSWORD>
 
 ## YAML 导出
 
-当前导出 schema 是 `requirement_yaml_v0.1`，顶层结构为：
+当前导出 schema 是 `requirement_yaml_v0.2`，顶层结构为：
 
 ```yaml
-schema_version: requirement_yaml_v0.1
+schema_version: requirement_yaml_v0.2
 requirement: {}
 customer: {}
 robot: {}
 global_requirements: {}
-scenarios: []
+production_requirement_items: []
+task_sop_details: []
 traceability: {}
 ```
 
@@ -254,7 +255,8 @@ traceability: {}
 导出原则：
 
 - 页面字段和 YAML 字段保持语义一致。
-- 客户需求只保存任务 SOP 名称、场景名和版本引用，导出时读取对应任务 SOP 版本正文。
+- 客户需求先保存生产需求项；每个生产需求项再保存任务 SOP 名称、场景名和版本引用，导出时读取对应任务 SOP 版本正文。
+- 需求版本、任务 SOP 引用会导出 `version_id` 和 `parent_version_id`，方便追溯版本关系。
 - 需求 ID 只用于系统追溯，不作为页面主要展示字段；任务 SOP 内部编号不写入客户需求和 YAML。
 - `traceability` 只保留本地应用稳定可提供的信息。
 - 历史遗留字段不主动清理，但导出时不输出已废弃的操作中物料状态结构。
@@ -272,7 +274,7 @@ PDF 导出在前端生成，不依赖服务端文件系统：
 
 - 任务 SOP 详情页可导出当前任务 SOP 版本 PDF。
 - 客户需求详情页可导出整个需求 PDF。
-- 需求 PDF 会展开已选任务 SOP 引用并写入对应任务 SOP 版本正文。
+- 需求 PDF 会先展示生产需求项，再展开其选择的任务 SOP 引用并写入对应任务 SOP 版本正文。
 
 ## 开发约定
 
@@ -321,11 +323,12 @@ PDF 导出在前端生成，不依赖服务端文件系统：
 
 - 可以新建需求，并自动生成 6 位随机短 ID。
 - 需求 ID 不在页面中作为主要字段展示，但 YAML 中保留。
-- 可以添加多个任务 SOP，添加时可选择具体版本，默认选择最新版。
-- 已选任务 SOP 按场景分组展示，并可跳转查看详情。
+- 可以添加多个生产需求项，每个需求项可以维护名称、描述、场景、目标采集时长和目标采集数量。
+- 每个生产需求项可以单独选择任务 SOP，选择时可切换具体版本，默认选择最新版。
+- 生产需求项按场景分组展示，并可跳转查看已选择的任务 SOP 详情。
 - 从需求页跳转到任务 SOP 详情时，任务 SOP 页顶部有返回需求页按钮。
-- 总目标时长和任务 SOP 时长合计有差异提示。
-- 如果已选任务 SOP 存在草稿或缺失版本，需求确认按钮应禁用或后端拒绝确认。
+- 总目标时长和生产需求项目标时长合计有差异提示。
+- 如果生产需求项未选择任务 SOP，或选择的任务 SOP 存在草稿/缺失版本，需求确认按钮应禁用或后端拒绝确认。
 - 确认版本后再编辑，会生成新的草稿版本。
 - 需求附件可以上传、下载和删除，单个附件不超过 1G。
 - 需求 PDF 可以正常导出。

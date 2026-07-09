@@ -156,6 +156,7 @@ function mapScenario(
   sceneName: string,
   requestedVersion: string,
   targetDurationHours: number,
+  targetCollectionCount: number | undefined,
   subscene: SubsceneVersion,
 ): unknown {
   return {
@@ -166,6 +167,7 @@ function mapScenario(
     description: subscene.description,
     attachments: mapAttachments(subscene.attachments),
     target_duration_hours: targetDurationHours,
+    target_collection_count: targetCollectionCount || 0,
     materials: mapMaterials(subscene.materials),
     robot_state: toSnakeObject(subscene.robotState),
     randomization: mapRandomization(subscene.randomization, subscene.attachments),
@@ -194,6 +196,7 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       selected.sceneName || sceneName,
       selected.version,
       selected.targetDurationHours,
+      selected.targetCollectionCount,
       subscene,
     );
   });

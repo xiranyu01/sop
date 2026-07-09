@@ -259,6 +259,7 @@ export interface RequestedSubscene {
   sceneName: string;
   version: string;
   targetDurationHours: number;
+  targetCollectionCount?: number;
 }
 
 export interface RequirementAttachment {

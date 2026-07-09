@@ -998,6 +998,7 @@ function selectedSubscenesReport(
       ['引用版本', selected.version],
       ['引用版本状态', target?.version ? statusText(target.version.status) : '未找到'],
       ['目标采集时长', `${selected.targetDurationHours || 0} h`],
+      ['目标采集数量', `${selected.targetCollectionCount || 0}`],
     ]);
     const detail =
       target?.version && target.subscene
@@ -2248,6 +2249,29 @@ function RequirementPage({
       ),
     },
     {
+      key: 'count',
+      title: '目标采集数量',
+      width: '160px',
+      render: (item) => (
+        <span className="inline-edit">
+          <InlineNumberInput
+            disabled={readonly}
+            value={item.targetCollectionCount || 0}
+            onCommit={(targetCollectionCount) => {
+              if (readonly) return;
+              const selectedSubscenes = selectedVersion?.selectedSubscenes.map((current) =>
+                current.subsceneCode === item.subsceneCode && current.version === item.version
+                  ? { ...current, targetCollectionCount }
+                  : current,
+              );
+              if (selectedSubscenes) void onSave({ selectedSubscenes });
+            }}
+          />
+          条
+        </span>
+      ),
+    },
+    {
       key: 'action',
       title: '操作',
       width: '118px',
@@ -2425,6 +2449,7 @@ function RequirementPage({
           sceneName: item.sceneName,
           version: item.selectedVersion.version,
           targetDurationHours: 0,
+          targetCollectionCount: 0,
         },
       ],
     });

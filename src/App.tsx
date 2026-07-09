@@ -877,8 +877,12 @@ function publicAttachmentUrl(publicBaseUrl: string | undefined, storageKey: stri
   return `${base}/${encodedKey}`;
 }
 
+function protectedAttachmentUrl(storageKey: string): string {
+  return `/api/attachments/${encodeURIComponent(storageKey)}`;
+}
+
 async function downloadStoredAttachment(attachment: RequirementAttachment) {
-  const res = await fetch(`/api/attachments/${encodeURIComponent(attachment.storageKey)}`, { headers: apiHeaders() });
+  const res = await fetch(protectedAttachmentUrl(attachment.storageKey), { headers: apiHeaders() });
   if (!res.ok) {
     const error = (await res.json().catch(() => ({ message: '下载失败' }))) as { message?: string };
     throw new Error(error.message || '下载失败');
@@ -3095,8 +3099,18 @@ function ScenePage({
     {
       key: 'skuId',
       title: 'SKU',
-      width: '120px',
-      render: (item) => <strong className="table-link">{item.skuId}</strong>,
+      width: '170px',
+      allowOverflow: true,
+      render: (item) => {
+        const material = materials.find((candidate) => candidate.id === item.materialId);
+        const image = material?.images?.[0];
+        return (
+          <span className="sku-with-image">
+            <strong className="table-link">{item.skuId}</strong>
+            {image && <AttachmentThumbnail attachment={image} publicBaseUrl={attachmentStorageStatus.publicBaseUrl} />}
+          </span>
+        );
+      },
     },
     { key: 'type', title: '物料类型', width: 'minmax(140px, 1.2fr)', render: (item) => item.type },
     {
@@ -3128,6 +3142,18 @@ function ScenePage({
     { key: 'color', title: '颜色', width: '110px', render: (item) => item.color || '-' },
     { key: 'material', title: '材质', width: '120px', render: (item) => item.material || '-' },
     { key: 'packageType', title: '包装类型', width: '120px', render: (item) => item.packageType || '-' },
+    {
+      key: 'size',
+      title: '尺寸',
+      width: '120px',
+      render: (item) => materials.find((candidate) => candidate.id === item.materialId)?.size || '-',
+    },
+    {
+      key: 'weight',
+      title: '重量',
+      width: '110px',
+      render: (item) => materials.find((candidate) => candidate.id === item.materialId)?.weight || '-',
+    },
     {
       key: 'action',
       title: '操作',
@@ -3350,7 +3376,7 @@ function ScenePage({
     {
       key: 'fields',
       title: '随机性要求',
-      width: '260px',
+      width: 'minmax(260px, 1.2fr)',
       allowOverflow: true,
       render: (row, index) => (
         <MultiSelectInput
@@ -3374,7 +3400,7 @@ function ScenePage({
     {
       key: 'constraints',
       title: '限制条件',
-      width: '260px',
+      width: 'minmax(260px, 1fr)',
       render: (row, index) => (
         <LongTextDialogEditor
           title="机器人初始态随机性限制条件"
@@ -3537,7 +3563,7 @@ function ScenePage({
                   onChange={(target) => void saveCurrentSubscene({ robotState: { ...version.robotState, target } })}
                 />
               </div>
-              <div className="embedded-table">
+              <div className="embedded-table robot-randomization-table">
                 <div className="embedded-table-header">
                   <div>
                     <h3>机器人初始态随机性</h3>
@@ -5646,6 +5672,7 @@ function AttachmentField({
   onDelete: (attachmentId: string) => Promise<void>;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<RequirementAttachment | null>(null);
   const uploadDisabled = disabled || Boolean(upload) || !storageStatus.enabled;
 
   async function pickFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -5683,13 +5710,25 @@ function AttachmentField({
           <div className="attachment-list">
             {attachments.map((attachment) => (
               <div className="attachment-row" key={attachment.id}>
-                <div>
-                  <strong>{attachment.name}</strong>
-                  <span>
-                    {formatFileSize(attachment.size)} · {formatShortDate(attachment.uploadedAt)}
-                  </span>
+                <div className="attachment-main">
+                  <AttachmentPreviewThumb
+                    attachment={attachment}
+                    publicBaseUrl={storageStatus.publicBaseUrl}
+                    onPreview={() => setPreviewAttachment(attachment)}
+                  />
+                  <div>
+                    <button type="button" className="attachment-name-button" onClick={() => setPreviewAttachment(attachment)}>
+                      {attachment.name}
+                    </button>
+                    <span>
+                      {formatFileSize(attachment.size)} · {formatShortDate(attachment.uploadedAt)}
+                    </span>
+                  </div>
                 </div>
                 <div className="button-row">
+                  <button className="text-button" onClick={() => setPreviewAttachment(attachment)}>
+                    预览
+                  </button>
                   <button className="text-button" onClick={() => void onDownload(attachment)}>
                     下载
                   </button>
@@ -5702,22 +5741,46 @@ function AttachmentField({
           </div>
         )}
       </div>
+      {previewAttachment && (
+        <AttachmentPreviewModal
+          attachment={previewAttachment}
+          publicBaseUrl={storageStatus.publicBaseUrl}
+          onClose={() => setPreviewAttachment(null)}
+          onDownload={() => onDownload(previewAttachment)}
+        />
+      )}
     </div>
   );
 }
 
-function AttachmentThumbnail({ attachment, publicBaseUrl }: { attachment: RequirementAttachment; publicBaseUrl?: string }) {
+function AttachmentPreviewThumb({
+  attachment,
+  publicBaseUrl,
+  onPreview,
+  compact = false,
+}: {
+  attachment: RequirementAttachment;
+  publicBaseUrl?: string;
+  onPreview: () => void;
+  compact?: boolean;
+}) {
   const [url, setUrl] = useState('');
-  const publicUrl = publicAttachmentUrl(publicBaseUrl, attachment.storageKey);
+  const isImage = attachment.contentType.startsWith('image/');
+  const isVideo = attachment.contentType.startsWith('video/');
+  const publicUrl = isImage ? publicAttachmentUrl(publicBaseUrl, attachment.storageKey) : '';
 
   useEffect(() => {
+    if (!isImage) {
+      setUrl('');
+      return undefined;
+    }
     if (publicUrl) {
       setUrl(publicUrl);
       return undefined;
     }
     let active = true;
     let objectUrl = '';
-    fetch(`/api/attachments/${encodeURIComponent(attachment.storageKey)}`, { headers: apiHeaders() })
+    fetch(protectedAttachmentUrl(attachment.storageKey), { headers: apiHeaders() })
       .then((res) => (res.ok ? res.blob() : undefined))
       .then((blob) => {
         if (!blob || !active) return;
@@ -5729,12 +5792,105 @@ function AttachmentThumbnail({ attachment, publicBaseUrl }: { attachment: Requir
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment.storageKey, publicUrl]);
+  }, [attachment.storageKey, isImage, publicUrl]);
 
-  if (!url) {
-    return <div className="state-image-thumb-placeholder">图片</div>;
-  }
-  return <img src={url} alt={attachment.name} />;
+  return (
+    <button type="button" className={`attachment-preview-thumb ${compact ? 'compact' : ''}`} onClick={onPreview} title="点击预览">
+      {isImage && url ? <img src={url} alt={attachment.name} /> : <span>{isVideo ? '视频' : isImage ? '图片' : '文件'}</span>}
+    </button>
+  );
+}
+
+function AttachmentPreviewModal({
+  attachment,
+  publicBaseUrl,
+  onClose,
+  onDownload,
+}: {
+  attachment: RequirementAttachment;
+  publicBaseUrl?: string;
+  onClose: () => void;
+  onDownload: () => Promise<void>;
+}) {
+  const [objectUrl, setObjectUrl] = useState('');
+  const [loadFailed, setLoadFailed] = useState(false);
+  const isImage = attachment.contentType.startsWith('image/');
+  const isVideo = attachment.contentType.startsWith('video/');
+  const publicUrl = publicAttachmentUrl(publicBaseUrl, attachment.storageKey);
+  const previewUrl = publicUrl || objectUrl;
+
+  useEffect(() => {
+    setLoadFailed(false);
+    setObjectUrl('');
+    if (publicUrl || (!isImage && !isVideo)) {
+      return undefined;
+    }
+    let active = true;
+    let localObjectUrl = '';
+    fetch(protectedAttachmentUrl(attachment.storageKey), { headers: apiHeaders() })
+      .then((res) => (res.ok ? res.blob() : undefined))
+      .then((blob) => {
+        if (!active) return;
+        if (!blob) {
+          setLoadFailed(true);
+          return;
+        }
+        localObjectUrl = URL.createObjectURL(blob);
+        setObjectUrl(localObjectUrl);
+      })
+      .catch(() => setLoadFailed(true));
+    return () => {
+      active = false;
+      if (localObjectUrl) URL.revokeObjectURL(localObjectUrl);
+    };
+  }, [attachment.storageKey, isImage, isVideo, publicUrl]);
+
+  return (
+    <Modal title={`预览：${attachment.name}`} onClose={onClose}>
+      <div className="attachment-preview-modal">
+        <div className="attachment-preview-stage">
+          {isImage && previewUrl && <img src={previewUrl} alt={attachment.name} />}
+          {isVideo && previewUrl && <video src={previewUrl} controls />}
+          {(isImage || isVideo) && !previewUrl && !loadFailed && <div className="attachment-preview-fallback">正在加载预览...</div>}
+          {(!isImage && !isVideo) && <div className="attachment-preview-fallback">当前文件类型不支持在线预览，可以下载后查看。</div>}
+          {loadFailed && <div className="attachment-preview-fallback">预览加载失败，可以下载后查看。</div>}
+        </div>
+        <div className="attachment-preview-meta">
+          <span>{attachment.contentType || '未知类型'}</span>
+          <span>{formatFileSize(attachment.size)}</span>
+          <span>{formatShortDate(attachment.uploadedAt)}</span>
+        </div>
+        <div className="form-actions">
+          {publicUrl && (
+            <a className="ghost-button" href={publicUrl} target="_blank" rel="noreferrer">
+              新窗口打开
+            </a>
+          )}
+          <button className="primary-button" onClick={() => void onDownload()}>
+            下载
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function AttachmentThumbnail({ attachment, publicBaseUrl }: { attachment: RequirementAttachment; publicBaseUrl?: string }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  return (
+    <>
+      <AttachmentPreviewThumb attachment={attachment} publicBaseUrl={publicBaseUrl} compact onPreview={() => setPreviewOpen(true)} />
+      {previewOpen && (
+        <AttachmentPreviewModal
+          attachment={attachment}
+          publicBaseUrl={publicBaseUrl}
+          onClose={() => setPreviewOpen(false)}
+          onDownload={() => downloadStoredAttachment(attachment)}
+        />
+      )}
+    </>
+  );
 }
 
 function keyValueLines(value: string): Record<string, string> {

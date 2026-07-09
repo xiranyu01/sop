@@ -101,6 +101,7 @@ type Option = {
 type AttachmentStorageStatus = {
   enabled: boolean;
   message: string;
+  publicBaseUrl?: string;
 };
 
 type PrintableSection = {
@@ -867,6 +868,13 @@ function materialRandomizationReport(version: SubsceneVersion): string {
 function stepRandomizationReport(value?: { enabled: boolean; startOrder: number; endOrder: number }): string {
   if (!value?.enabled) return '未启用';
   return `第 ${value.startOrder || 1} 步到第 ${value.endOrder || 1} 步顺序可随机`;
+}
+
+function publicAttachmentUrl(publicBaseUrl: string | undefined, storageKey: string): string {
+  if (!publicBaseUrl) return '';
+  const base = publicBaseUrl.replace(/\/+$/, '');
+  const encodedKey = storageKey.split('/').map(encodeURIComponent).join('/');
+  return `${base}/${encodedKey}`;
 }
 
 async function downloadStoredAttachment(attachment: RequirementAttachment) {
@@ -4826,7 +4834,7 @@ function SubsceneStateEditor({
           <div className="state-image-list">
             {images.map((image) => (
               <div className="state-image-item" key={image.id}>
-                <AttachmentThumbnail attachment={image} />
+                <AttachmentThumbnail attachment={image} publicBaseUrl={storageStatus.publicBaseUrl} />
                 <div>
                   <strong>{image.name}</strong>
                   <span>{formatFileSize(image.size)}</span>
@@ -5698,10 +5706,15 @@ function AttachmentField({
   );
 }
 
-function AttachmentThumbnail({ attachment }: { attachment: RequirementAttachment }) {
+function AttachmentThumbnail({ attachment, publicBaseUrl }: { attachment: RequirementAttachment; publicBaseUrl?: string }) {
   const [url, setUrl] = useState('');
+  const publicUrl = publicAttachmentUrl(publicBaseUrl, attachment.storageKey);
 
   useEffect(() => {
+    if (publicUrl) {
+      setUrl(publicUrl);
+      return undefined;
+    }
     let active = true;
     let objectUrl = '';
     fetch(`/api/attachments/${encodeURIComponent(attachment.storageKey)}`, { headers: apiHeaders() })
@@ -5716,7 +5729,7 @@ function AttachmentThumbnail({ attachment }: { attachment: RequirementAttachment
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment.storageKey]);
+  }, [attachment.storageKey, publicUrl]);
 
   if (!url) {
     return <div className="state-image-thumb-placeholder">图片</div>;

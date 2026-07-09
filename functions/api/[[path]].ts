@@ -11,6 +11,7 @@ type Env = {
   R2_S3_BUCKET?: string;
   R2_S3_ACCESS_KEY_ID?: string;
   R2_S3_SECRET_ACCESS_KEY?: string;
+  R2_PUBLIC_BASE_URL?: string;
 };
 
 type PagesContext = {
@@ -61,6 +62,7 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
       attachments: {
         enabled: attachmentStorageEnabled(context.env),
         message: attachmentStorageEnabled(context.env) ? '' : '附件存储未配置：请绑定 ATTACHMENTS，或配置 R2 S3 访问参数。',
+        publicBaseUrl: context.env.R2_PUBLIC_BASE_URL || '',
       },
     });
   }

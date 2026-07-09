@@ -1813,8 +1813,14 @@ function Modal({
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" role="presentation">
-      <section className={`modal-panel ${panelClassName}`} role="dialog" aria-modal="true" aria-label={title}>
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className={`modal-panel ${panelClassName}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="panel-header">
           <h2>{title}</h2>
           <button className="ghost-button" onClick={onClose}>

@@ -269,14 +269,6 @@ function mapObjectStates(
   };
 }
 
-function mapChangeFrequency(frequency: string, interval?: number): string {
-  if (frequency === 'every_record') return '每条变换一次';
-  if (frequency === 'every_n_records') return (interval || 1) <= 1 ? '每条变换一次' : `每 ${interval} 条变换一次`;
-  if (frequency === 'per_batch') return '每批变换一次';
-  if (frequency === 'fixed') return '固定不变';
-  return frequency;
-}
-
 function normalizeRandomFieldName(name: string): string {
   const normalized = name.toLowerCase();
   if (normalized.includes('initial_position')) return '初始位置';
@@ -317,14 +309,12 @@ function mapRandomization(
   return {
     robot_initial_state: {
       enabled: robotInitialState.enabled,
-      change_frequency: mapChangeFrequency(robotInitialState.changeFrequency, robotInitialState.changeIntervalRecords),
       change_interval_records: robotInitialState.changeIntervalRecords || 1,
       randomized_fields: mapRandomizedFields(robotInitialState.randomizedFields),
     },
     material_initial_state: {
       rules: randomization.materialInitialState.rules.map((rule) => ({
         target_materials: rule.targetMaterials,
-        change_frequency: mapChangeFrequency(rule.changeFrequency, rule.changeIntervalRecords),
         change_interval_records: rule.changeIntervalRecords || 1,
         randomized_fields: mapMaterialRandomizedFields(rule),
         collector_instruction: rule.collectorInstruction || '',

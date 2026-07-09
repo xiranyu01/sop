@@ -5322,9 +5322,6 @@ function SubsceneStateEditor({
             {images.map((image) => (
               <div className="state-image-item" key={image.id}>
                 <AttachmentThumbnail attachment={image} publicBaseUrl={storageStatus.publicBaseUrl} />
-                <div>
-                  <strong>{image.name}</strong>
-                </div>
                 <button type="button" className="text-button danger state-image-remove" disabled={readOnly} onClick={() => unbindImage(target, image.id)}>
                   删除
                 </button>

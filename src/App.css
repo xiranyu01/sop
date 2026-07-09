@@ -2224,19 +2224,18 @@ button:disabled {
 }
 
 .state-image-item {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr) auto;
+  position: relative;
+  display: block;
   align-items: center;
-  gap: 8px;
   border: 1px solid #e3ebf3;
   border-radius: 8px;
   background: #fbfdff;
-  padding: 8px;
+  padding: 6px;
 }
 
 .state-image-item img {
-  width: 88px;
-  height: 66px;
+  width: 144px;
+  height: 108px;
   border: 1px solid #dce6ef;
   border-radius: 6px;
   background: #eef3f8;
@@ -2244,8 +2243,8 @@ button:disabled {
 }
 
 .state-image-item .attachment-preview-thumb {
-  width: 88px;
-  height: 66px;
+  width: 144px;
+  height: 108px;
 }
 
 .state-image-item .attachment-preview-thumb img {
@@ -2257,8 +2256,8 @@ button:disabled {
 
 .state-image-thumb-placeholder {
   display: grid;
-  width: 88px;
-  height: 66px;
+  width: 144px;
+  height: 108px;
   place-items: center;
   border: 1px solid #dce6ef;
   border-radius: 6px;
@@ -2291,6 +2290,9 @@ button:disabled {
 }
 
 .state-image-remove {
+  position: absolute;
+  top: 10px;
+  right: 10px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease;

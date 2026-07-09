@@ -68,7 +68,7 @@ pnpm build
 │   ├── r2AttachmentStore.ts      # Cloudflare R2 附件存储适配
 │   ├── store.ts                  # 本地 JSON 与 uploads 存储
 │   ├── versioning.ts             # 版本号和 ID 工具
-│   └── yamlExport.ts             # requirement_yaml_v0.4 导出映射
+│   └── yamlExport.ts             # requirement_yaml_v0.5 导出映射
 ├── src/
 │   ├── App.tsx                   # 主要页面和业务交互
 │   ├── App.css                   # 页面样式
@@ -238,14 +238,14 @@ Authorization: Bearer <APP_PASSWORD>
 
 ## YAML 导出
 
-当前导出 schema 是 `requirement_yaml_v0.4`，顶层结构为：
+当前导出 schema 是 `requirement_yaml_v0.5`，顶层结构为：
 
 ```yaml
-schema_version: requirement_yaml_v0.4
+schema_version: requirement_yaml_v0.5
 schema_versions:
   app_data: app_data_v0.1
-  requirement_yaml: requirement_yaml_v0.4
-  task_sop_yaml: task_sop_yaml_v0.2
+  requirement_yaml: requirement_yaml_v0.5
+  task_sop_yaml: task_sop_yaml_v0.3
 requirement: {}
 customer: {}
 robot: {}

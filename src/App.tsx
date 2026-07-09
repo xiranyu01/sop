@@ -5023,10 +5023,9 @@ function SubsceneStateEditor({
                 <AttachmentThumbnail attachment={image} publicBaseUrl={storageStatus.publicBaseUrl} />
                 <div>
                   <strong>{image.name}</strong>
-                  <span>{formatFileSize(image.size)}</span>
                 </div>
-                <button type="button" className="text-button danger" disabled={readOnly} onClick={() => unbindImage(target, image.id)}>
-                  解绑
+                <button type="button" className="text-button danger state-image-remove" disabled={readOnly} onClick={() => unbindImage(target, image.id)}>
+                  删除
                 </button>
               </div>
             ))}
@@ -5079,9 +5078,6 @@ function SubsceneStateEditor({
           </div>
           <p className="state-human-summary">{stateSentence(row)}</p>
           {row.collectorInstruction && <p className="state-instruction">采集员说明：{row.collectorInstruction}</p>}
-          {row.exampleImageAttachmentIds.length > 0 && (
-            <p className="state-image-summary">示例图：{formatImageNames(row.exampleImageAttachmentIds, version.attachments)}</p>
-          )}
           {expanded && stateDetailEditor({ row, index, update })}
         </div>
         {imagePanel({ kind, index }, row.exampleImageAttachmentIds)}
@@ -5173,9 +5169,6 @@ function SubsceneStateEditor({
             </div>
           </div>
           {row.collectorInstruction && <p className="state-instruction">采集员说明：{row.collectorInstruction}</p>}
-          {row.exampleImageAttachmentIds.length > 0 && (
-            <p className="state-image-summary">示例图：{formatImageNames(row.exampleImageAttachmentIds, version.attachments)}</p>
-          )}
           {expanded && (
             <div className="state-card-detail">
               <section>

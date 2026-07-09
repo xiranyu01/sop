@@ -2075,7 +2075,7 @@ button:disabled {
 
 .state-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 14px;
   border: 1px solid #dce6ef;
   border-radius: 8px;
@@ -2134,8 +2134,7 @@ button:disabled {
   line-height: 1.55;
 }
 
-.state-instruction,
-.state-image-summary {
+.state-instruction {
   margin: 0;
   color: #52627a;
   font-size: 13px;
@@ -2189,7 +2188,7 @@ button:disabled {
 
 .state-image-item {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) auto;
+  grid-template-columns: 88px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   border: 1px solid #e3ebf3;
@@ -2199,8 +2198,8 @@ button:disabled {
 }
 
 .state-image-item img {
-  width: 54px;
-  height: 42px;
+  width: 88px;
+  height: 66px;
   border: 1px solid #dce6ef;
   border-radius: 6px;
   background: #eef3f8;
@@ -2208,8 +2207,8 @@ button:disabled {
 }
 
 .state-image-item .attachment-preview-thumb {
-  width: 54px;
-  height: 42px;
+  width: 88px;
+  height: 66px;
 }
 
 .state-image-item .attachment-preview-thumb img {
@@ -2221,8 +2220,8 @@ button:disabled {
 
 .state-image-thumb-placeholder {
   display: grid;
-  width: 54px;
-  height: 42px;
+  width: 88px;
+  height: 66px;
   place-items: center;
   border: 1px solid #dce6ef;
   border-radius: 6px;
@@ -2252,6 +2251,18 @@ button:disabled {
   margin: 0;
   color: #687891;
   font-size: 13px;
+}
+
+.state-image-remove {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.state-image-item:hover .state-image-remove,
+.state-image-item:focus-within .state-image-remove {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .state-card-empty {

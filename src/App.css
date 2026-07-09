@@ -1821,6 +1821,43 @@ button:disabled {
   outline: none;
 }
 
+.helper-text {
+  margin: 0;
+  color: #52627a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.step-bulk-modal {
+  gap: 14px;
+}
+
+.step-bulk-panel {
+  width: min(1180px, calc(100vw - 32px));
+}
+
+.step-bulk-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.step-bulk-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.step-bulk-grid label > span {
+  color: #52627a;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.step-bulk-grid .numbered-textarea textarea {
+  min-height: 220px;
+}
+
 .annotation-steps-table {
   overflow: visible;
 }

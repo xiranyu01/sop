@@ -1201,13 +1201,6 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function asLines(value: string): string[] {
-  return value
-    .split('\n')
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function findSubscene(scenes: Scene[], code: string, version?: string): SubsceneLookupResult | undefined {
   for (const scene of scenes) {
     const subscene = scene.subscenes.find((item) => item.code === code);
@@ -3790,10 +3783,13 @@ function ScenePage({
               />
             </CollapsibleSection>
             <CollapsibleSection title="采集步骤和说明" description="仅当前任务 SOP 使用的采集步骤、采集操作要求与禁止操作">
-              <StepsTextArea
-                label="采集步骤（一行一步）"
+              <StepsTable
+                title="采集步骤"
+                description="左侧填写中文步骤和原子技能，右侧填写对应英文"
+                emptyText="暂无采集步骤"
                 steps={version.operation.steps}
                 disabled={!canEditVersion}
+                enableBulkImport
                 onChange={(steps) => void saveCurrentSubscene({ operation: { ...version.operation, steps } })}
               />
               <StepRandomizationEditor
@@ -3825,7 +3821,10 @@ function ScenePage({
               />
             </CollapsibleSection>
             <CollapsibleSection title="标注步骤和说明" description="标注步骤，以及仅当前任务 SOP 生效的标注操作要求与禁止操作">
-              <AnnotationStepsTable
+              <StepsTable
+                title="标注步骤"
+                description="左侧填写中文步骤和原子技能，右侧填写对应英文"
+                emptyText="暂无标注步骤"
                 steps={version.annotation.steps || []}
                 disabled={!canEditVersion}
                 onChange={(steps) => void saveCurrentSubscene({ annotation: { ...version.annotation, steps } })}
@@ -4345,65 +4344,150 @@ function SelectFieldInline({
   );
 }
 
-function StepsTextArea({
-  label,
-  steps,
+function NumberedTextArea({
+  value,
   disabled,
+  placeholder,
+  minRows = 1,
   onChange,
 }: {
-  label: string;
-  steps: OperationStep[];
-  disabled: boolean;
-  onChange: (steps: OperationStep[]) => void;
+  value: string;
+  disabled?: boolean;
+  placeholder?: string;
+  minRows?: number;
+  onChange: (value: string) => void;
 }) {
-  const propValue = steps.map((step) => step.description).join('\n');
-  const [draft, setDraft] = useState(propValue);
-  const lineCount = Math.max(1, draft.split('\n').length);
-
-  useEffect(() => {
-    setDraft(propValue);
-  }, [propValue]);
-
-  function commitDraft() {
-    const nextSteps = asLines(draft).map((description, index) => ({ order: index + 1, description }));
-    const nextValue = nextSteps.map((step) => step.description).join('\n');
-    if (nextValue !== propValue) {
-      onChange(nextSteps);
-    }
-    setDraft(nextValue);
-  }
+  const lineCount = Math.max(minRows, value.split('\n').length || 1);
 
   return (
-    <label className="field wide">
-      <span>{label}</span>
-      <div className="numbered-textarea">
-        <div className="line-number-gutter" aria-hidden="true">
-          {Array.from({ length: lineCount }, (_, index) => (
-            <span key={index}>{index + 1}</span>
-          ))}
-        </div>
-        <textarea
-          value={draft}
-          disabled={disabled}
-          onBlur={commitDraft}
-          onChange={(event) => setDraft(event.target.value)}
-        />
+    <div className="numbered-textarea">
+      <div className="line-number-gutter" aria-hidden="true">
+        {Array.from({ length: lineCount }, (_, index) => (
+          <span key={index}>{index + 1}</span>
+        ))}
       </div>
-    </label>
+      <textarea
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
   );
 }
 
-function AnnotationStepsTable({
+function splitStepBulkLines(value: string): string[] {
+  return value.replace(/\r\n/g, '\n').split('\n');
+}
+
+function BulkStepsModal({
+  onClose,
+  onConfirm,
+}: {
+  onClose: () => void;
+  onConfirm: (steps: OperationStep[]) => void;
+}) {
+  const [draft, setDraft] = useState({
+    description: '',
+    atomicSkill: '',
+    englishDescription: '',
+    englishAtomicSkill: '',
+  });
+  const columns = {
+    description: splitStepBulkLines(draft.description),
+    atomicSkill: splitStepBulkLines(draft.atomicSkill),
+    englishDescription: splitStepBulkLines(draft.englishDescription),
+    englishAtomicSkill: splitStepBulkLines(draft.englishAtomicSkill),
+  };
+  const maxRows = Math.max(
+    columns.description.length,
+    columns.atomicSkill.length,
+    columns.englishDescription.length,
+    columns.englishAtomicSkill.length,
+  );
+  const importedSteps = Array.from({ length: maxRows }, (_, index) => ({
+    order: index + 1,
+    description: columns.description[index]?.trim() || '',
+    atomicSkill: columns.atomicSkill[index]?.trim() || '',
+    englishDescription: columns.englishDescription[index]?.trim() || '',
+    englishAtomicSkill: columns.englishAtomicSkill[index]?.trim() || '',
+  })).filter((step) => step.description || step.atomicSkill || step.englishDescription || step.englishAtomicSkill);
+
+  return (
+    <Modal title="批量输入步骤" panelClassName="step-bulk-panel" onClose={onClose}>
+      <div className="modal-body step-bulk-modal">
+        <p className="helper-text">每一行会按行号合并成同一个步骤；可以只填写其中几列。</p>
+        <div className="step-bulk-grid">
+          <label>
+            <span>中文步骤</span>
+            <NumberedTextArea
+              value={draft.description}
+              minRows={8}
+              placeholder="一行一个中文步骤"
+              onChange={(description) => setDraft((current) => ({ ...current, description }))}
+            />
+          </label>
+          <label>
+            <span>中文原子技能</span>
+            <NumberedTextArea
+              value={draft.atomicSkill}
+              minRows={8}
+              placeholder="一行一个原子技能"
+              onChange={(atomicSkill) => setDraft((current) => ({ ...current, atomicSkill }))}
+            />
+          </label>
+          <label>
+            <span>English Step</span>
+            <NumberedTextArea
+              value={draft.englishDescription}
+              minRows={8}
+              placeholder="One English step per line"
+              onChange={(englishDescription) => setDraft((current) => ({ ...current, englishDescription }))}
+            />
+          </label>
+          <label>
+            <span>English Atomic Skill</span>
+            <NumberedTextArea
+              value={draft.englishAtomicSkill}
+              minRows={8}
+              placeholder="One atomic skill per line"
+              onChange={(englishAtomicSkill) => setDraft((current) => ({ ...current, englishAtomicSkill }))}
+            />
+          </label>
+        </div>
+        <div className="form-actions">
+          <button className="ghost-button" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary-button" disabled={importedSteps.length === 0} onClick={() => onConfirm(importedSteps)}>
+            确认导入
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function StepsTable({
+  title,
+  description,
+  emptyText,
   steps,
   disabled,
+  enableBulkImport = false,
   onChange,
 }: {
+  title: string;
+  description: string;
+  emptyText: string;
   steps: OperationStep[];
   disabled: boolean;
+  enableBulkImport?: boolean;
   onChange: (steps: OperationStep[]) => void;
 }) {
   const stepsSignature = JSON.stringify(steps);
   const [draftSteps, setDraftSteps] = useState<OperationStep[]>(() => normalize(steps));
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   useEffect(() => {
     setDraftSteps(normalize(steps));
@@ -4450,66 +4534,83 @@ function AnnotationStepsTable({
     onChange(nextSteps);
   }
 
+  function importSteps(importedSteps: OperationStep[]) {
+    const nextSteps = normalize([...draftSteps, ...importedSteps]);
+    setDraftSteps(nextSteps);
+    onChange(nextSteps);
+    setBulkOpen(false);
+  }
+
   return (
-    <div className="embedded-table annotation-steps-table">
-      <div className="embedded-table-header">
-        <div>
-          <h3>标注步骤</h3>
-          <p>左侧填写中文步骤和原子技能，右侧填写对应英文</p>
-        </div>
-        <button className="primary-button" disabled={disabled} onClick={addStep}>
-          新增步骤
-        </button>
-      </div>
-      <div className="annotation-steps-grid">
-        <div className="annotation-steps-head">序号</div>
-        <div className="annotation-steps-head">中文步骤</div>
-        <div className="annotation-steps-head">中文原子技能</div>
-        <div className="annotation-steps-head">English Step</div>
-        <div className="annotation-steps-head">English Atomic Skill</div>
-        <div className="annotation-steps-head">操作</div>
-        {draftSteps.length === 0 ? (
-          <div className="annotation-steps-empty">暂无标注步骤</div>
-        ) : (
-          draftSteps.map((step, index) => (
-            <div className="annotation-steps-row" key={`annotation-step-${index}`}>
-              <div className="annotation-step-order">{index + 1}</div>
-              <textarea
-                value={step.description || ''}
-                disabled={disabled}
-                placeholder="中文步骤"
-                onBlur={() => commitSteps()}
-                onChange={(event) => updateStepDraft(index, { description: event.target.value })}
-              />
-              <textarea
-                value={step.atomicSkill || ''}
-                disabled={disabled}
-                placeholder="中文原子技能"
-                onBlur={() => commitSteps()}
-                onChange={(event) => updateStepDraft(index, { atomicSkill: event.target.value })}
-              />
-              <textarea
-                value={step.englishDescription || ''}
-                disabled={disabled}
-                placeholder="English step"
-                onBlur={() => commitSteps()}
-                onChange={(event) => updateStepDraft(index, { englishDescription: event.target.value })}
-              />
-              <textarea
-                value={step.englishAtomicSkill || ''}
-                disabled={disabled}
-                placeholder="English atomic skill"
-                onBlur={() => commitSteps()}
-                onChange={(event) => updateStepDraft(index, { englishAtomicSkill: event.target.value })}
-              />
-              <button className="text-button danger" disabled={disabled} onClick={() => removeStep(index)}>
-                移除
+    <>
+      <div className="embedded-table annotation-steps-table">
+        <div className="embedded-table-header">
+          <div>
+            <h3>{title}</h3>
+            <p>{description}</p>
+          </div>
+          <div className="button-row">
+            {enableBulkImport && (
+              <button className="ghost-button" disabled={disabled} onClick={() => setBulkOpen(true)}>
+                批量输入步骤
               </button>
-            </div>
-          ))
-        )}
+            )}
+            <button className="primary-button" disabled={disabled} onClick={addStep}>
+              新增步骤
+            </button>
+          </div>
+        </div>
+        <div className="annotation-steps-grid">
+          <div className="annotation-steps-head">序号</div>
+          <div className="annotation-steps-head">中文步骤</div>
+          <div className="annotation-steps-head">中文原子技能</div>
+          <div className="annotation-steps-head">English Step</div>
+          <div className="annotation-steps-head">English Atomic Skill</div>
+          <div className="annotation-steps-head">操作</div>
+          {draftSteps.length === 0 ? (
+            <div className="annotation-steps-empty">{emptyText}</div>
+          ) : (
+            draftSteps.map((step, index) => (
+              <div className="annotation-steps-row" key={`${title}-${index}`}>
+                <div className="annotation-step-order">{index + 1}</div>
+                <textarea
+                  value={step.description || ''}
+                  disabled={disabled}
+                  placeholder="中文步骤"
+                  onBlur={() => commitSteps()}
+                  onChange={(event) => updateStepDraft(index, { description: event.target.value })}
+                />
+                <textarea
+                  value={step.atomicSkill || ''}
+                  disabled={disabled}
+                  placeholder="中文原子技能"
+                  onBlur={() => commitSteps()}
+                  onChange={(event) => updateStepDraft(index, { atomicSkill: event.target.value })}
+                />
+                <textarea
+                  value={step.englishDescription || ''}
+                  disabled={disabled}
+                  placeholder="English step"
+                  onBlur={() => commitSteps()}
+                  onChange={(event) => updateStepDraft(index, { englishDescription: event.target.value })}
+                />
+                <textarea
+                  value={step.englishAtomicSkill || ''}
+                  disabled={disabled}
+                  placeholder="English atomic skill"
+                  onBlur={() => commitSteps()}
+                  onChange={(event) => updateStepDraft(index, { englishAtomicSkill: event.target.value })}
+                />
+                <button className="text-button danger" disabled={disabled} onClick={() => removeStep(index)}>
+                  移除
+                </button>
+              </div>
+            ))
+          )}
+        </div>
       </div>
-    </div>
+      {bulkOpen && <BulkStepsModal onClose={() => setBulkOpen(false)} onConfirm={importSteps} />}
+    </>
   );
 }
 

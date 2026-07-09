@@ -5,6 +5,7 @@ import type {
   ObjectTargetState,
   Requirement,
   RequirementVersion,
+  RequestedSubscene,
   ScenarioMaterial,
   SubsceneVersion,
 } from '../src/types';
@@ -47,18 +48,29 @@ function omitKeys(input: object, keys: string[]): Record<string, unknown> {
   }, {});
 }
 
-function findSubsceneVersion(data: AppData, code: string, version: string): { sceneName: string; subscene: SubsceneVersion } {
-  for (const scene of data.scenes) {
-    const subscene = scene.subscenes.find((item) => item.code === code);
-    if (!subscene) {
-      continue;
-    }
-    const versionItem = subscene.versions.find((item) => item.version === version);
-    if (versionItem) {
-      return { sceneName: scene.name, subscene: versionItem };
+function findTaskSopVersion(data: AppData, selected: RequestedSubscene): { sceneName: string; taskSopName: string; subscene: SubsceneVersion } {
+  if (selected.subsceneCode) {
+    for (const scene of data.scenes) {
+      const subscene = scene.subscenes.find((item) => item.code === selected.subsceneCode);
+      const versionItem = subscene?.versions.find((item) => item.version === selected.version);
+      if (versionItem) {
+        return { sceneName: selected.sceneName || scene.name, taskSopName: selected.subsceneName || versionItem.title || subscene?.name || '', subscene: versionItem };
+      }
     }
   }
-  throw new Error(`找不到子场景 ${code} 的版本 ${version}`);
+
+  for (const scene of data.scenes) {
+    if (selected.sceneName && scene.name !== selected.sceneName) continue;
+    for (const subscene of scene.subscenes) {
+      const versionItem = subscene.versions.find((item) => item.version === selected.version);
+      if (!versionItem) continue;
+      if (subscene.name === selected.subsceneName || versionItem.title === selected.subsceneName) {
+        return { sceneName: scene.name, taskSopName: selected.subsceneName || versionItem.title || subscene.name, subscene: versionItem };
+      }
+    }
+  }
+
+  throw new Error(`找不到任务 SOP ${selected.sceneName} / ${selected.subsceneName} 的版本 ${selected.version}`);
 }
 
 function mapMaterials(materials: ScenarioMaterial[]): unknown {
@@ -79,7 +91,6 @@ function mapAttachments(attachments: SubsceneVersion['attachments']): unknown {
     name: attachment.name,
     size: attachment.size,
     content_type: attachment.contentType,
-    storage_key: attachment.storageKey,
     uploaded_at: attachment.uploadedAt,
   }));
 }
@@ -90,7 +101,6 @@ function mapExampleImages(ids: string[] | undefined, attachments: SubsceneVersio
     return {
       attachment_id: id,
       name: attachment?.name || '',
-      storage_key: attachment?.storageKey || '',
     };
   });
 }
@@ -152,18 +162,17 @@ function mapAnnotation(annotation: SubsceneVersion['annotation']): unknown {
 }
 
 function mapScenario(
-  code: string,
   sceneName: string,
+  taskSopName: string,
   requestedVersion: string,
   targetDurationHours: number,
   targetCollectionCount: number | undefined,
   subscene: SubsceneVersion,
 ): unknown {
   return {
-    scenario_id: code,
     version: requestedVersion,
     scene_name: sceneName,
-    sub_scene_name: subscene.title || subscene.description,
+    task_sop_name: taskSopName || subscene.title || subscene.description,
     description: subscene.description,
     attachments: mapAttachments(subscene.attachments),
     target_duration_hours: targetDurationHours,
@@ -190,10 +199,10 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
   }
 
   const scenarios = version.selectedSubscenes.map((selected) => {
-    const { sceneName, subscene } = findSubsceneVersion(data, selected.subsceneCode, selected.version);
+    const { sceneName, taskSopName, subscene } = findTaskSopVersion(data, selected);
     return mapScenario(
-      selected.subsceneCode,
       selected.sceneName || sceneName,
+      selected.subsceneName || taskSopName,
       selected.version,
       selected.targetDurationHours,
       selected.targetCollectionCount,
@@ -236,9 +245,12 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       scene_data_scope: {
         requested_scenes: version.requestedScenes.map((sceneName) => ({
           scene_name: sceneName,
-          linked_scenario_ids: version.selectedSubscenes
+          task_sops: version.selectedSubscenes
             .filter((selected) => selected.sceneName === sceneName)
-            .map((selected) => selected.subsceneCode),
+            .map((selected) => ({
+              task_sop_name: selected.subsceneName,
+              version: selected.version,
+            })),
         })),
       },
       collection: {
@@ -257,8 +269,9 @@ export function buildRequirementYaml(data: AppData, requirement: Requirement, ve
       generated_from: `sop-requirement-manager ${new Date().toISOString()}`,
       requirement_id: requirement.id,
       requirement_version: version.version,
-      subscene_versions: version.selectedSubscenes.map((selected) => ({
-        scenario_id: selected.subsceneCode,
+      task_sop_versions: version.selectedSubscenes.map((selected) => ({
+        scene_name: selected.sceneName,
+        task_sop_name: selected.subsceneName,
         version: selected.version,
       })),
     },

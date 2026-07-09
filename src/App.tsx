@@ -108,6 +108,15 @@ type PrintableSection = {
   title: string;
   description?: string;
   content: string;
+  attachments?: PrintableAttachment[];
+};
+
+type PrintableAttachment = {
+  name: string;
+  size: number;
+  contentType: string;
+  uploadedAt: string;
+  url?: string;
 };
 
 type StateImageUploadTarget =
@@ -673,6 +682,34 @@ function renderPrintableReport(report: PrintableReport): string {
       word-break: break-word;
       font: inherit;
     }
+    .attachments {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .attachment-card {
+      break-inside: avoid;
+      border: 1px solid #d8dee8;
+      border-radius: 6px;
+      background: #f8fafc;
+      padding: 10px;
+    }
+    .attachment-card img {
+      display: block;
+      max-width: 100%;
+      max-height: 96mm;
+      object-fit: contain;
+      margin-bottom: 8px;
+    }
+    .attachment-card a {
+      color: #1d4ed8;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .attachment-meta {
+      color: #667085;
+      font-size: 11px;
+    }
     .footer {
       margin-top: 24px;
       padding-top: 10px;
@@ -691,18 +728,36 @@ function renderPrintableReport(report: PrintableReport): string {
     ${report.subtitle ? `<p>${escapeHtml(report.subtitle)}</p>` : ''}
   </header>
   ${report.sections
-    .filter((section) => section.content.trim())
+    .filter((section) => section.content.trim() || section.attachments?.length)
     .map(
       (section) => `<section>
     <h2>${escapeHtml(section.title)}</h2>
     ${section.description ? `<p class="section-desc">${escapeHtml(section.description)}</p>` : ''}
-    <pre>${escapeHtml(section.content)}</pre>
+    ${section.content.trim() ? `<pre>${escapeHtml(section.content)}</pre>` : ''}
+    ${renderPrintableAttachments(section.attachments)}
   </section>`,
     )
     .join('')}
   <div class="footer">由 coScene SOP 需求管理系统生成 · ${escapeHtml(new Date().toLocaleString('zh-CN'))}</div>
 </body>
 </html>`;
+}
+
+function renderPrintableAttachments(attachments: PrintableSection['attachments']): string {
+  if (!attachments?.length) return '';
+  return `<div class="attachments">${attachments
+    .map((attachment) => {
+      const meta = `${attachment.contentType || '未知类型'} · ${formatFileSize(attachment.size)} · ${formatShortDate(attachment.uploadedAt)}`;
+      const name = escapeHtml(attachment.name);
+      const url = attachment.url ? escapeHtml(attachment.url) : '';
+      const media =
+        attachment.contentType.startsWith('image/') && attachment.url
+          ? `<img src="${url}" alt="${name}" />`
+          : '';
+      const link = attachment.url ? `<a href="${url}">${name}</a>` : `<strong>${name}</strong>`;
+      return `<div class="attachment-card">${media}<div>${link}</div><div class="attachment-meta">${escapeHtml(meta)}</div></div>`;
+    })
+    .join('')}</div>`;
 }
 
 function escapeHtml(value: string | number | undefined | null): string {
@@ -877,6 +932,16 @@ function publicAttachmentUrl(publicBaseUrl: string | undefined, storageKey: stri
   return `${base}/${encodedKey}`;
 }
 
+function printableAttachments(attachments: RequirementAttachment[] | undefined, publicBaseUrl?: string): PrintableAttachment[] {
+  return (attachments || []).map((attachment) => ({
+    name: attachment.name,
+    size: attachment.size,
+    contentType: attachment.contentType,
+    uploadedAt: attachment.uploadedAt,
+    url: publicAttachmentUrl(publicBaseUrl, attachment.storageKey) || undefined,
+  }));
+}
+
 function protectedAttachmentUrl(storageKey: string): string {
   return `/api/attachments/${encodeURIComponent(storageKey)}`;
 }
@@ -898,13 +963,13 @@ async function downloadStoredAttachment(attachment: RequirementAttachment) {
   URL.revokeObjectURL(url);
 }
 
-function subsceneReportSections(scene: Scene, subscene: Subscene, version: SubsceneVersion): PrintableSection[] {
+function subsceneReportSections(scene: Scene, subscene: Subscene, version: SubsceneVersion, publicBaseUrl?: string): PrintableSection[] {
   return [
     {
       title: '基础信息',
       content: keyValueReport([
         ['场景', scene.name],
-        ['子场景名称', version.title || subscene.name],
+        ['任务 SOP 名称', version.title || subscene.name],
         ['版本', version.version],
         ['状态', statusText(version.status)],
         ['更新时间', formatShortDate(version.updatedAt)],
@@ -971,30 +1036,36 @@ function subsceneReportSections(scene: Scene, subscene: Subscene, version: Subsc
         textItemsReport(version.annotation.forbiddenOperations),
       ].join('\n'),
     },
+    {
+      title: '任务 SOP 附件',
+      content: version.attachments?.length ? '附件内容如下。' : '-',
+      attachments: printableAttachments(version.attachments, publicBaseUrl),
+    },
   ];
 }
 
-function buildSubscenePdfReport(scene: Scene, subscene: Subscene, version: SubsceneVersion): PrintableReport {
+function buildSubscenePdfReport(scene: Scene, subscene: Subscene, version: SubsceneVersion, publicBaseUrl?: string): PrintableReport {
   return {
     title: version.title || subscene.name,
-    subtitle: `${scene.name} · 子场景版本 v${version.version} · ${statusText(version.status)}`,
+    subtitle: `${scene.name} · 任务 SOP 版本 v${version.version} · ${statusText(version.status)}`,
     fileName: `${safeFileName(version.title || subscene.name)}-${version.version}.pdf`,
-    sections: subsceneReportSections(scene, subscene, version),
+    sections: subsceneReportSections(scene, subscene, version, publicBaseUrl),
   };
 }
 
 function selectedSubscenesReport(
   scenes: Scene[],
   selectedSubscenes: RequirementVersion['selectedSubscenes'],
+  publicBaseUrl?: string,
 ): PrintableSection[] {
   if (!selectedSubscenes.length) {
-    return [{ title: '已选子场景', content: '-' }];
+    return [{ title: '已选任务 SOP', content: '-' }];
   }
   return selectedSubscenes.map((selected, index) => {
-    const target = findSubscene(scenes, selected.subsceneCode, selected.version);
+    const target = findTaskSop(scenes, selected);
     const header = keyValueReport([
       ['场景', selected.sceneName],
-      ['子场景名称', selected.subsceneName],
+      ['任务 SOP 名称', selected.subsceneName],
       ['引用版本', selected.version],
       ['引用版本状态', target?.version ? statusText(target.version.status) : '未找到'],
       ['目标采集时长', `${selected.targetDurationHours || 0} h`],
@@ -1002,18 +1073,19 @@ function selectedSubscenesReport(
     ]);
     const detail =
       target?.version && target.subscene
-        ? subsceneReportSections(target.scene, target.subscene, target.version)
+        ? subsceneReportSections(target.scene, target.subscene, target.version, publicBaseUrl)
             .map((section) => `【${section.title}】\n${section.content}`)
             .join('\n\n')
-        : '未找到对应子场景版本，无法展开正文。';
+        : '未找到对应任务 SOP 版本，无法展开正文。';
     return {
-      title: `子场景 ${index + 1}：${selected.subsceneName}`,
+      title: `任务 SOP ${index + 1}：${selected.subsceneName}`,
       content: `${header}\n\n${detail}`,
+      attachments: printableAttachments(target?.version?.attachments, publicBaseUrl),
     };
   });
 }
 
-function buildRequirementPdfReport(data: AppData, requirement: Requirement, version: RequirementVersion): PrintableReport {
+function buildRequirementPdfReport(data: AppData, requirement: Requirement, version: RequirementVersion, publicBaseUrl?: string): PrintableReport {
   const customer = data.customers.find((item) => item.id === version.customerId);
   const robot = data.robotModels.find((item) => item.id === version.robotModelId);
   const selectedDurationTotal = version.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0);
@@ -1035,7 +1107,7 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
           ['机器人型号', robot ? `${robot.brand} ${robot.model}` : '-'],
           ['业务目标', version.businessGoal],
           ['总目标时长', `${version.requiredDurationHours || 0} h`],
-          ['已选子场景时长合计', `${selectedDurationTotal} h`],
+          ['已选任务 SOP 时长合计', `${selectedDurationTotal} h`],
         ]),
       },
       {
@@ -1060,6 +1132,11 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
         ]),
       },
       {
+        title: '客户需求附件',
+        content: version.attachments?.length ? '附件内容如下。' : '-',
+        attachments: printableAttachments(version.attachments, publicBaseUrl),
+      },
+      {
         title: '客户需求层操作要求',
         content: [
           '采集操作要求：',
@@ -1078,7 +1155,7 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
           operationItemsReport(version.annotation.forbiddenOperations),
         ].join('\n'),
       },
-      ...selectedSubscenesReport(data.scenes, version.selectedSubscenes),
+      ...selectedSubscenesReport(data.scenes, version.selectedSubscenes, publicBaseUrl),
     ],
   };
 }
@@ -1143,6 +1220,47 @@ function findSubscene(scenes: Scene[], code: string, version?: string): Subscene
     };
   }
   return undefined;
+}
+
+function findTaskSop(scenes: Scene[], selected: RequirementVersion['selectedSubscenes'][number]): SubsceneLookupResult | undefined {
+  if (selected.subsceneCode) {
+    const byCode = findSubscene(scenes, selected.subsceneCode, selected.version);
+    if (byCode) return byCode;
+  }
+  for (const scene of scenes) {
+    if (scene.name !== selected.sceneName) continue;
+    const subscene = scene.subscenes.find((item) => {
+      const version = item.versions.find((candidate) => candidate.version === selected.version);
+      return item.name === selected.subsceneName || version?.title === selected.subsceneName;
+    });
+    if (!subscene) continue;
+    return {
+      scene,
+      subscene,
+      version: subscene.versions.find((item) => item.version === selected.version),
+    };
+  }
+  return undefined;
+}
+
+function selectedTaskSopKey(selected: RequirementVersion['selectedSubscenes'][number]): string {
+  return [selected.sceneName, selected.subsceneName, selected.version].join('::');
+}
+
+function candidateTaskSopKey(candidate: CandidateSubsceneOption): string {
+  return [candidate.sceneName, candidate.selectedVersion.title || candidate.name, candidate.selectedVersion.version].join('::');
+}
+
+function isSameSelectedTaskSop(
+  left: RequirementVersion['selectedSubscenes'][number],
+  right: RequirementVersion['selectedSubscenes'][number],
+): boolean {
+  return selectedTaskSopKey(left) === selectedTaskSopKey(right);
+}
+
+function stripSelectedTaskSopCode(selected: RequirementVersion['selectedSubscenes'][number]): RequirementVersion['selectedSubscenes'][number] {
+  const { subsceneCode: _subsceneCode, ...rest } = selected;
+  return rest;
 }
 
 export default function App() {
@@ -1428,7 +1546,7 @@ export default function App() {
                 ?.versions.find((item) => item.version === patch.baseVersion);
               const result = await run(
                 () => api.saveSubscene(sceneId, code, patch),
-                target?.status === 'confirmed' ? '已创建草稿版本' : '已保存子场景版本',
+                target?.status === 'confirmed' ? '已创建草稿版本' : '已保存任务 SOP 版本',
               );
               if (result) setData((current) => ({ ...current, scenes: result }));
             }}
@@ -1437,7 +1555,7 @@ export default function App() {
               if (result) setData((current) => ({ ...current, scenes: result }));
             }}
             onConfirmSubscene={async (sceneId, code, version) => {
-              const result = await run(() => api.confirmSubscene(sceneId, code, version), '子场景版本已确认');
+              const result = await run(() => api.confirmSubscene(sceneId, code, version), '任务 SOP 版本已确认');
               if (result) setData((current) => ({ ...current, scenes: result }));
             }}
             onRun={run}
@@ -1542,7 +1660,7 @@ function NavButton({ active, label, count, onClick }: { active: boolean; label: 
 function pageTitle(page: Page) {
   const map: Record<Page, string> = {
     requirements: '客户需求管理',
-    scenes: '场景与子场景库',
+    scenes: '场景与任务 SOP 库',
     globalFields: '全局字段管理',
     customers: '客户信息',
     materials: '物料信息',
@@ -1553,11 +1671,11 @@ function pageTitle(page: Page) {
 
 function pageHint(page: Page) {
   const map: Record<Page, string> = {
-    requirements: '选择客户、机器人和子场景版本，确认后可导出需求 YAML。',
-    scenes: '按场景维护子场景版本，确认后历史版本保持只读。',
-    globalFields: '管理 SOP 表单复用字段，子场景会从这里选择标准词表。',
+    requirements: '选择客户、机器人和任务 SOP 版本，确认后可导出需求 YAML。',
+    scenes: '按场景维护任务 SOP 版本，确认后历史版本保持只读。',
+    globalFields: '管理 SOP 表单复用字段，任务 SOP 会从这里选择标准词表。',
     customers: '管理客户和联系人，供客户需求引用。',
-    materials: '管理可复用物料主数据，供子场景版本引用。',
+    materials: '管理可复用物料主数据，供任务 SOP 版本引用。',
     robots: '管理机器人型号、末端和 topic 要求。',
   };
   return map[page];
@@ -1844,7 +1962,7 @@ function SingleEnumSelect({
             <div className="single-enum-custom">
               <input
                 value={customValue}
-                placeholder="新增当前子场景字段"
+                placeholder="新增当前任务 SOP 字段"
                 onChange={(event) => setCustomValue(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
@@ -1986,7 +2104,7 @@ function MultiSelectInput({
             <div className="multi-select-custom">
               <input
                 value={customValue}
-                placeholder="新增当前子场景字段"
+                placeholder="新增当前任务 SOP 字段"
                 onChange={(event) => setCustomValue(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
@@ -2122,9 +2240,7 @@ function RequirementPage({
       robot?.brand,
     ]);
   });
-  const selectedSubsceneKeys = new Set(
-    selectedVersion?.selectedSubscenes.map((item) => `${item.subsceneCode}@${item.version}`) || [],
-  );
+  const selectedSubsceneKeys = new Set(selectedVersion?.selectedSubscenes.map(selectedTaskSopKey) || []);
   const selectedSubsceneGroups = selectedVersion
     ? Array.from(
         selectedVersion.selectedSubscenes.reduce((groups, item) => {
@@ -2139,9 +2255,9 @@ function RequirementPage({
     selectedVersion?.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0) || 0;
   const durationDelta = selectedVersion ? selectedSubsceneDurationTotal - (Number(selectedVersion.requiredDurationHours) || 0) : 0;
   const missingSelectedSubscenes =
-    selectedVersion?.selectedSubscenes.filter((item) => !findSubscene(data.scenes, item.subsceneCode, item.version)) || [];
+    selectedVersion?.selectedSubscenes.filter((item) => !findTaskSop(data.scenes, item)) || [];
   const unconfirmedSelectedSubscenes =
-    selectedVersion?.selectedSubscenes.filter((item) => findSubscene(data.scenes, item.subsceneCode, item.version)?.version?.status !== 'confirmed') || [];
+    selectedVersion?.selectedSubscenes.filter((item) => findTaskSop(data.scenes, item)?.version?.status !== 'confirmed') || [];
 
   const requirementColumns: Array<DataTableColumn<Requirement>> = [
     {
@@ -2177,7 +2293,7 @@ function RequirementPage({
     },
     {
       key: 'subscenes',
-      title: '子场景',
+      title: '任务 SOP',
       width: '64px',
       align: 'right',
       render: (requirement) => latest(requirement.versions).selectedSubscenes.length,
@@ -2214,14 +2330,14 @@ function RequirementPage({
   ];
 
   const selectedSubsceneColumns: Array<DataTableColumn<RequirementVersion['selectedSubscenes'][number]>> = [
-    { key: 'name', title: '子场景', width: 'minmax(180px, 1.4fr)', render: (item) => item.subsceneName },
+    { key: 'name', title: '任务 SOP', width: 'minmax(180px, 1.4fr)', render: (item) => item.subsceneName },
     { key: 'version', title: '版本', width: '90px', render: (item) => `v${item.version}` },
     {
       key: 'status',
       title: '状态',
       width: '96px',
       render: (item) => {
-        const target = findSubscene(data.scenes, item.subsceneCode, item.version);
+        const target = findTaskSop(data.scenes, item);
         return target?.version ? <StatusBadge status={target.version.status} /> : '未找到';
       },
     },
@@ -2237,11 +2353,11 @@ function RequirementPage({
             onCommit={(targetDurationHours) => {
               if (readonly) return;
               const selectedSubscenes = selectedVersion?.selectedSubscenes.map((current) =>
-                current.subsceneCode === item.subsceneCode && current.version === item.version
+                isSameSelectedTaskSop(current, item)
                   ? { ...current, targetDurationHours }
                   : current,
               );
-              if (selectedSubscenes) void onSave({ selectedSubscenes });
+              if (selectedSubscenes) void onSave({ selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode) });
             }}
           />
           h
@@ -2260,11 +2376,11 @@ function RequirementPage({
             onCommit={(targetCollectionCount) => {
               if (readonly) return;
               const selectedSubscenes = selectedVersion?.selectedSubscenes.map((current) =>
-                current.subsceneCode === item.subsceneCode && current.version === item.version
+                isSameSelectedTaskSop(current, item)
                   ? { ...current, targetCollectionCount }
                   : current,
               );
-              if (selectedSubscenes) void onSave({ selectedSubscenes });
+              if (selectedSubscenes) void onSave({ selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode) });
             }}
           />
           条
@@ -2277,7 +2393,14 @@ function RequirementPage({
       width: '118px',
       render: (item) => (
         <span className="table-action-row">
-          <button className="text-button" onClick={() => onOpenSubscene(item.subsceneCode, item.version)}>
+          <button
+            className="text-button"
+            disabled={!findTaskSop(data.scenes, item)}
+            onClick={() => {
+              const target = findTaskSop(data.scenes, item);
+              if (target) onOpenSubscene(target.subscene.code, item.version);
+            }}
+          >
             查看
           </button>
           <button
@@ -2287,8 +2410,8 @@ function RequirementPage({
               if (readonly || !selectedVersion) return;
               void onSave({
                 selectedSubscenes: selectedVersion.selectedSubscenes.filter(
-                  (current) => !(current.subsceneCode === item.subsceneCode && current.version === item.version),
-                ),
+                  (current) => !isSameSelectedTaskSop(current, item),
+                ).map(stripSelectedTaskSopCode),
               });
             }}
           >
@@ -2300,7 +2423,7 @@ function RequirementPage({
   ];
 
   const candidateSubsceneColumns: Array<DataTableColumn<CandidateSubsceneOption>> = [
-    { key: 'name', title: '子场景', width: 'minmax(180px, 1.4fr)', render: (item) => item.name },
+    { key: 'name', title: '任务 SOP', width: 'minmax(180px, 1.4fr)', render: (item) => item.selectedVersion.title || item.name },
     { key: 'scene', title: '场景', width: '140px', render: (item) => item.sceneName },
     {
       key: 'version',
@@ -2328,7 +2451,7 @@ function RequirementPage({
       key: 'importStatus',
       title: '导入状态',
       width: '100px',
-      render: (item) => (selectedSubsceneKeys.has(`${item.code}@${item.selectedVersion.version}`) ? '已导入' : '可导入'),
+      render: (item) => (selectedSubsceneKeys.has(candidateTaskSopKey(item)) ? '已导入' : '可导入'),
     },
   ];
 
@@ -2437,15 +2560,14 @@ function RequirementPage({
 
   function addSubsceneToRequirement(item: CandidateSubsceneOption) {
     if (!selectedVersion || readonly) return;
-    const key = `${item.code}@${item.selectedVersion.version}`;
+    const key = candidateTaskSopKey(item);
     if (selectedSubsceneKeys.has(key)) return;
     void onSave({
       requestedScenes: Array.from(new Set([...selectedVersion.requestedScenes, item.sceneName])),
       selectedSubscenes: [
         ...selectedVersion.selectedSubscenes,
         {
-          subsceneCode: item.code,
-          subsceneName: item.name,
+          subsceneName: item.selectedVersion.title || item.name,
           sceneName: item.sceneName,
           version: item.selectedVersion.version,
           targetDurationHours: 0,
@@ -2563,10 +2685,10 @@ function RequirementPage({
   }
 
   const subscenePickerModal = subscenePickerOpen && (
-    <Modal title="从子场景库添加子场景" onClose={() => setSubscenePickerOpen(false)}>
+    <Modal title="从任务 SOP 库添加任务 SOP" onClose={() => setSubscenePickerOpen(false)}>
       <SearchPanel
-        title="子场景库"
-        description="按名称或场景搜索，点击行导入子场景版本"
+        title="任务 SOP 库"
+        description="按名称或场景搜索，点击行导入任务 SOP 版本"
         query={subsceneQuery}
         placeholder="搜索洗漱台整理或场景名称"
         count={candidateSubscenes.length}
@@ -2575,8 +2697,8 @@ function RequirementPage({
       <DataTable
         rows={candidateSubscenes}
         columns={candidateSubsceneColumns}
-        rowKey={(item) => item.code}
-        emptyText="没有匹配的子场景"
+        rowKey={candidateTaskSopKey}
+        emptyText="没有匹配的任务 SOP"
         onRowClick={addSubsceneToRequirement}
       />
     </Modal>
@@ -2619,7 +2741,7 @@ function RequirementPage({
             </button>
             <button
               className="ghost-button"
-              onClick={() => exportReportAsPdf(buildRequirementPdfReport(data, selectedRequirement, selectedVersion))}
+              onClick={() => exportReportAsPdf(buildRequirementPdfReport(data, selectedRequirement, selectedVersion, attachmentStorageStatus.publicBaseUrl))}
             >
               导出 PDF
             </button>
@@ -2635,7 +2757,7 @@ function RequirementPage({
                 <button
                   className="primary-button"
                   disabled={unconfirmedSelectedSubscenes.length > 0}
-                  title={unconfirmedSelectedSubscenes.length > 0 ? '有子场景还没有确认，不能确认需求' : undefined}
+                  title={unconfirmedSelectedSubscenes.length > 0 ? '有任务 SOP 还没有确认，不能确认需求' : undefined}
                   onClick={() => void onConfirm()}
                 >
                   确认版本
@@ -2648,7 +2770,7 @@ function RequirementPage({
           {readonly && <div className="notice info">当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
           {!readonly && unconfirmedSelectedSubscenes.length > 0 && (
             <div className="notice warning">
-              有 {unconfirmedSelectedSubscenes.length} 个已选子场景还没有确认，不能确认需求：
+              有 {unconfirmedSelectedSubscenes.length} 个已选任务 SOP 还没有确认，不能确认需求：
               {unconfirmedSelectedSubscenes.map((item) => `${item.sceneName} / ${item.subsceneName} v${item.version}`).join('；')}
             </div>
           )}
@@ -2897,42 +3019,42 @@ function RequirementPage({
         <div className="embedded-table">
           <div className="embedded-table-header">
             <div>
-              <h3>已选子场景</h3>
-              <p>按场景分组展示；客户需求锁定具体子场景版本，目标采集时长在这里维护</p>
+              <h3>已选任务 SOP</h3>
+              <p>按场景分组展示；客户需求锁定具体任务 SOP 版本，目标采集时长在这里维护</p>
             </div>
             <div className="button-row">
               <span className="result-count">{selectedVersion.selectedSubscenes.length} 条</span>
               <button className="primary-button" disabled={readonly} onClick={() => setSubscenePickerOpen(true)}>
-                添加子场景
+                添加任务 SOP
               </button>
             </div>
           </div>
           {durationDelta !== 0 && (
             <div className="notice warning compact-notice">
-              总目标时长 {Number(selectedVersion.requiredDurationHours) || 0} h，已选子场景目标时长合计{' '}
+              总目标时长 {Number(selectedVersion.requiredDurationHours) || 0} h，已选任务 SOP 目标时长合计{' '}
               {selectedSubsceneDurationTotal} h，{durationDelta > 0 ? '超出' : '还差'} {Math.abs(durationDelta)} h。
             </div>
           )}
           {missingSelectedSubscenes.length > 0 && (
             <div className="notice error compact-notice">
-              有 {missingSelectedSubscenes.length} 个已选子场景版本未找到，修正引用后才能导出 YAML。
+              有 {missingSelectedSubscenes.length} 个已选任务 SOP 版本未找到，修正引用后才能导出 YAML。
             </div>
           )}
           {selectedSubsceneGroups.length === 0 ? (
-            <div className="table-empty">当前客户需求还没有导入子场景</div>
+            <div className="table-empty">当前客户需求还没有添加任务 SOP</div>
           ) : (
             <div className="subscene-group-list">
               {selectedSubsceneGroups.map(([sceneName, rows]) => (
                 <section className="subscene-group" key={sceneName}>
                   <div className="subscene-group-header">
                     <strong>{sceneName}</strong>
-                    <span>{rows.length} 个子场景</span>
+                    <span>{rows.length} 个任务 SOP</span>
                   </div>
                   <DataTable
                     rows={rows}
                     columns={selectedSubsceneColumns}
-                    rowKey={(item) => `${item.subsceneCode}-${item.version}`}
-                    emptyText="当前场景下没有子场景"
+                    rowKey={selectedTaskSopKey}
+                    emptyText="当前场景下没有任务 SOP"
                   />
                 </section>
               ))}
@@ -3072,7 +3194,7 @@ function ScenePage({
   const subsceneColumns: Array<DataTableColumn<Subscene>> = [
     {
       key: 'name',
-      title: '子场景',
+      title: '任务 SOP',
       width: 'minmax(150px, 1.5fr)',
       render: (item) => latest(item.versions).title || item.name,
     },
@@ -3265,7 +3387,7 @@ function ScenePage({
 
   async function createSubscene() {
     const code = nextSubsceneCode(scenes);
-    await onSaveSubscene(scene.id, code, emptySubsceneVersionDraft('新的子场景'));
+    await onSaveSubscene(scene.id, code, emptySubsceneVersionDraft('新的任务 SOP'));
     onSelectSubscene(code);
     onSelectVersion('');
     onDetailOpenChange(true);
@@ -3470,7 +3592,7 @@ function ScenePage({
     <Modal title="从物料库添加物料" onClose={() => setMaterialPickerOpen(false)}>
       <SearchPanel
         title="物料库"
-        description="点击物料行添加到当前子场景"
+        description="点击物料行添加到当前任务 SOP"
         query={materialQuery}
         placeholder="搜索 SKU、物料类型、颜色、材质"
         count={filteredMaterials.length}
@@ -3498,7 +3620,7 @@ function ScenePage({
                 </button>
               )}
               <button className="ghost-button" onClick={closeSubsceneDetail}>
-                返回子场景列表
+                返回任务 SOP 列表
               </button>
             </div>
             <span>{scene.name} / v{version.version}</span>
@@ -3522,7 +3644,7 @@ function ScenePage({
                     ))}
                   </select>
                 </label>
-                <button className="ghost-button" onClick={() => exportReportAsPdf(buildSubscenePdfReport(scene, subscene, version))}>
+                <button className="ghost-button" onClick={() => exportReportAsPdf(buildSubscenePdfReport(scene, subscene, version, attachmentStorageStatus.publicBaseUrl))}>
                   导出 PDF
                 </button>
                 {version.status === 'confirmed' ? (
@@ -3535,43 +3657,43 @@ function ScenePage({
                       删除草稿
                     </button>
                     <button className="primary-button" onClick={() => void onConfirmSubscene(scene.id, subscene.code, version.version)}>
-                      确认子场景
+                      确认任务 SOP
                     </button>
                   </>
                 )}
               </div>
             </div>
-            {version.status === 'confirmed' && <div className="notice info">当前子场景已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
+            {version.status === 'confirmed' && <div className="notice info">当前任务 SOP 已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
             <CollapsibleSection title="基础信息" description="0.0.1 草稿可编辑名称；草稿版本可编辑描述">
               <div className="form-grid compact-fields">
                 <Field
-                  label="子场景名称"
+                  label="任务 SOP 名称"
                   value={version.title || ''}
                   disabled={!canEditSubsceneTitle}
                   onChange={(title) => void saveCurrentSubscene({ title })}
                 />
               </div>
               <TextArea
-                label="子场景描述"
+                label="任务 SOP 描述"
                 value={version.description || ''}
                 disabled={!canEditDescription}
                 onChange={(description) => void saveCurrentSubscene({ description })}
               />
               <AttachmentField
-                title="子场景附件"
+                title="任务 SOP 附件"
                 hint="支持上传图片或视频，单个附件不超过 1G"
                 accept="image/*,video/*"
                 attachments={version.attachments || []}
                 disabled={!canEditVersion}
                 storageStatus={attachmentStorageStatus}
                 upload={attachmentUpload}
-                onUpload={(file) => onRun(() => uploadSubsceneAttachment(file), '子场景附件已上传').then(() => undefined)}
+                onUpload={(file) => onRun(() => uploadSubsceneAttachment(file), '任务 SOP 附件已上传').then(() => undefined)}
                 onDownload={(attachment) => onRun(() => downloadStoredAttachment(attachment), '附件已下载').then(() => undefined)}
                 onDelete={async (attachmentId) => {
                   if (!scene || !subscene || !version) return;
                   const result = await onRun(
                     () => api.deleteSubsceneAttachment(scene.id, subscene.code, version.version, attachmentId),
-                    '子场景附件已删除',
+                    '任务 SOP 附件已删除',
                   );
                   if (result) onScenesChange(result);
                 }}
@@ -3625,7 +3747,7 @@ function ScenePage({
                 />
               </div>
             </CollapsibleSection>
-            <CollapsibleSection title="物料相关" description="选择本子场景物料，并维护物料状态、状态规则和随机性要求">
+            <CollapsibleSection title="物料相关" description="选择本任务 SOP 物料，并维护物料状态、状态规则和随机性要求">
               <div className="embedded-table">
                 <div className="embedded-table-header">
                   <div>
@@ -3643,7 +3765,7 @@ function ScenePage({
                   rows={version.materials}
                   columns={selectedMaterialColumns}
                   rowKey={(material, index) => `${material.skuId}-${index}`}
-                  emptyText="当前子场景还没有选择物料"
+                  emptyText="当前任务 SOP 还没有选择物料"
                 />
               </div>
               <SubsceneStateEditor
@@ -3660,7 +3782,7 @@ function ScenePage({
                 }}
               />
             </CollapsibleSection>
-            <CollapsibleSection title="采集步骤和说明" description="仅当前子场景使用的采集步骤、采集操作要求与禁止操作">
+            <CollapsibleSection title="采集步骤和说明" description="仅当前任务 SOP 使用的采集步骤、采集操作要求与禁止操作">
               <StepsTextArea
                 label="采集步骤（一行一步）"
                 steps={version.operation.steps}
@@ -3675,27 +3797,27 @@ function ScenePage({
               />
               <LocalTextItemEditor
                 title="采集操作要求"
-                description="仅在当前子场景中生效，可直接新建"
+                description="仅在当前任务 SOP 中生效，可直接新建"
                 items={version.operation.allowedOperations}
                 disabled={!canEditVersion}
                 onChange={(allowedOperations) => void saveCurrentSubscene({ operation: { ...version.operation, allowedOperations } })}
               />
               <LocalTextItemEditor
                 title="采集禁止操作"
-                description="仅在当前子场景中生效，可直接新建"
+                description="仅在当前任务 SOP 中生效，可直接新建"
                 items={version.operation.forbiddenOperations}
                 disabled={!canEditVersion}
                 onChange={(forbiddenOperations) => void saveCurrentSubscene({ operation: { ...version.operation, forbiddenOperations } })}
               />
               <LocalTextItemEditor
                 title="不完美但可接受的采集操作"
-                description="仅在当前子场景中生效，可直接新建"
+                description="仅在当前任务 SOP 中生效，可直接新建"
                 items={version.operation.acceptableOperations || []}
                 disabled={!canEditVersion}
                 onChange={(acceptableOperations) => void saveCurrentSubscene({ operation: { ...version.operation, acceptableOperations } })}
               />
             </CollapsibleSection>
-            <CollapsibleSection title="标注步骤和说明" description="标注步骤，以及仅当前子场景生效的标注操作要求与禁止操作">
+            <CollapsibleSection title="标注步骤和说明" description="标注步骤，以及仅当前任务 SOP 生效的标注操作要求与禁止操作">
               <AnnotationStepsTable
                 steps={version.annotation.steps || []}
                 disabled={!canEditVersion}
@@ -3703,14 +3825,14 @@ function ScenePage({
               />
               <LocalTextItemEditor
                 title="标注操作要求"
-                description="仅在当前子场景中生效，可直接新建"
+                description="仅在当前任务 SOP 中生效，可直接新建"
                 items={version.annotation.allowedOperations || []}
                 disabled={!canEditVersion}
                 onChange={(allowedOperations) => void saveCurrentSubscene({ annotation: { ...version.annotation, allowedOperations } })}
               />
               <LocalTextItemEditor
                 title="标注禁止操作"
-                description="仅在当前子场景中生效，可直接新建"
+                description="仅在当前任务 SOP 中生效，可直接新建"
                 items={version.annotation.forbiddenOperations || []}
                 disabled={!canEditVersion}
                 onChange={(forbiddenOperations) => void saveCurrentSubscene({ annotation: { ...version.annotation, forbiddenOperations } })}
@@ -3728,7 +3850,7 @@ function ScenePage({
       <aside className="scene-directory panel">
         <SearchPanel
           title="场景目录"
-          description="按场景分组展示子场景"
+          description="按场景分组展示任务 SOP"
           query={sceneQuery}
           placeholder="搜索场景名称或描述"
           count={filteredScenes.length}
@@ -3747,7 +3869,7 @@ function ScenePage({
                 onClick={() => selectScene(item.id)}
               >
                 <strong>{item.name}</strong>
-                <span>{item.subscenes.length} 个子场景</span>
+                <span>{item.subscenes.length} 个任务 SOP</span>
               </button>
               {item.id === scene.id && (
                 <div className="directory-children">
@@ -3780,26 +3902,26 @@ function ScenePage({
             </button>
           </div>
           <div className="info-grid">
-            <InfoItem label="子场景数" value={scene.subscenes.length} />
+            <InfoItem label="任务 SOP 数" value={scene.subscenes.length} />
             <InfoItem label="最近更新" value={sceneLatestUpdated(scene)} />
           </div>
         </section>
 
         <section className="panel table-panel">
           <SearchPanel
-            title="子场景列表"
-            description="点击子场景进入详情页"
+            title="任务 SOP 列表"
+            description="点击任务 SOP 进入详情页"
             query={subsceneQuery}
             placeholder="搜索名称、状态或版本"
             count={filteredSubscenes.length}
             onQueryChange={setSubsceneQuery}
-            actions={<button className="primary-button" onClick={() => void createSubscene()}>新建子场景</button>}
+            actions={<button className="primary-button" onClick={() => void createSubscene()}>新建任务 SOP</button>}
           />
           <DataTable
             rows={filteredSubscenes}
             columns={subsceneColumns}
             rowKey={(item) => item.code}
-            emptyText="没有匹配的子场景"
+            emptyText="没有匹配的任务 SOP"
             onRowClick={(item) => openSubsceneDetail(item.code)}
           />
         </section>
@@ -5284,7 +5406,7 @@ function MaterialPage({
   return (
     <MasterDataPage
       title="物料"
-      description="物料主数据通过 SKU 供子场景引用"
+      description="物料主数据通过 SKU 供任务 SOP 引用"
       items={materials}
       columns={columns}
       getTitle={(item) => `${item.skuId} ${item.type}`}
@@ -6217,7 +6339,7 @@ function materialInitialRandomizationFromRows(rows: MaterialInitialRandomization
     }));
 }
 
-function emptySubsceneVersionDraft(title = '新的子场景'): Partial<SubsceneVersion> {
+function emptySubsceneVersionDraft(title = '新的任务 SOP'): Partial<SubsceneVersion> {
   return {
     version: '0.0.1',
     status: 'draft',

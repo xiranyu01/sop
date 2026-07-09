@@ -2,7 +2,7 @@
 
 ## 项目定位
 
-这是一个本地优先、可部署到 Cloudflare 的 SOP 客户需求管理工具，用来管理客户信息、物料信息、机器型号、场景/子场景库、全局字段词表和客户需求版本。
+这是一个本地优先、可部署到 Cloudflare 的 SOP 客户需求管理工具，用来管理客户信息、物料信息、机器型号、场景/任务 SOP 库、全局字段词表和客户需求版本。
 
 第一版目标是简单可运行、方便 review、方便后续迁移到正式系统。当前只有应用内共享访问密码，不做用户账号、角色权限、操作审计和多人并发冲突处理。
 
@@ -90,10 +90,10 @@ pnpm build
 - `data/customers.json`：客户信息
 - `data/materials.json`：物料信息，物料有自动生成的 `SKU1`、`SKU2` 等 SKU 编号，可保存图片元数据
 - `data/robot-models.json`：机器型号和 topic 信息
-- `data/scenes.json`：场景与子场景库；场景下包含多个子场景，子场景有随机短编号和多个版本
-- `data/requirements.json`：客户需求；保存需求版本、客户、机器人、全局要求、附件、已选子场景引用和目标采集时长
+- `data/scenes.json`：场景与任务 SOP 库；场景下包含多个任务 SOP，任务 SOP 有内部随机短编号和多个版本
+- `data/requirements.json`：客户需求；保存需求版本、客户、机器人、全局要求、附件、已选任务 SOP 引用和目标采集时长，不保存任务编号
 - `data/global-fields.json`：全局字段词表；用于机器人状态、随机性字段、交付语言、质检策略、采集/标注操作要求等可复用枚举
-- `data/material-state-rules.json`：历史兼容文件；当前物料状态规则主要在子场景里直接维护
+- `data/material-state-rules.json`：历史兼容文件；当前物料状态规则主要在任务 SOP 里直接维护
 
 `exports/requirements/<requirement_id>/<version>.yaml` 是本地点击导出时生成的 YAML 文件，不是源数据。
 
@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS app_data (
 
 ## 附件与图片
 
-需求附件、子场景附件和物料图片共用同一套分片上传接口：
+需求附件、任务 SOP 附件和物料图片共用同一套分片上传接口：
 
 - 单个文件最大 1G
 - 默认分片大小 16MB
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS app_data (
 
 线上如果没有配置 `ATTACHMENTS`，也没有完整配置 `R2_S3_ENDPOINT` / `R2_S3_BUCKET` / `R2_S3_ACCESS_KEY_ID` / `R2_S3_SECRET_ACCESS_KEY`，页面会禁用上传入口并显示存储未配置提示；主数据读取、编辑、YAML/PDF 导出仍可使用。
 
-物料图片只允许上传 `image/*`。子场景附件支持图片或视频。需求附件不限制具体文件类型。
+物料图片只允许上传 `image/*`。任务 SOP 附件支持图片或视频。需求附件不限制具体文件类型。
 
 ## 核心概念
 
@@ -140,20 +140,19 @@ CREATE TABLE IF NOT EXISTS app_data (
 
 客户需求面向客户沟通和交付。需求 ID 使用 6 位随机短编号，页面不作为主要信息展示，但会写入 YAML 的 `requirement.id` 和 `traceability.requirement_id`，用于稳定追溯。每个客户需求包含多个版本。
 
-客户需求中只锁定子场景引用：
+客户需求中只锁定任务 SOP 引用：
 
-- 子场景编号
-- 子场景版本号
-- 场景名和子场景名快照
+- 任务 SOP 版本号
+- 场景名和任务 SOP 名称快照
 - 该需求下的目标采集时长
 
-导出 YAML 或 PDF 时，会根据锁定的子场景编号和版本号，从场景库里读取对应子场景正文。
+导出 YAML 或 PDF 时，会根据锁定的场景名、任务 SOP 名称和版本号，从场景库里读取对应任务 SOP 正文。历史数据如果仍带内部编号，系统只用于兼容查找，不再写入新的客户需求或 YAML。
 
-### 场景与子场景
+### 场景与任务 SOP
 
-场景是子场景的目录容器。子场景使用 6 位随机短编号，同一个子场景编号下可以有多个版本。编号主要用于系统追溯和 YAML，不在页面中重点展示。
+场景是任务 SOP 的目录容器。任务 SOP 内部使用 6 位随机短编号用于路由、附件和历史兼容，同一个内部编号下可以有多个版本。编号不在页面、客户需求和 YAML 中保存或展示。
 
-子场景内容包含：
+任务 SOP 内容包含：
 
 - 基础信息、描述和附件
 - 已选物料与数量
@@ -161,7 +160,7 @@ CREATE TABLE IF NOT EXISTS app_data (
 - 机器人初始态、目标态和随机性要求
 - 物料随机性要求
 - 采集步骤和采集步骤随机性
-- 子场景特有的采集操作要求、采集禁止操作、不完美但可接受的采集操作
+- 任务 SOP 特有的采集操作要求、采集禁止操作、不完美但可接受的采集操作
 - 标注步骤、标注操作要求、标注禁止操作
 - 参考记录信息
 
@@ -169,7 +168,7 @@ CREATE TABLE IF NOT EXISTS app_data (
 
 全局字段是可复用词表。页面左侧按更大的类别收纳，例如对象状态、随机性、采集操作、标注操作、交付/质检和基础字段。
 
-字段支持新增、编辑、启用和停用，不支持物理删除。停用字段不再出现在新的选择中，历史需求和历史子场景中的文字快照不受影响。
+字段支持新增、编辑、启用和停用，不支持物理删除。停用字段不再出现在新的选择中，历史需求和历史任务 SOP 中的文字快照不受影响。
 
 ## 版本规则
 
@@ -177,10 +176,10 @@ CREATE TABLE IF NOT EXISTS app_data (
 - 草稿版本可以直接编辑，也可以删除，但至少保留一个版本。
 - 确认后的客户需求只读。
 - 编辑已确认客户需求时，会自动复制并生成新的补丁版本草稿，例如 `0.0.1 -> 0.0.2`。
-- 客户需求确认前会校验所有已选子场景版本；如果存在草稿或找不到的子场景版本，会拒绝确认并提示原因。
-- 子场景版本规则与客户需求一致。
-- 子场景 `0.0.1` 草稿可以编辑名称和描述；非 `0.0.1` 草稿只允许编辑版本描述等正文内容，不改历史子场景名称。
-- 客户需求引用具体子场景编号和版本号，子场景发布新版不会自动影响历史客户需求。
+- 客户需求确认前会校验所有已选任务 SOP 版本；如果存在草稿或找不到的任务 SOP 版本，会拒绝确认并提示原因。
+- 任务 SOP 版本规则与客户需求一致。
+- 任务 SOP `0.0.1` 草稿可以编辑名称和描述；非 `0.0.1` 草稿只允许编辑版本描述等正文内容，不改历史任务 SOP 名称。
+- 客户需求引用具体任务 SOP 名称和版本号，任务 SOP 发布新版不会自动影响历史客户需求。
 
 ## API 概览
 
@@ -201,14 +200,14 @@ CREATE TABLE IF NOT EXISTS app_data (
 - `POST /api/requirements`：新建客户需求
 - `PUT /api/requirements/:id`：编辑客户需求；如果基准版本已确认，则生成新草稿版本
 - `DELETE /api/requirements/:id/versions/:version`：删除客户需求草稿版本
-- `POST /api/requirements/:id/confirm`：确认客户需求版本；所选子场景必须全部已确认
+- `POST /api/requirements/:id/confirm`：确认客户需求版本；所选任务 SOP 必须全部已确认
 - `POST /api/requirements/:id/export-yaml`：生成 YAML。本地写入 `exports/`，线上只返回 YAML 文本和虚拟路径
 
-子场景：
+任务 SOP（内部 API 路径仍沿用 `subscenes`，用于兼容已有数据和附件路径）：
 
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions`：创建或编辑子场景版本
-- `DELETE /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version`：删除子场景草稿版本
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/confirm`：确认子场景版本
+- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions`：创建或编辑任务 SOP 版本
+- `DELETE /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version`：删除任务 SOP 草稿版本
+- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/confirm`：确认任务 SOP 版本
 
 附件和图片：
 
@@ -219,11 +218,11 @@ CREATE TABLE IF NOT EXISTS app_data (
 - `POST /api/requirements/:id/versions/:version/attachments/:attachmentId/complete`：完成需求附件上传
 - `POST /api/requirements/:id/versions/:version/attachments/:attachmentId/abort`：取消需求附件上传
 - `DELETE /api/requirements/:id/versions/:version/attachments/:attachmentId`：删除需求附件
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/init`：初始化子场景附件上传
-- `PUT /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:uploadId/parts/:partNumber`：上传子场景附件分片
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId/complete`：完成子场景附件上传
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId/abort`：取消子场景附件上传
-- `DELETE /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId`：删除子场景附件
+- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/init`：初始化任务 SOP 附件上传
+- `PUT /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:uploadId/parts/:partNumber`：上传任务 SOP 附件分片
+- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId/complete`：完成任务 SOP 附件上传
+- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId/abort`：取消任务 SOP 附件上传
+- `DELETE /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId`：删除任务 SOP 附件
 - `POST /api/materials/:materialId/images/init`：初始化物料图片上传
 - `PUT /api/materials/:materialId/images/:uploadId/parts/:partNumber`：上传物料图片分片
 - `POST /api/materials/:materialId/images/:attachmentId/complete`：完成物料图片上传
@@ -255,8 +254,8 @@ traceability: {}
 导出原则：
 
 - 页面字段和 YAML 字段保持语义一致。
-- 客户需求只保存子场景引用，导出时读取对应子场景版本正文。
-- 需求 ID 和子场景 ID 只用于系统追溯，不作为页面主要展示字段。
+- 客户需求只保存任务 SOP 名称、场景名和版本引用，导出时读取对应任务 SOP 版本正文。
+- 需求 ID 只用于系统追溯，不作为页面主要展示字段；任务 SOP 内部编号不写入客户需求和 YAML。
 - `traceability` 只保留本地应用稳定可提供的信息。
 - 历史遗留字段不主动清理，但导出时不输出已废弃的操作中物料状态结构。
 - `step_order`、`open_questions`、动作标签、随机频率等已从当前主导出结构中移除。
@@ -271,9 +270,9 @@ traceability: {}
 
 PDF 导出在前端生成，不依赖服务端文件系统：
 
-- 子场景详情页可导出当前子场景版本 PDF。
+- 任务 SOP 详情页可导出当前任务 SOP 版本 PDF。
 - 客户需求详情页可导出整个需求 PDF。
-- 需求 PDF 会展开已选子场景引用并写入对应子场景版本正文。
+- 需求 PDF 会展开已选任务 SOP 引用并写入对应任务 SOP 版本正文。
 
 ## 开发约定
 
@@ -286,7 +285,7 @@ PDF 导出在前端生成，不依赖服务端文件系统：
   - `data/*.json` 的兼容性
 - 不要直接删除历史数据字段，除非已经确认迁移策略。
 - 新增可枚举字段时，优先考虑是否属于 `data/global-fields.json`。
-- 需求和子场景保存文字快照，避免全局字段改名影响历史版本。
+- 需求和任务 SOP 保存文字快照，避免全局字段改名影响历史版本。
 - 修改版本逻辑后，要手动验证草稿、确认、编辑已确认版本、删除草稿版本这四类路径。
 - 修改上传逻辑后，要同时验证本地 `uploads/` 和线上 R2 binding 场景。
 
@@ -303,30 +302,30 @@ PDF 导出在前端生成，不依赖服务端文件系统：
 - 字段可新增、编辑、启用和停用。
 - 左侧二级分组可展开收起。
 - 停用字段不再出现在新的下拉选择中。
-- 采集操作要求、采集禁止操作、不完美但可接受的采集操作、标注操作要求和标注禁止操作可在需求或子场景中选择。
+- 采集操作要求、采集禁止操作、不完美但可接受的采集操作、标注操作要求和标注禁止操作可在需求或任务 SOP 中选择。
 
-场景与子场景：
+场景与任务 SOP：
 
-- 可以创建场景和子场景。
-- 场景 ID 和子场景编号不会在页面中作为主要字段展示。
-- 子场景详情页可以切换版本。
+- 可以创建场景和任务 SOP。
+- 场景 ID 和任务 SOP 内部编号不会在页面中作为主要字段展示。
+- 任务 SOP 详情页可以切换版本。
 - 草稿可编辑，确认版本只读。
 - 编辑确认版本会生成新的草稿版本。
 - 草稿版本可以删除，且至少保留一个版本。
 - 已选物料、物料状态、机器人状态、随机性、采集步骤、标注步骤都能保存。
 - 物料状态表格的参照物、相对位置、支撑面是单选，长表格有可见横向滚动条。
-- 子场景可以上传、下载和删除图片或视频附件。
-- 子场景 PDF 可以正常导出。
+- 任务 SOP 可以上传、下载和删除图片或视频附件。
+- 任务 SOP PDF 可以正常导出。
 
 客户需求：
 
 - 可以新建需求，并自动生成 6 位随机短 ID。
 - 需求 ID 不在页面中作为主要字段展示，但 YAML 中保留。
-- 可以添加多个子场景，添加时可选择具体版本，默认选择最新版。
-- 已选子场景按场景分组展示，并可跳转查看详情。
-- 从需求页跳转到子场景详情时，子场景页顶部有返回需求页按钮。
-- 总目标时长和子场景时长合计有差异提示。
-- 如果已选子场景存在草稿或缺失版本，需求确认按钮应禁用或后端拒绝确认。
+- 可以添加多个任务 SOP，添加时可选择具体版本，默认选择最新版。
+- 已选任务 SOP 按场景分组展示，并可跳转查看详情。
+- 从需求页跳转到任务 SOP 详情时，任务 SOP 页顶部有返回需求页按钮。
+- 总目标时长和任务 SOP 时长合计有差异提示。
+- 如果已选任务 SOP 存在草稿或缺失版本，需求确认按钮应禁用或后端拒绝确认。
 - 确认版本后再编辑，会生成新的草稿版本。
 - 需求附件可以上传、下载和删除，单个附件不超过 1G。
 - 需求 PDF 可以正常导出。

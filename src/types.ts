@@ -254,7 +254,7 @@ export interface Scene {
 }
 
 export interface RequestedSubscene {
-  subsceneCode: string;
+  subsceneCode?: string;
   subsceneName: string;
   sceneName: string;
   version: string;

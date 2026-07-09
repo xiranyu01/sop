@@ -1,20 +1,20 @@
 # SOP 需求管理网页
 
-一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/子场景版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.1` YAML，也可以导出 PDF 便于沟通和归档。
+一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.1` YAML，也可以导出 PDF 便于沟通和归档。
 
 线上主部署建议使用 Cloudflare Pages + Pages Functions + D1。GitHub Pages 只能托管静态页面，不能运行本项目的 `/api/*` 写入接口，也不能提供共享数据存储。
 
 ## 主要能力
 
 - 客户与客户需求放在同一工作流里：可查看每个客户的历史需求和需求数量。
-- 物料、机器型号、场景、子场景、全局字段均用列表页管理，支持搜索。
+- 物料、机器型号、场景、任务 SOP、全局字段均用列表页管理，支持搜索。
 - 物料自动生成 SKU 编号，支持上传物料图片。
-- 场景下管理多个子场景；子场景有随机短编号和多版本，页面不突出展示编号，YAML 中保留用于追溯。
-- 子场景可配置物料、物料初始/目标状态、机器人状态、随机性、采集步骤、标注步骤、操作要求和附件。
-- 客户需求可选择具体子场景版本并填写目标采集时长；确认需求前会校验所选子场景版本是否已确认。
+- 场景下管理多个任务 SOP；任务 SOP 有内部随机短编号和多版本，页面、客户需求、YAML 都不保存或展示任务编号。
+- 任务 SOP 可配置物料、物料初始/目标状态、机器人状态、随机性、采集步骤、标注步骤、操作要求和附件。
+- 客户需求可选择具体任务 SOP 版本并填写目标采集时长；确认需求前会校验所选任务 SOP 版本是否已确认。
 - 已确认版本只读；再次编辑会自动生成新的草稿补丁版本，草稿版本可以删除。
-- 支持需求附件、子场景附件和物料图片上传，单个文件最大 1G。
-- 支持 YAML 预览、复制、下载，以及客户需求和子场景 PDF 导出。
+- 支持需求附件、任务 SOP 附件和物料图片上传，单个文件最大 1G。
+- 支持 YAML 预览、复制、下载，以及客户需求和任务 SOP PDF 导出。
 - Cloudflare 线上版本使用应用内访问密码保护，适合第一版内部试用。
 
 ## 本地启动
@@ -42,14 +42,14 @@ pnpm build
 - `data/customers.json`：客户信息
 - `data/materials.json`：物料信息，包含自动生成的 SKU 和可选图片元数据
 - `data/robot-models.json`：机器型号和 topic 信息
-- `data/scenes.json`：场景与子场景库；子场景按随机短编号管理，一个编号可有多个版本
-- `data/requirements.json`：客户需求；保存需求版本和锁定的子场景版本
+- `data/scenes.json`：场景与任务 SOP 库；任务 SOP 内部按随机短编号管理，一个编号可有多个版本
+- `data/requirements.json`：客户需求；保存需求版本和锁定的任务 SOP 版本，不保存任务编号
 - `data/global-fields.json`：全局字段词表
-- `data/material-state-rules.json`：历史兼容数据，当前物料状态规则主要在子场景内维护
+- `data/material-state-rules.json`：历史兼容数据，当前物料状态规则主要在任务 SOP 内维护
 - `exports/requirements/<requirement_id>/<version>.yaml`：本地导出的需求 YAML
 - `uploads/`：本地上传的附件和图片，不提交到 GitHub
 
-线上 Cloudflare 版本会把 JSON 主数据保存到 D1 的 `app_data` key/value 表里；`data/*.json` 只作为首次初始化种子数据。附件、子场景图片/视频和物料图片建议保存到 R2 bucket：同账号 R2 可通过 `ATTACHMENTS` binding 提供给 Pages Functions，跨账号 R2 可通过 S3 兼容访问参数提供。
+线上 Cloudflare 版本会把 JSON 主数据保存到 D1 的 `app_data` key/value 表里；`data/*.json` 只作为首次初始化种子数据。附件、任务 SOP 图片/视频和物料图片建议保存到 R2 bucket：同账号 R2 可通过 `ATTACHMENTS` binding 提供给 Pages Functions，跨账号 R2 可通过 S3 兼容访问参数提供。
 
 ## Cloudflare 部署
 

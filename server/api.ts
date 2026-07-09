@@ -141,7 +141,7 @@ function emptySubsceneVersion(patch: Partial<SubsceneVersion> = {}): SubsceneVer
   return {
     version: '0.0.1',
     status: 'draft',
-    title: patch.title || '新的子场景',
+    title: patch.title || '新的任务 SOP',
     description: patch.description || '',
     attachments: patch.attachments || [],
     materials: patch.materials || [],
@@ -213,6 +213,15 @@ function attachmentResponse(attachment: RequirementAttachment): RequirementAttac
   return { ...attachment, url: attachmentDownloadUrl(attachment.storageKey) };
 }
 
+function stripSelectedTaskSopCode(selected: RequirementVersion['selectedSubscenes'][number]): RequirementVersion['selectedSubscenes'][number] {
+  const { subsceneCode: _subsceneCode, ...rest } = selected;
+  return rest;
+}
+
+function stripTaskSopCodes(selectedSubscenes: RequirementVersion['selectedSubscenes'] = []): RequirementVersion['selectedSubscenes'] {
+  return selectedSubscenes.map(stripSelectedTaskSopCode);
+}
+
 function materialWithAttachment(material: Material, attachment: RequirementAttachment): Material {
   return { ...material, images: [...(material.images || []), attachment] };
 }
@@ -243,12 +252,31 @@ function updateRequirementVersion(
   };
 }
 
-function unconfirmedSubsceneRefs(data: AppData, version: RequirementVersion): string[] {
-  return version.selectedSubscenes.flatMap((selected) => {
-    const foundVersion = data.scenes
+function findSelectedTaskSopVersion(data: AppData, selected: RequirementVersion['selectedSubscenes'][number]): SubsceneVersion | undefined {
+  if (selected.subsceneCode) {
+    const foundByCode = data.scenes
       .flatMap((scene) => scene.subscenes)
       .find((subscene) => subscene.code === selected.subsceneCode)
       ?.versions.find((subsceneVersion) => subsceneVersion.version === selected.version);
+    if (foundByCode) return foundByCode;
+  }
+
+  for (const scene of data.scenes) {
+    if (selected.sceneName && scene.name !== selected.sceneName) continue;
+    for (const subscene of scene.subscenes) {
+      const foundVersion = subscene.versions.find((subsceneVersion) => subsceneVersion.version === selected.version);
+      if (!foundVersion) continue;
+      if (subscene.name === selected.subsceneName || foundVersion.title === selected.subsceneName) {
+        return foundVersion;
+      }
+    }
+  }
+  return undefined;
+}
+
+function unconfirmedTaskSopRefs(data: AppData, version: RequirementVersion): string[] {
+  return version.selectedSubscenes.flatMap((selected) => {
+    const foundVersion = findSelectedTaskSopVersion(data, selected);
     if (foundVersion?.status === 'confirmed') return [];
     const status = foundVersion ? '草稿' : '未找到';
     return [`${selected.sceneName} / ${selected.subsceneName} v${selected.version}（${status}）`];
@@ -265,9 +293,9 @@ function updateSubsceneVersion(
   const scene = scenes.find((item) => item.id === sceneId);
   if (!scene) return { nextScenes: scenes, blocked: json(404, { message: '找不到场景' }) };
   const subscene = scene.subscenes.find((item) => item.code === subsceneCode);
-  if (!subscene) return { nextScenes: scenes, blocked: json(404, { message: '找不到子场景' }) };
+  if (!subscene) return { nextScenes: scenes, blocked: json(404, { message: '找不到任务 SOP' }) };
   const target = subscene.versions.find((version) => version.version === versionNumber);
-  if (!target) return { nextScenes: scenes, blocked: json(404, { message: '找不到子场景版本' }) };
+  if (!target) return { nextScenes: scenes, blocked: json(404, { message: '找不到任务 SOP 版本' }) };
   if (target.status !== 'draft') return { nextScenes: scenes, blocked: json(400, { message: '只能给草稿版本上传附件' }) };
   const nextVersion = updater(target);
   return {
@@ -517,7 +545,7 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
               languages: [{ code: 'zh-CN', name: '简体中文' }],
               dataStructureUrl: '',
             },
-            selectedSubscenes: body.selectedSubscenes || [],
+            selectedSubscenes: stripTaskSopCodes(body.selectedSubscenes || []),
             updatedAt: nowIso(),
           },
         ],
@@ -768,11 +796,16 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
       const requirement = data.requirements.find((item) => item.id === requirementUpdate[1]);
       if (!requirement) return json(404, { message: '找不到客户需求' });
       const { baseVersion, ...patch } = request.body as Partial<RequirementVersion> & { baseVersion?: string };
+      const normalizedPatch = {
+        ...patch,
+        ...(patch.selectedSubscenes ? { selectedSubscenes: stripTaskSopCodes(patch.selectedSubscenes) } : {}),
+      };
       const current = findTargetVersion(requirement.versions, baseVersion);
       const editable = canEditStatus(current.status);
       const nextVersion: RequirementVersion = {
         ...current,
-        ...patch,
+        ...normalizedPatch,
+        selectedSubscenes: stripTaskSopCodes(normalizedPatch.selectedSubscenes || current.selectedSubscenes),
         version: editable ? current.version : nextAvailablePatchVersion(requirement.versions, current.version),
         status: editable ? current.status : 'draft',
         updatedAt: nowIso(),
@@ -811,14 +844,21 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
       const versionToConfirm = targetVersion || latestVersion(requirement.versions).version;
       const target = requirement.versions.find((version) => version.version === versionToConfirm);
       if (!target) return json(404, { message: '找不到客户需求版本' });
-      const blockedSubscenes = unconfirmedSubsceneRefs(data, target);
-      if (blockedSubscenes.length > 0) {
-        return json(400, { message: `有子场景还没有确认，不能确认需求：${blockedSubscenes.join('；')}` });
+      const blockedTaskSops = unconfirmedTaskSopRefs(data, target);
+      if (blockedTaskSops.length > 0) {
+        return json(400, { message: `有任务 SOP 还没有确认，不能确认需求：${blockedTaskSops.join('；')}` });
       }
       const nextRequirement = {
         ...requirement,
         versions: requirement.versions.map((version) =>
-          version.version === versionToConfirm ? { ...version, status: 'confirmed' as const, updatedAt: nowIso() } : version,
+          version.version === versionToConfirm
+            ? {
+                ...version,
+                selectedSubscenes: stripTaskSopCodes(version.selectedSubscenes),
+                status: 'confirmed' as const,
+                updatedAt: nowIso(),
+              }
+            : version,
         ),
       };
       const next = data.requirements.map((item) => (item.id === requirement.id ? nextRequirement : item));
@@ -911,8 +951,8 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
           }),
         };
       });
-      if (!foundSubscene) return json(404, { message: '找不到子场景' });
-      if (!foundVersion) return json(404, { message: '找不到子场景版本' });
+      if (!foundSubscene) return json(404, { message: '找不到任务 SOP' });
+      if (!foundVersion) return json(404, { message: '找不到任务 SOP 版本' });
       if (blockedMessage) return json(400, { message: blockedMessage });
       return json(200, await store.writeScenes(nextScenes));
     }

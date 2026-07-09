@@ -102,14 +102,12 @@
         },
         "selectedSubscenes": [
           {
-            "subsceneCode": "NO.001",
             "subsceneName": "洗漱台整理",
             "sceneName": "家庭场景",
             "version": "0.0.1",
             "targetDurationHours": 50
           },
           {
-            "subsceneCode": "NO.002",
             "subsceneName": "将爆米花装入盒子",
             "sceneName": "家庭场景",
             "version": "0.0.1",
@@ -167,7 +165,6 @@
         },
         "selectedSubscenes": [
           {
-            "subsceneCode": "NO.002",
             "subsceneName": "将爆米花装入盒子",
             "sceneName": "家庭场景",
             "version": "0.0.1",

@@ -1708,6 +1708,17 @@ button:disabled {
   min-width: 0;
 }
 
+.material-list-sku .attachment-preview-thumb {
+  width: 42px;
+  height: 32px;
+}
+
+.material-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .robot-randomization-table .data-table {
   min-width: 100%;
 }
@@ -2340,7 +2351,8 @@ button:disabled {
   .requirement-section-grid,
   .requirement-notes-grid,
   .requirement-operation-grid,
-  .annotation-operation-grid {
+  .annotation-operation-grid,
+  .material-detail-grid {
     grid-template-columns: 1fr;
   }
 

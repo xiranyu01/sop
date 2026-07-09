@@ -1474,8 +1474,12 @@ export default function App() {
             onMaterialsChange={(materials) => setData((current) => ({ ...current, materials }))}
             onSave={async (material) => {
               const existing = data.materials.find((item) => item.id === material.id);
-              const result = await run(() => api.saveMaterial({ ...material, images: material.images || existing?.images || [] }), '物料信息已保存');
-              if (result) setData((current) => ({ ...current, materials: result }));
+              const result = await run(() => api.saveMaterial({ ...material, images: material.images || existing?.images || [] }), '保存成功');
+              if (result) {
+                setData((current) => ({ ...current, materials: result }));
+                return true;
+              }
+              return false;
             }}
           />
         )}
@@ -5165,7 +5169,7 @@ function MaterialPage({
   materials: Material[];
   storageStatus: AttachmentStorageStatus;
   onMaterialsChange: (materials: Material[]) => void;
-  onSave: (material: Material) => Promise<void>;
+  onSave: (material: Material) => Promise<boolean>;
 }) {
   const nextSkuId = nextReadableId(
     materials.map((material) => material.skuId),
@@ -5236,8 +5240,14 @@ function MaterialPage({
     {
       key: 'skuId',
       title: 'SKU 编号',
-      width: '130px',
-      render: (item) => <strong className="table-link">{item.skuId || '-'}</strong>,
+      width: '180px',
+      allowOverflow: true,
+      render: (item) => (
+        <span className="sku-with-image material-list-sku">
+          <strong className="table-link">{item.skuId || '-'}</strong>
+          {item.images?.[0] && <AttachmentThumbnail attachment={item.images[0]} publicBaseUrl={storageStatus.publicBaseUrl} />}
+        </span>
+      ),
     },
     { key: 'type', title: '物料类型', width: 'minmax(140px, 1.2fr)', render: (item) => item.type || '-' },
     { key: 'color', title: '颜色', width: '110px', render: (item) => item.color || '-' },
@@ -5245,7 +5255,6 @@ function MaterialPage({
     { key: 'packageType', title: '包装类型', width: '130px', render: (item) => item.packageType || '-' },
     { key: 'size', title: '尺寸', width: 'minmax(180px, 1.4fr)', render: (item) => item.size || '-' },
     { key: 'weight', title: '重量', width: '100px', render: (item) => item.weight || '-' },
-    { key: 'images', title: '图片', width: '80px', align: 'right', render: (item) => item.images?.length || 0 },
   ];
   return (
     <MasterDataPage
@@ -5261,31 +5270,45 @@ function MaterialPage({
       onSelect={(item) => setDraft(item)}
       onNew={() => setDraft(emptyMaterial(nextSkuId))}
     >
-      <Field label="SKU 编号" value={draft.skuId} disabled onChange={() => undefined} />
-      {!draft.id && <p className="field-note">SKU 由系统自动生成，保存时会按最新数据确认最终编号。</p>}
-      <Field label="物料类型" value={draft.type} onChange={(type) => setDraft({ ...draft, type })} />
-      <Field label="颜色" value={draft.color} onChange={(color) => setDraft({ ...draft, color })} />
-      <Field label="材质" value={draft.material} onChange={(material) => setDraft({ ...draft, material })} />
-      <Field label="包装类型" value={draft.packageType} onChange={(packageType) => setDraft({ ...draft, packageType })} />
-      <Field label="尺寸" value={draft.size || ''} onChange={(size) => setDraft({ ...draft, size })} />
-      <Field label="重量" value={draft.weight || ''} onChange={(weight) => setDraft({ ...draft, weight })} />
-      <AttachmentField
-        title="物料图片"
-        hint="支持上传图片，单张不超过 1G"
-        uploadLabel="上传图片"
-        emptyText="暂无图片"
-        accept="image/*"
-        attachments={draft.images || []}
-        disabled={!draft.id}
-        storageStatus={draft.id ? storageStatus : { enabled: false, message: '请先保存物料，再上传图片。' }}
-        upload={imageUpload}
-        onUpload={uploadMaterialImage}
-        onDownload={(attachment) => downloadStoredAttachment(attachment)}
-        onDelete={deleteMaterialImage}
-      />
-      <button className="primary-button" onClick={() => void onSave(draft.id ? draft : { ...draft, skuId: '' })}>
-        保存物料
-      </button>
+      {(closeEditor) => (
+        <>
+          <Field label="SKU 编号" value={draft.skuId} disabled onChange={() => undefined} />
+          {!draft.id && <p className="field-note">SKU 由系统自动生成，保存时会按最新数据确认最终编号。</p>}
+          <AttachmentField
+            title="物料图片"
+            hint="支持上传图片，单张不超过 1G"
+            uploadLabel="上传图片"
+            emptyText="暂无图片"
+            accept="image/*"
+            attachments={draft.images || []}
+            disabled={!draft.id}
+            storageStatus={draft.id ? storageStatus : { enabled: false, message: '请先保存物料，再上传图片。' }}
+            upload={imageUpload}
+            onUpload={uploadMaterialImage}
+            onDownload={(attachment) => downloadStoredAttachment(attachment)}
+            onDelete={deleteMaterialImage}
+          />
+          <div className="material-detail-grid">
+            <Field label="物料类型" value={draft.type} onChange={(type) => setDraft({ ...draft, type })} />
+            <Field label="颜色" value={draft.color} onChange={(color) => setDraft({ ...draft, color })} />
+            <Field label="材质" value={draft.material} onChange={(material) => setDraft({ ...draft, material })} />
+            <Field label="包装类型" value={draft.packageType} onChange={(packageType) => setDraft({ ...draft, packageType })} />
+            <Field label="尺寸" value={draft.size || ''} onChange={(size) => setDraft({ ...draft, size })} />
+            <Field label="重量" value={draft.weight || ''} onChange={(weight) => setDraft({ ...draft, weight })} />
+          </div>
+          <button
+            className="primary-button"
+            onClick={async () => {
+              const saved = await onSave(draft.id ? draft : { ...draft, skuId: '' });
+              if (saved) {
+                closeEditor();
+              }
+            }}
+          >
+            保存物料
+          </button>
+        </>
+      )}
     </MasterDataPage>
   );
 }
@@ -5363,7 +5386,7 @@ function MasterDataPage<T extends { id: string }>({
   selectedId: string;
   onSelect: (item: T) => void;
   onNew: () => void;
-  children: ReactNode;
+  children: ReactNode | ((closeEditor: () => void) => ReactNode);
 }) {
   const [query, setQuery] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
@@ -5406,7 +5429,9 @@ function MasterDataPage<T extends { id: string }>({
       </section>
       {editorOpen && (
         <Modal title={`${title}详情`} onClose={() => setEditorOpen(false)}>
-          <div className="form-stack modal-form-stack">{children}</div>
+          <div className="form-stack modal-form-stack">
+            {typeof children === 'function' ? children(() => setEditorOpen(false)) : children}
+          </div>
         </Modal>
       )}
     </div>

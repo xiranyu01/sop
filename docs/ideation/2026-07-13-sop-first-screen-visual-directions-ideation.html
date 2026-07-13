@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ideation: SOP 首屏视觉方向</title>
+  <style>
+    :root { --ink:#172033; --muted:#667085; --line:#dce3eb; --soft:#f5f7fa; --blue:#1769d6; --blue-soft:#edf5ff; --warn:#8a5f00; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#eef2f6; color:var(--ink); font:14px/1.65 Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:32px auto; }
+    header,section,footer { border:1px solid var(--line); border-radius:10px; background:#fff; padding:24px 28px; }
+    section,footer { margin-top:16px; }
+    .eyebrow { margin:0 0 6px; color:var(--blue); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+    h1,h2,h3,p { margin-top:0; }
+    h1 { margin-bottom:10px; font-size:30px; letter-spacing:-.025em; }
+    h2 { margin-bottom:16px; font-size:20px; }
+    h3 { margin-bottom:10px; font-size:17px; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
+    .meta span,.tag { border:1px solid var(--line); border-radius:999px; background:var(--soft); padding:3px 9px; color:#4b5565; font-size:12px; }
+    .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:18px; }
+    .stat { border-radius:8px; background:var(--blue-soft); padding:12px; }
+    .stat b { display:block; color:var(--blue); font-size:20px; }
+    ul { padding-left:20px; }
+    .jump { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin:0 0 18px; padding:0; list-style:none; }
+    .jump a { display:block; border:1px solid var(--line); border-radius:7px; color:var(--blue); padding:7px 10px; text-decoration:none; }
+    .idea { margin-top:12px; border:1px solid var(--line); border-radius:9px; background:#fff; padding:20px; }
+    .idea:first-of-type { margin-top:0; }
+    .idea-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+    .rank { color:var(--blue); font-size:12px; font-weight:800; }
+    dl { display:grid; grid-template-columns:110px minmax(0,1fr); gap:7px 12px; margin:14px 0 0; }
+    dt { color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
+    dd { margin:0; }
+    code { border-radius:4px; background:var(--soft); padding:2px 5px; }
+    a { color:var(--blue); }
+    table { width:100%; border-collapse:collapse; }
+    th,td { border-bottom:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }
+    th { background:var(--soft); color:#4b5565; font-size:12px; }
+    tr:last-child td { border-bottom:0; }
+    .composition-signal { color:var(--muted); font-size:12px; }
+    @media (max-width:700px) { .stats,.jump { grid-template-columns:1fr; } dl { grid-template-columns:1fr; gap:2px; } dt { margin-top:8px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Ideation</p>
+    <h1>SOP 首屏视觉方向</h1>
+    <p>在完全保留当前信息架构、业务逻辑和交互路径的前提下，用成熟产品设计系统的表面语言改善首屏：收敛颜色、减少装饰、增强数据层级。</p>
+    <div class="meta">
+      <span>日期：<time datetime="2026-07-13">2026-07-13</time></span>
+      <span>主题：sop-first-screen-visual-directions</span>
+      <span>焦点：低改动、简洁现代、1–3 个主题色</span>
+      <span>模式：repo-grounded</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>6</b>最终候选</div>
+      <div class="stat"><b>3</b>视觉轴</div>
+      <div class="stat"><b>CSS-first</b>推荐落地方式</div>
+    </div>
+  </header>
+
+  <section id="grounding-context">
+    <p class="eyebrow">Evidence</p>
+    <h2>Grounding Context</h2>
+    <p><strong>Codebase Context：</strong>当前首屏是固定 240px 侧栏、顶部标题/刷新、单一搜索工具栏和九列数据表。样式集中于 <code>src/App.css</code>，业务集中于 <code>src/App.tsx</code>；没有 UI 框架和 token 层，因此适合 CSS-first 换肤。</p>
+    <p>现有 navy、teal、yellow、blue 四处竞争注意力；同时 panel 已有边框、分隔线和轻阴影，层级表达略重复。低风险改造应保留全部结构，只重做颜色角色、边框、圆角、阴影、字体层级和表格密度。</p>
+  </section>
+
+  <section id="topic-axes">
+    <p class="eyebrow">Surface map</p>
+    <h2>Topic Axes</h2>
+    <ul>
+      <li>Navigation / chrome：品牌、侧栏、激活态与计数。</li>
+      <li>Content surfaces / elevation：画布、panel、工具栏、边界与阴影。</li>
+      <li>Table density / hierarchy：表头、行高、数字、状态与扫描效率。</li>
+    </ul>
+  </section>
+
+  <section id="ranked-ideas">
+    <p class="eyebrow">Candidates</p>
+    <h2>Ranked Ideas</h2>
+    <ul class="jump">
+      <li><a href="#idea-1">1. Primer Precision</a></li><li><a href="#idea-2">2. Atlassian Structured</a></li>
+      <li><a href="#idea-3">3. Carbon Compact</a></li><li><a href="#idea-4">4. Linear Soft</a></li>
+      <li><a href="#idea-5">5. Vercel Monochrome</a></li><li><a href="#idea-6">6. Warm Editorial</a></li>
+    </ul>
+
+    <article class="idea" id="idea-1">
+      <div class="idea-head"><div><span class="rank">1.</span><h3>Primer Precision</h3></div><span class="tag">推荐起点</span></div>
+      <p>冷白画布、浅灰侧栏、6px 几何、发丝边框与单一蓝色。它最接近现有企业后台骨架，但能一次解决多强调色和卡片模板感。</p>
+      <dl><dt>Axis</dt><dd>Navigation / chrome</dd><dt>Basis</dt><dd><strong>direct:</strong> 当前导航已有独立 active/count seam；<strong>external:</strong> <a href="https://primer.github.io/design/">GitHub Primer</a> 是直接适用于产品工具界面的 foundations/patterns。</dd><dt>Rationale</dt><dd>风险最低，且共享 token 可覆盖侧栏、按钮、链接、focus 和表格 selected 状态。</dd><dt>Downsides</dt><dd>浅色侧栏会弱化当前深海军蓝的品牌边界，整体也相对保守。</dd><dt>Confidence</dt><dd>95%</dd><dt>Complexity</dt><dd>Low</dd></dl>
+    </article>
+
+    <article class="idea" id="idea-2">
+      <div class="idea-head"><div><span class="rank">2.</span><h3>Atlassian Structured</h3></div><span class="tag">复杂工作流</span></div>
+      <p>保留深蓝侧栏，以白色内容面、清晰容器边界和规则间距建立强层级。它比 Primer 更接近当前使用习惯，也更适合后续详情页的复杂表单。</p>
+      <dl><dt>Axis</dt><dd>Content surfaces / elevation</dd><dt>Basis</dt><dd><strong>direct:</strong> 当前 24px workspace 与 8px 圆角已有规则骨架；<strong>external:</strong> <a href="https://atlassian.design/foundations">Atlassian Foundations</a> 强调 token 化间距和可预测层级。</dd><dt>Rationale</dt><dd>深侧栏连续性好，表格与详情页都容易沿同一规则扩展。</dd><dt>Downsides</dt><dd>视觉上最“企业工具”，现代感不如 Linear/Vercel 强。</dd><dt>Confidence</dt><dd>91%</dd><dt>Complexity</dt><dd>Low</dd></dl>
+    </article>
+
+    <article class="idea" id="idea-3">
+      <div class="idea-head"><div><span class="rank">3.</span><h3>Carbon Compact</h3></div><span class="tag">数据效率</span></div>
+      <p>冷灰分层、0–4px 圆角、42px 数据行和更明确的中性表头，把首屏塑造成精确的数据工作台。九列结构、横向滚动和操作位置保持不变。</p>
+      <dl><dt>Axis</dt><dd>Table density / hierarchy</dd><dt>Basis</dt><dd><strong>direct:</strong> DataTable 的 header/cell/badge/hover 均有独立 CSS seam；<strong>external:</strong> <a href="https://carbondesignsystem.com/components/data-table/style/">Carbon Data Table</a> 提供直接的企业数据表先例。</dd><dt>Rationale</dt><dd>表格是首屏核心，高密度规则还会复用到客户、物料、场景和机器型号页面。</dd><dt>Downsides</dt><dd>方正与高密度可能显得偏硬，需要重点检查中文字号和点击舒适度。</dd><dt>Confidence</dt><dd>90%</dd><dt>Complexity</dt><dd>Low</dd></dl>
+    </article>
+
+    <article class="idea" id="idea-4">
+      <div class="idea-head"><div><span class="rank">4.</span><h3>Linear Soft</h3></div><span class="tag">现代精致</span></div>
+      <p>深石墨侧栏、克制紫蓝、hairline border 和极轻浮层，在不更改布局的情况下提供最明显的“新产品感”。</p>
+      <dl><dt>Axis</dt><dd>Navigation / chrome</dd><dt>Basis</dt><dd><strong>direct:</strong> 全局颜色、圆角与阴影均集中在 CSS；<strong>external:</strong> <a href="https://github.com/VoltAgent/awesome-design-md">社区 DESIGN.md 分析</a>，已明确标注为 inspired 而非官方规范。</dd><dt>Rationale</dt><dd>视觉差异足够大，适合作为“明显现代化”的对照组。</dd><dt>Downsides</dt><dd>紫色与现有 coScene 青绿/蓝习惯距离更远，品牌选择需要额外确认。</dd><dt>Confidence</dt><dd>86%</dd><dt>Complexity</dt><dd>Low</dd></dl>
+    </article>
+
+    <article class="idea" id="idea-5">
+      <div class="idea-head"><div><span class="rank">5.</span><h3>Vercel Monochrome</h3></div><span class="tag">最简极限</span></div>
+      <p>黑白灰为主、零阴影、细网格和强排版层级；状态色只保留语义用途。它测试产品是否可以完全依靠结构而非品牌色数量成立。</p>
+      <dl><dt>Axis</dt><dd>Content surfaces / elevation</dd><dt>Basis</dt><dd><strong>reasoned:</strong> 当前单一主 panel 已有足够分隔线，不依赖阴影也能建立层级；<strong>external:</strong> 社区 Vercel-inspired 分析，非官方规范。</dd><dt>Rationale</dt><dd>六个方案中最简、辨识度最高，能清楚显示团队对“极简”的接受边界。</dd><dt>Downsides</dt><dd>会大幅弱化现有品牌色习惯，最终全局落地需要更细致地处理状态和危险操作。</dd><dt>Confidence</dt><dd>82%</dd><dt>Complexity</dt><dd>Medium</dd></dl>
+    </article>
+
+    <article class="idea" id="idea-6">
+      <div class="idea-head"><div><span class="rank">6.</span><h3>Warm Editorial</h3></div><span class="tag">阅读友好</span></div>
+      <p>暖白暖灰、深墨文字、低对比边框和克制青绿，以编辑台账的排版与线条组织版本、日期和需求信息。</p>
+      <dl><dt>Axis</dt><dd>Table density / hierarchy</dd><dt>Basis</dt><dd><strong>direct:</strong> 首屏的标题—索引—条目结构与台账相似；<strong>external:</strong> 社区 Notion-inspired 分析仅作为暖表面参考，不宣称官方复刻。</dd><dt>Rationale</dt><dd>它提供唯一的暖色阅读路线，适合长期归档和逐条审阅。</dd><dt>Downsides</dt><dd>与当前冷蓝习惯距离较远，且如果文字层级控制不好会退化为“普通暖色后台”。</dd><dt>Confidence</dt><dd>75%</dd><dt>Complexity</dt><dd>Low</dd></dl>
+    </article>
+  </section>
+
+  <section id="rejection-summary">
+    <p class="eyebrow">Adversarial cut</p>
+    <h2>Rejection Summary</h2>
+    <table><thead><tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr></thead><tbody>
+      <tr><td>1</td><td>Fluent Neutral</td><td>与 Primer 差异过小；Primer 的外部依据更直接、改动也更小。</td></tr>
+      <tr><td>2</td><td>GitLab Sophisticated</td><td>与 Linear 紫色深轨高度重合，且官方产品 UI 对紫色主操作的依据较弱。</td></tr>
+      <tr><td>3</td><td>Quiet Navy Rail</td><td>被 Atlassian Structured 和 Primer 的单强调色导航完整覆盖。</td></tr>
+      <tr><td>4</td><td>Open Canvas</td><td>完全移除 panel 外框对当前详情页全局扩展过于激进。</td></tr>
+      <tr><td>5</td><td>Compact Ledger</td><td>被证据更强、体系更完整的 Carbon Compact 吸收。</td></tr>
+      <tr><td>6</td><td>Calm Review</td><td>52px 宽松行高与用户偏好的简洁、数据管理首屏不够匹配。</td></tr>
+    </tbody></table>
+  </section>
+
+  <footer class="composition-signal">Composed <time datetime="2026-07-13T07:02:00+08:00">2026-07-13T07:02+08:00</time> by ce-ideate from the current user prompt and repository evidence.</footer>
+</main>
+</body>
+</html>

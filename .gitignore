@@ -9,3 +9,5 @@ uploads
 !.env.example
 .dev.vars
 .wrangler
+.pnpm-store/
+.playwright-cli/

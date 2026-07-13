@@ -11,7 +11,7 @@ import type {
   Scene,
   SubsceneVersion,
 } from '../src/types';
-import { buildRequirementYaml } from './yamlExport';
+import { buildRequirementYaml, buildTaskSopYaml } from './yamlExport';
 import { canEditStatus, createId, createShortId, nextPatchVersion, nowIso } from './versioning';
 
 export type AppStore = {
@@ -227,7 +227,7 @@ function stripTaskSopCodes(selectedSubscenes: RequirementVersion['selectedSubsce
       id: stripped.id || createId('pri'),
       title: stripped.title || stripped.subsceneName || stripped.taskSop?.title || `生产需求项 ${index + 1}`,
       description: stripped.description || '',
-      sceneName: stripped.sceneName || stripped.taskSop?.sceneName || '',
+      sceneName: stripped.taskSop?.sceneName || stripped.sceneName || '',
       targetDurationHours: Number(stripped.targetDurationHours) || 0,
       targetCollectionCount: Number(stripped.targetCollectionCount) || 0,
     };
@@ -238,8 +238,17 @@ function versionRank(value: string): number[] {
   return value.split('.').map((part) => Number.parseInt(part, 10) || 0);
 }
 
+function stableHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).padStart(6, '0').slice(0, 8);
+}
+
 function requirementVersionId(requirementId: string, version: string): string {
-  return `${requirementId}@${version}`;
+  return `reqv_${stableHash(`${requirementId}:${version}`)}`;
 }
 
 function previousRequirementVersion(requirement: Requirement, versionNumber: string): RequirementVersion | undefined {
@@ -862,9 +871,7 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
         selectedSubscenes: stripTaskSopCodes(normalizedPatch.selectedSubscenes || current.selectedSubscenes),
         version: nextVersionNumber,
         versionId: requirementVersionId(requirement.id, nextVersionNumber),
-        parentVersionId: editable
-          ? current.parentVersionId || requirementParentVersionId(requirement, nextVersionNumber)
-          : requirementVersionId(requirement.id, current.version),
+        parentVersionId: editable ? requirementParentVersionId(requirement, nextVersionNumber) : requirementVersionId(requirement.id, current.version),
         status: editable ? current.status : 'draft',
         updatedAt: nowIso(),
       };
@@ -913,8 +920,8 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
             ? {
                 ...version,
                 selectedSubscenes: stripTaskSopCodes(version.selectedSubscenes),
-                versionId: version.versionId || requirementVersionId(requirement.id, version.version),
-                parentVersionId: version.parentVersionId || requirementParentVersionId(requirement, version.version),
+                versionId: requirementVersionId(requirement.id, version.version),
+                parentVersionId: requirementParentVersionId(requirement, version.version),
                 status: 'confirmed' as const,
                 updatedAt: nowIso(),
               }
@@ -1039,6 +1046,25 @@ export async function handleApiRequest(store: AppStore, request: ApiRequest): Pr
         };
       });
       return json(200, await store.writeScenes(nextScenes));
+    }
+
+    const subsceneExportYaml = path.match(/^\/api\/scenes\/([^/]+)\/subscenes\/([^/]+)\/export-yaml$/);
+    if (method === 'POST' && subsceneExportYaml) {
+      const data = await store.readData();
+      const [sceneId, subsceneCode] = [decodeURIComponent(subsceneExportYaml[1]), decodeURIComponent(subsceneExportYaml[2])];
+      const requestedVersion = (request.body as { version?: string })?.version;
+      const scene = data.scenes.find((item) => item.id === sceneId);
+      if (!scene) return json(404, { message: '找不到场景' });
+      const subscene = scene.subscenes.find((item) => item.code === subsceneCode);
+      if (!subscene) return json(404, { message: '找不到任务 SOP' });
+      const selectedVersion = requestedVersion
+        ? subscene.versions.find((item) => item.version === requestedVersion)
+        : latestVersion(subscene.versions);
+      if (!selectedVersion) return json(404, { message: '找不到任务 SOP 版本' });
+      const yaml = buildTaskSopYaml(data, scene, subscene, selectedVersion, {
+        attachmentPublicBaseUrl: request.attachmentPublicBaseUrl,
+      });
+      return json(200, { yaml, path: `/exports/task-sops/${sceneId}/${subsceneCode}/${selectedVersion.version}.yaml` });
     }
 
     const exportYaml = path.match(/^\/api\/requirements\/([^/]+)\/export-yaml$/);

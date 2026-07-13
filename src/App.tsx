@@ -273,6 +273,9 @@ const api = {
   async confirmSubscene(sceneId: string, code: string, version: string): Promise<Scene[]> {
     return fetchJson<Scene[]>(`/api/scenes/${sceneId}/subscenes/${code}/confirm`, postJson({ version }));
   },
+  async exportSubsceneYaml(sceneId: string, code: string, version: string): Promise<ExportResult> {
+    return fetchJson<ExportResult>(`/api/scenes/${sceneId}/subscenes/${code}/export-yaml`, postJson({ version }));
+  },
   async exportYaml(id: string, version: string): Promise<ExportResult> {
     return fetchJson<ExportResult>(`/api/requirements/${id}/export-yaml`, postJson({ version }));
   },
@@ -536,6 +539,18 @@ function formatShortDate(value?: string): string {
 
 function safeFileName(value: string): string {
   return value.replace(/[\\/:*?"<>|\s]+/g, '_').replace(/^_+|_+$/g, '') || 'export';
+}
+
+function downloadTextFile(content: string, fileName: string, mimeType = 'text/plain;charset=utf-8') {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function formatFileSize(size: number): string {
@@ -1112,40 +1127,26 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
           ['需求状态', statusText(version.status)],
           ['需求版本', version.version],
           ['机器人型号', robot ? `${robot.brand} ${robot.model}` : '-'],
+          ['原始需求来源', version.sourceBaseUrl],
           ['业务目标', version.businessGoal],
           ['总目标时长', `${version.requiredDurationHours || 0} h`],
           ['生产需求项目标时长合计', `${selectedDurationTotal} h`],
         ]),
       },
       {
-        title: '交付 / 标注 / 质检',
-        content: keyValueReport([
-          ['交付方式', version.delivery.method],
-          ['交付格式', reportList(version.delivery.formats)],
-          ['交付语言', reportList(version.delivery.languages.map((item) => `${item.code} ${item.name}`))],
-          ['数据交付结构', version.delivery.dataStructureUrl],
-          ['是否需要标注', version.annotation.required],
-          ['标注类型', reportList(version.annotation.types)],
-          ['是否需要质检', version.qualityInspection.required],
-          ['客户抽检策略', version.qualityInspection.samplingPolicy],
-        ]),
-      },
-      {
-        title: '说明补充',
-        content: keyValueReport([
-          ['客户额外 topic 要求', version.extraTopicRequirementsText],
-          ['全局随机性要求', version.globalRandomizationRequirements],
-          ['其他补充说明', version.additionalNotes],
-        ]),
-      },
-      {
-        title: '客户需求附件',
+        title: '基础信息附件',
         content: version.attachments?.length ? '附件内容如下。' : '-',
         attachments: printableAttachments(version.attachments, publicBaseUrl),
       },
       {
-        title: '客户需求层操作要求',
+        title: '全局要求',
         content: [
+          keyValueReport([
+            ['客户额外 topic 要求', version.extraTopicRequirementsText],
+            ['全局随机性要求', version.globalRandomizationRequirements],
+            ['其他补充说明', version.additionalNotes],
+          ]),
+          '',
           '采集操作要求：',
           operationItemsReport(version.allowedOperations),
           '',
@@ -1161,6 +1162,18 @@ function buildRequirementPdfReport(data: AppData, requirement: Requirement, vers
           '标注禁止操作：',
           operationItemsReport(version.annotation.forbiddenOperations),
         ].join('\n'),
+      },
+      {
+        title: '交付 / 标注 / 质检',
+        content: keyValueReport([
+          ['交付方式', version.delivery.method],
+          ['交付格式', reportList(version.delivery.formats)],
+          ['交付语言', reportList(version.delivery.languages.map((item) => item.name || item.code))],
+          ['是否需要标注', version.annotation.required],
+          ['标注类型', reportList(version.annotation.types)],
+          ['是否需要质检', version.qualityInspection.required],
+          ['客户抽检策略', version.qualityInspection.samplingPolicy],
+        ]),
       },
       ...selectedSubscenesReport(data.scenes, version.selectedSubscenes, publicBaseUrl),
     ],
@@ -1189,7 +1202,7 @@ function stableHash(value: string): string {
 
 function versionId(objectId: string | undefined, version: string | undefined): string {
   if (!objectId || !version) return '';
-  return `${objectId}@${version}`;
+  return `sopv_${stableHash(`${objectId}:${version}`)}`;
 }
 
 function versionRank(value: string): number[] {
@@ -1290,7 +1303,7 @@ function productionItemTitle(item: RequirementVersion['selectedSubscenes'][numbe
 }
 
 function productionItemSceneName(item: RequirementVersion['selectedSubscenes'][number]): string {
-  return item.sceneName || item.taskSop?.sceneName || '';
+  return item.taskSop?.sceneName || item.sceneName || '';
 }
 
 function productionItemKey(item: RequirementVersion['selectedSubscenes'][number]): string {
@@ -1880,6 +1893,48 @@ function InfoItem({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+function ExportMenu({ items }: { items: Array<{ label: string; disabled?: boolean; title?: string; onSelect: () => void | Promise<void> }> }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  return (
+    <div className="export-menu" ref={menuRef}>
+      <button type="button" className="ghost-button" onClick={() => setOpen((current) => !current)}>
+        导出
+      </button>
+      {open && (
+        <div className="export-menu-list">
+          {items.map((item) => (
+            <button
+              type="button"
+              key={item.label}
+              disabled={item.disabled}
+              title={item.title}
+              onClick={() => {
+                setOpen(false);
+                void item.onSelect();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Modal({
   title,
   children,
@@ -2330,7 +2385,7 @@ function RequirementPage({
   const selectedSubsceneGroups = selectedVersion
     ? Array.from(
         selectedVersion.selectedSubscenes.reduce((groups, item) => {
-          const sceneName = productionItemSceneName(item) || '未选择场景';
+          const sceneName = productionItemSceneName(item) || '未选择任务 SOP';
           const rows = groups.get(sceneName) || [];
           rows.push(item);
           groups.set(sceneName, rows);
@@ -2457,35 +2512,6 @@ function RequirementPage({
             void onSave({ selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode) });
           }}
         />
-      ),
-    },
-    {
-      key: 'scene',
-      title: '场景',
-      width: '150px',
-      render: (item) => (
-        <select
-          value={productionItemSceneName(item)}
-          disabled={readonly}
-          onChange={(event) => {
-            if (readonly || !selectedVersion) return;
-            const sceneName = event.target.value;
-            const selectedSubscenes = selectedVersion.selectedSubscenes.map((current) =>
-              isSameProductionItem(current, item) ? { ...current, sceneName } : current,
-            );
-            void onSave({
-              requestedScenes: Array.from(new Set(selectedSubscenes.map((current) => productionItemSceneName(current)).filter(Boolean))),
-              selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode),
-            });
-          }}
-        >
-          <option value="">未选择</option>
-          {data.scenes.map((scene) => (
-            <option value={scene.name} key={scene.id}>
-              {scene.name}
-            </option>
-          ))}
-        </select>
       ),
     },
     {
@@ -2708,15 +2734,7 @@ function RequirementPage({
   async function downloadYaml() {
     const result = await generateYamlPreview();
     if (!result) return;
-    const blob = new Blob([result.yaml], { type: 'application/x-yaml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = yamlDownloadFileName;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadTextFile(result.yaml, yamlDownloadFileName, 'application/x-yaml;charset=utf-8');
   }
 
   async function copyYamlPreview() {
@@ -2758,7 +2776,7 @@ function RequirementPage({
       isSameProductionItem(current, taskSopPickerItem)
         ? {
             ...current,
-            sceneName: current.sceneName || ref.sceneName,
+            sceneName: ref.sceneName,
             subsceneName: ref.title,
             version: ref.version,
             taskSop: ref,
@@ -2926,19 +2944,21 @@ function RequirementPage({
                 ))}
               </select>
             </label>
-            <button
-              className="ghost-button"
-              disabled={missingSelectedSubscenes.length > 0}
-              onClick={() => void downloadYaml()}
-            >
-              导出 YAML
-            </button>
-            <button
-              className="ghost-button"
-              onClick={() => exportReportAsPdf(buildRequirementPdfReport(data, selectedRequirement, selectedVersion, attachmentStorageStatus.publicBaseUrl))}
-            >
-              导出 PDF
-            </button>
+            <ExportMenu
+              items={[
+                {
+                  label: '导出 PDF',
+                  onSelect: () =>
+                    exportReportAsPdf(buildRequirementPdfReport(data, selectedRequirement, selectedVersion, attachmentStorageStatus.publicBaseUrl)),
+                },
+                {
+                  label: '导出 YAML',
+                  disabled: missingSelectedSubscenes.length > 0,
+                  title: missingSelectedSubscenes.length > 0 ? '有生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到' : undefined,
+                  onSelect: downloadYaml,
+                },
+              ]}
+            />
             {selectedVersion.status === 'confirmed' ? (
               <button className="primary-button" onClick={createDraftFromCurrentVersion}>
                 编辑为草稿
@@ -2979,7 +2999,7 @@ function RequirementPage({
             <section className="requirement-section">
               <div className="requirement-section-header">
                 <h3>基础信息</h3>
-                <p>客户、项目、机器人和计划信息</p>
+                <p>客户、项目、机器人、计划和客户原始输入</p>
               </div>
               <div className="requirement-section-grid">
                 <CommitField
@@ -3022,6 +3042,36 @@ function RequirementPage({
                   disabled={readonly}
                   onChange={(requiredDurationHours) => void onSave({ requiredDurationHours: Number(requiredDurationHours) })}
                 />
+                <TextArea
+                  label="原始需求来源"
+                  value={selectedVersion.sourceBaseUrl || ''}
+                  disabled={readonly}
+                  onChange={(sourceBaseUrl) => void onSave({ sourceBaseUrl })}
+                />
+                <TextArea
+                  label="数据用途/业务目标"
+                  value={selectedVersion.businessGoal}
+                  disabled={readonly}
+                  onChange={(businessGoal) => void onSave({ businessGoal })}
+                />
+                <AttachmentField
+                  title="客户附件"
+                  hint="单个附件不超过 1G，支持分片上传"
+                  attachments={selectedVersion.attachments || []}
+                  disabled={readonly}
+                  storageStatus={attachmentStorageStatus}
+                  upload={attachmentUpload}
+                  onUpload={(file) => onRun(() => uploadRequirementAttachment(file), '附件已上传').then(() => undefined)}
+                  onDownload={(attachment) => onRun(() => downloadRequirementAttachment(attachment), '附件已下载').then(() => undefined)}
+                  onDelete={async (attachmentId) => {
+                    if (!selectedRequirement) return;
+                    const result = await onRun(
+                      () => api.deleteAttachment(selectedRequirement.id, selectedVersion.version, attachmentId),
+                      '附件已删除',
+                    );
+                    if (result) onRequirementsChange(result);
+                  }}
+                />
               </div>
             </section>
 
@@ -3040,12 +3090,6 @@ function RequirementPage({
                   }))}
                   disabled={readonly}
                   onChange={(method) => void onSave({ delivery: { ...selectedVersion.delivery, method } })}
-                />
-                <Field
-                  label="数据交付结构"
-                  value={selectedVersion.delivery.dataStructureUrl}
-                  disabled={readonly}
-                  onChange={(dataStructureUrl) => void onSave({ delivery: { ...selectedVersion.delivery, dataStructureUrl } })}
                 />
                 <MultiSelectField
                   label="交付数据"
@@ -3082,6 +3126,15 @@ function RequirementPage({
                   disabled={readonly}
                   onChange={(value) => void onSave({ annotation: { ...selectedVersion.annotation, required: value === '需要' } })}
                 />
+                <div className="field">
+                  <span>标注类型</span>
+                  <MultiSelectInput
+                    value={selectedVersion.annotation.types}
+                    options={fieldOptions(globalFields, 'annotation_type', selectedVersion.annotation.types)}
+                    disabled={readonly}
+                    onChange={(types) => void onSave({ annotation: { ...selectedVersion.annotation, types } })}
+                  />
+                </div>
                 <SelectField
                   label="客户抽检策略"
                   value={selectedVersion.qualityInspection.samplingPolicy}
@@ -3094,30 +3147,15 @@ function RequirementPage({
                     void onSave({ qualityInspection: { ...selectedVersion.qualityInspection, samplingPolicy } })
                   }
                 />
-                <div className="field wide">
-                  <span>标注类型</span>
-                  <MultiSelectInput
-                    value={selectedVersion.annotation.types}
-                    options={fieldOptions(globalFields, 'annotation_type', selectedVersion.annotation.types)}
-                    disabled={readonly}
-                    onChange={(types) => void onSave({ annotation: { ...selectedVersion.annotation, types } })}
-                  />
-                </div>
               </div>
             </section>
 
             <section className="requirement-section">
               <div className="requirement-section-header">
-                <h3>说明补充</h3>
-                <p>需求背景、topic、随机性和补充附件</p>
+                <h3>全局要求</h3>
+                <p>topic、随机性、补充说明，以及客户需求层面的采集和标注操作约束</p>
               </div>
               <div className="requirement-notes-grid">
-                <TextArea
-                  label="数据用途/业务目标"
-                  value={selectedVersion.businessGoal}
-                  disabled={readonly}
-                  onChange={(businessGoal) => void onSave({ businessGoal })}
-                />
                 <TextArea
                   label="客户额外 topic 要求"
                   value={selectedVersion.extraTopicRequirementsText || ''}
@@ -3130,37 +3168,12 @@ function RequirementPage({
                   disabled={readonly}
                   onChange={(globalRandomizationRequirements) => void onSave({ globalRandomizationRequirements })}
                 />
-                <AttachmentField
-                  title="客户附件"
-                  hint="单个附件不超过 1G，支持分片上传"
-                  attachments={selectedVersion.attachments || []}
-                  disabled={readonly}
-                  storageStatus={attachmentStorageStatus}
-                  upload={attachmentUpload}
-                  onUpload={(file) => onRun(() => uploadRequirementAttachment(file), '附件已上传').then(() => undefined)}
-                  onDownload={(attachment) => onRun(() => downloadRequirementAttachment(attachment), '附件已下载').then(() => undefined)}
-                  onDelete={async (attachmentId) => {
-                    if (!selectedRequirement) return;
-                    const result = await onRun(
-                      () => api.deleteAttachment(selectedRequirement.id, selectedVersion.version, attachmentId),
-                      '附件已删除',
-                    );
-                    if (result) onRequirementsChange(result);
-                  }}
-                />
                 <TextArea
                   label="其他补充说明"
                   value={selectedVersion.additionalNotes || ''}
                   disabled={readonly}
                   onChange={(additionalNotes) => void onSave({ additionalNotes })}
                 />
-              </div>
-            </section>
-
-            <section className="requirement-section">
-              <div className="requirement-section-header">
-                <h3>操作要求</h3>
-                <p>客户需求层面的采集和标注操作约束</p>
               </div>
               <div className="requirement-operation-sections">
                 <div className="operation-category">
@@ -3214,6 +3227,7 @@ function RequirementPage({
                 </div>
               </div>
             </section>
+
           </div>
 
         <div className="embedded-table">
@@ -3585,6 +3599,20 @@ function ScenePage({
     onSelectVersion('');
   }
 
+  async function downloadCurrentSubsceneYaml() {
+    if (!scene || !subscene || !version) return;
+    const result = await onRun(
+      () => api.exportSubsceneYaml(scene.id, subscene.code, version.version),
+      '任务 SOP YAML 已生成',
+    );
+    if (!result) return;
+    downloadTextFile(
+      result.yaml,
+      `${safeFileName(version.title || subscene.name)}-${version.version}.yaml`,
+      'application/x-yaml;charset=utf-8',
+    );
+  }
+
   async function createSubscene() {
     const code = nextSubsceneCode(scenes);
     await onSaveSubscene(scene.id, code, emptySubsceneVersionDraft('新的任务 SOP'));
@@ -3844,9 +3872,18 @@ function ScenePage({
                     ))}
                   </select>
                 </label>
-                <button className="ghost-button" onClick={() => exportReportAsPdf(buildSubscenePdfReport(scene, subscene, version, attachmentStorageStatus.publicBaseUrl))}>
-                  导出 PDF
-                </button>
+                <ExportMenu
+                  items={[
+                    {
+                      label: '导出 PDF',
+                      onSelect: () => exportReportAsPdf(buildSubscenePdfReport(scene, subscene, version, attachmentStorageStatus.publicBaseUrl)),
+                    },
+                    {
+                      label: '导出 YAML',
+                      onSelect: downloadCurrentSubsceneYaml,
+                    },
+                  ]}
+                />
                 {version.status === 'confirmed' ? (
                   <button className="primary-button" onClick={() => void createDraftFromCurrentSubsceneVersion()}>
                     编辑为草稿
@@ -4027,6 +4064,7 @@ function ScenePage({
                 emptyText="暂无标注步骤"
                 steps={version.annotation.steps || []}
                 disabled={!canEditVersion}
+                enableBulkImport
                 onChange={(steps) => void saveCurrentSubscene({ annotation: { ...version.annotation, steps } })}
               />
               <LocalTextItemEditor

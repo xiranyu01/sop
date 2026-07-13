@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import { appDataSchemaVersion, requirementYamlSchemaVersion, taskSopYamlSchemaVersion } from '../src/schemaVersions';
+import { requirementYamlSchemaVersion, taskSopYamlSchemaVersion } from '../src/schemaVersions';
 import type {
   AppData,
   ObjectInitialState,
@@ -81,7 +81,7 @@ function versionRank(value: string): number[] {
 
 function versionId(objectId: string | undefined, version: string | undefined): string {
   if (!objectId || !version) return '';
-  return `${objectId}@${version}`;
+  return `sopv_${stableHash(`${objectId}:${version}`)}`;
 }
 
 function parentVersionId(objectId: string | undefined, versions: Array<{ version: string }>, currentVersion: string | undefined): string {
@@ -105,7 +105,7 @@ function taskSopObjectId(scene: Scene, subscene: Subscene): string {
 }
 
 function requirementVersionId(requirementId: string, version: string): string {
-  return `${requirementId}@${version}`;
+  return `reqv_${stableHash(`${requirementId}:${version}`)}`;
 }
 
 function previousRequirementVersion(requirement: Requirement, versionNumber: string): RequirementVersion | undefined {
@@ -132,7 +132,7 @@ function productionItemTitle(selected: RequestedSubscene, index: number): string
 }
 
 function productionItemSceneName(selected: RequestedSubscene): string {
-  return selected.sceneName || selected.taskSop?.sceneName || '';
+  return selected.taskSop?.sceneName || selected.sceneName || '';
 }
 
 function selectedTaskSopTitle(selected: RequestedSubscene): string {
@@ -160,7 +160,7 @@ function findTaskSopVersion(
       const versionItem = subscene?.versions.find((item) => item.version === requestedVersion);
       if (subscene && versionItem) {
         return {
-          sceneName: selected.sceneName || scene.name,
+          sceneName: selected.taskSop?.sceneName || selected.sceneName || scene.name,
           taskSopName: requestedTitle || versionItem.title || subscene.name,
           scene,
           subscene,
@@ -344,44 +344,141 @@ function mapOperation(operation: SubsceneVersion['operation']): unknown {
 
 function mapAnnotation(annotation: SubsceneVersion['annotation']): unknown {
   return {
-    status: mapStatus(annotation.status),
     steps: annotation.steps || [],
     allowed_operations: mapTextItems(annotation.allowedOperations),
     forbidden_operations: mapTextItems(annotation.forbiddenOperations),
   };
 }
 
-function mapScenario(
+function mapRequirementDelivery(delivery: RequirementVersion['delivery']): unknown {
+  return {
+    formats: delivery.formats,
+    method: delivery.method,
+    languages: delivery.languages.map((language) => language.name || language.code).filter(Boolean),
+  };
+}
+
+type TaskSopConfigVersions = {
+  environment: string;
+  collection: string;
+  annotation: string;
+};
+
+function stableJson(input: unknown): string {
+  return JSON.stringify(input);
+}
+
+function configSignature(version: SubsceneVersion, key: keyof TaskSopConfigVersions): string {
+  if (key === 'environment') {
+    return stableJson({
+      materials: version.materials,
+      robotState: version.robotState,
+      randomization: version.randomization,
+      objectStates: version.objectStates,
+    });
+  }
+  if (key === 'collection') {
+    return stableJson({
+      operation: version.operation,
+    });
+  }
+  return stableJson({
+    steps: version.annotation.steps || [],
+    allowedOperations: version.annotation.allowedOperations || [],
+    forbiddenOperations: version.annotation.forbiddenOperations || [],
+  });
+}
+
+function taskSopConfigVersions(subscene: Subscene, currentVersion: string): TaskSopConfigVersions {
+  const sortedVersions = [...subscene.versions].sort((left, right) => {
+    const leftRank = versionRank(left.version);
+    const rightRank = versionRank(right.version);
+    for (let index = 0; index < Math.max(leftRank.length, rightRank.length); index += 1) {
+      const diff = (leftRank[index] || 0) - (rightRank[index] || 0);
+      if (diff !== 0) return diff;
+    }
+    return left.version.localeCompare(right.version);
+  });
+  const signatures: Partial<Record<keyof TaskSopConfigVersions, string>> = {};
+  const versions: TaskSopConfigVersions = { environment: currentVersion, collection: currentVersion, annotation: currentVersion };
+  for (const version of sortedVersions) {
+    (Object.keys(versions) as Array<keyof TaskSopConfigVersions>).forEach((key) => {
+      const signature = configSignature(version, key);
+      if (signatures[key] !== signature) {
+        signatures[key] = signature;
+        versions[key] = version.version;
+      }
+    });
+    if (version.version === currentVersion) return { ...versions };
+  }
+  return { ...versions };
+}
+
+function mapTaskSop(
   sceneName: string,
   taskSopName: string,
   requestedVersion: string,
   taskSopVersionId: string,
   taskSopParentVersionId: string,
-  targetDurationHours: number,
-  targetCollectionCount: number | undefined,
+  configVersions: TaskSopConfigVersions,
   subscene: SubsceneVersion,
   allMaterials: AppData['materials'],
   options: BuildRequirementYamlOptions,
-): unknown {
+): Record<string, unknown> {
   return {
-    schema_version: taskSopYamlSchemaVersion,
-    version: requestedVersion,
-    version_id: taskSopVersionId,
-    parent_version_id: taskSopParentVersionId,
+    sop_version: requestedVersion,
+    sop_version_id: taskSopVersionId,
+    parent_sop_version_id: taskSopParentVersionId,
+    status: mapStatus(subscene.status),
     scene_name: sceneName,
     task_sop_name: taskSopName || subscene.title || subscene.description,
     description: subscene.description,
     attachments: mapAttachments(subscene.attachments, options),
-    target_duration_hours: targetDurationHours,
-    target_collection_count: targetCollectionCount || 0,
-    materials: mapMaterials(subscene.materials, allMaterials, options),
-    robot_state: toSnakeObject(subscene.robotState),
-    randomization: mapRandomization(subscene.randomization, subscene.attachments, options),
-    operation: mapOperation(subscene.operation),
-    object_states: mapObjectStates(subscene.objectStates, subscene.attachments, options),
-    annotation: mapAnnotation(subscene.annotation),
-    references: toSnakeObject(subscene.references),
+    environment_config: {
+      config_version: configVersions.environment,
+      materials: mapMaterials(subscene.materials, allMaterials, options),
+      robot_state: toSnakeObject(subscene.robotState),
+      object_states: mapObjectStates(subscene.objectStates, subscene.attachments, options),
+      randomization: mapRandomization(subscene.randomization, subscene.attachments, options),
+    },
+    collection_config: {
+      config_version: configVersions.collection,
+      operation: mapOperation(subscene.operation),
+    },
+    annotation_config: {
+      config_version: configVersions.annotation,
+      annotation: mapAnnotation(subscene.annotation),
+    },
   };
+}
+
+export function buildTaskSopYaml(
+  data: AppData,
+  scene: Scene,
+  subscene: Subscene,
+  version: SubsceneVersion,
+  options: BuildRequirementYamlOptions = {},
+): string {
+  const objectId = taskSopObjectId(scene, subscene);
+  const versionIdValue = versionId(objectId, version.version);
+  const parentVersionIdValue = parentVersionId(objectId, subscene.versions, version.version);
+  const configVersions = taskSopConfigVersions(subscene, version.version);
+  const doc = {
+    schema_version: data.metadata?.taskSopYamlSchemaVersion || taskSopYamlSchemaVersion,
+    task_sop: mapTaskSop(
+      scene.name,
+      version.title || subscene.name,
+      version.version,
+      versionIdValue,
+      parentVersionIdValue,
+      configVersions,
+      version,
+      data.materials,
+      options,
+    ),
+  };
+
+  return YAML.stringify(doc, { lineWidth: 120 });
 }
 
 export function buildRequirementYaml(
@@ -404,8 +501,8 @@ export function buildRequirementYaml(
     const resolved = findTaskSopVersion(data, selected);
     const objectId = taskSopObjectId(resolved.scene, resolved.subscene);
     const sopVersion = selectedTaskSopVersion(selected);
-    const refVersionId = selected.taskSop?.versionId || versionId(objectId, sopVersion);
-    const refParentVersionId = selected.taskSop?.parentVersionId || parentVersionId(objectId, resolved.subscene.versions, sopVersion);
+    const refVersionId = versionId(objectId, sopVersion);
+    const refParentVersionId = parentVersionId(objectId, resolved.subscene.versions, sopVersion);
     return {
       selected,
       index,
@@ -413,124 +510,89 @@ export function buildRequirementYaml(
       sopVersion,
       refVersionId,
       refParentVersionId,
+      configVersions: taskSopConfigVersions(resolved.subscene, sopVersion),
     };
   });
 
-  const taskSopDetails = resolvedItems.map(({ selected, sceneName, taskSopName, version: taskSop, sopVersion, refVersionId, refParentVersionId }) =>
-    mapScenario(
+  const taskSopDetails = resolvedItems.map(({ selected, sceneName, taskSopName, version: taskSop, sopVersion, refVersionId, refParentVersionId, configVersions }) =>
+    mapTaskSop(
       productionItemSceneName(selected) || sceneName,
       selectedTaskSopTitle(selected) || taskSopName,
       sopVersion,
       refVersionId,
       refParentVersionId,
-      selected.targetDurationHours,
-      selected.targetCollectionCount,
+      configVersions,
       taskSop,
       data.materials,
       options,
     ),
   );
 
-  const productionRequirementItems = resolvedItems.map(({ selected, index, sceneName, taskSopName, version: taskSop, sopVersion, refVersionId, refParentVersionId }) => ({
+  const productionRequirementItems = resolvedItems.map(({ selected, index, sceneName, taskSopName, sopVersion, refVersionId }) => ({
     title: productionItemTitle(selected, index),
     description: selected.description || '',
-    scene_name: productionItemSceneName(selected) || sceneName,
     target_duration_hours: selected.targetDurationHours,
     target_collection_count: selected.targetCollectionCount || 0,
     task_sop: {
-      schema_version: taskSopYamlSchemaVersion,
       title: selectedTaskSopTitle(selected) || taskSopName,
       scene_name: selected.taskSop?.sceneName || sceneName,
-      version: sopVersion,
-      version_id: refVersionId,
-      parent_version_id: refParentVersionId,
-      status: mapStatus(taskSop.status),
+      sop_version: sopVersion,
+      sop_version_id: refVersionId,
     },
   }));
 
   const doc = {
     schema_version: requirementYamlSchemaVersion,
-    schema_versions: {
-      app_data: data.metadata?.appDataSchemaVersion || appDataSchemaVersion,
-      requirement_yaml: data.metadata?.requirementYamlSchemaVersion || requirementYamlSchemaVersion,
-      task_sop_yaml: data.metadata?.taskSopYamlSchemaVersion || taskSopYamlSchemaVersion,
-    },
     requirement: {
-      id: requirement.id,
-      title: version.title,
-      version: version.version,
-      version_id: version.versionId || requirementVersionId(requirement.id, version.version),
-      parent_version_id: version.parentVersionId || requirementParentVersionId(requirement, version.version),
-      status: mapStatus(version.status),
-      project_name: version.projectName,
-      priority: version.priority,
-      deadline: version.deadline,
-      source_base_url: version.sourceBaseUrl || '',
-      attachments: mapAttachments(version.attachments, options),
-      additional_notes: version.additionalNotes || '',
-    },
-    customer: {
-      id: customer.id,
-      name: customer.name,
-      contact: customer.contact,
-    },
-    robot: {
-      id: robot.id,
-      brand: robot.brand,
-      model: robot.model,
-      terminal: robot.terminal,
-      topics: robot.topics,
-      extra_topic_requirements: version.extraTopicRequirementsText
-        ? keyValueLines(version.extraTopicRequirementsText)
-        : robot.extraTopicRequirements,
-    },
-    global_requirements: {
-      business_goal: {
-        intended_use: version.businessGoal,
-      },
-      scene_data_scope: {
-        requested_scenes: Array.from(new Set(version.selectedSubscenes.map(productionItemSceneName).filter(Boolean))).map((sceneName) => ({
-          scene_name: sceneName,
-          production_requirement_items: version.selectedSubscenes
-            .filter((selected) => productionItemSceneName(selected) === sceneName)
-            .map((selected) => ({
-              title: selected.title || selected.subsceneName || selected.taskSop?.title,
-              task_sop_name: selectedTaskSopTitle(selected),
-              task_sop_version: selectedTaskSopVersion(selected),
-            })),
-        })),
-      },
-      collection: {
+      basic_info: {
+        title: version.title,
+        version: version.version,
+        version_id: requirementVersionId(requirement.id, version.version),
+        parent_version_id: requirementParentVersionId(requirement, version.version),
+        status: mapStatus(version.status),
+        project_name: version.projectName,
+        deadline: version.deadline,
+        business_goal: version.businessGoal,
         required_duration_hours: version.requiredDurationHours,
+        original_requirement_source: version.sourceBaseUrl || '',
+        attachments: mapAttachments(version.attachments, options),
+      },
+      customer: {
+        id: customer.id,
+        name: customer.name,
+        contact: customer.contact,
+      },
+      robot: {
+        id: robot.id,
+        brand: robot.brand,
+        model: robot.model,
+        terminal: robot.terminal,
+        topics: robot.topics,
+      },
+      global_requirements: {
+        extra_topic_requirements: version.extraTopicRequirementsText
+          ? keyValueLines(version.extraTopicRequirementsText)
+          : robot.extraTopicRequirements,
         global_randomization_requirements: version.globalRandomizationRequirements || '',
-        allowed_operations: version.allowedOperations,
-        acceptable_operations: version.acceptableOperations || [],
-        forbidden_operations: version.forbiddenOperations,
+        additional_notes: version.additionalNotes || '',
+        collection_operation_requirements: {
+          allowed_operations: version.allowedOperations,
+          acceptable_operations: version.acceptableOperations || [],
+          forbidden_operations: version.forbiddenOperations,
+        },
+        annotation_operation_requirements: {
+          allowed_operations: version.annotation.allowedOperations || [],
+          forbidden_operations: version.annotation.forbiddenOperations || [],
+        },
       },
-      annotation: toSnakeObject(version.annotation),
-      quality_inspection: toSnakeObject(version.qualityInspection),
-      delivery: toSnakeObject(version.delivery),
-    },
-    production_requirement_items: productionRequirementItems,
-    task_sop_details: taskSopDetails,
-    traceability: {
-      generated_from: `sop-requirement-manager ${new Date().toISOString()}`,
-      requirement_id: requirement.id,
-      requirement_version: version.version,
-      requirement_version_id: version.versionId || requirementVersionId(requirement.id, version.version),
-      parent_requirement_version_id: version.parentVersionId || requirementParentVersionId(requirement, version.version),
-      schema_versions: {
-        app_data: data.metadata?.appDataSchemaVersion || appDataSchemaVersion,
-        requirement_yaml: data.metadata?.requirementYamlSchemaVersion || requirementYamlSchemaVersion,
-        task_sop_yaml: data.metadata?.taskSopYamlSchemaVersion || taskSopYamlSchemaVersion,
+      delivery_requirements: mapRequirementDelivery(version.delivery),
+      annotation_requirements: {
+        required: version.annotation.required,
+        types: version.annotation.types,
       },
-      task_sop_versions: resolvedItems.map(({ selected, sceneName, taskSopName, sopVersion, refVersionId, refParentVersionId }) => ({
-        scene_name: selected.taskSop?.sceneName || sceneName,
-        task_sop_name: selectedTaskSopTitle(selected) || taskSopName,
-        version: sopVersion,
-        version_id: refVersionId,
-        parent_version_id: refParentVersionId,
-      })),
+      quality_inspection_requirements: toSnakeObject(version.qualityInspection),
+      production_requirement_items: productionRequirementItems,
+      task_sop_details: taskSopDetails,
     },
   };
 

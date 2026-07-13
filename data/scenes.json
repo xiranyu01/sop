@@ -1273,7 +1273,10 @@
               "steps": [
                 {
                   "order": 1,
-                  "description": "识别洗漱台上的目标物料"
+                  "description": "识别洗漱台上的目标物料",
+                  "atomicSkill": "123",
+                  "englishDescription": "123",
+                  "englishAtomicSkill": "1234"
                 },
                 {
                   "order": 2,
@@ -1360,7 +1363,7 @@
               "recordUrls": [],
               "attachments": []
             },
-            "updatedAt": "2026-06-25T09:32:36.926Z"
+            "updatedAt": "2026-07-13T06:14:41.755Z"
           }
         ]
       },

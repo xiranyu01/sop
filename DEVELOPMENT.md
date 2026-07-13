@@ -68,7 +68,7 @@ pnpm build
 │   ├── r2AttachmentStore.ts      # Cloudflare R2 附件存储适配
 │   ├── store.ts                  # 本地 JSON 与 uploads 存储
 │   ├── versioning.ts             # 版本号和 ID 工具
-│   └── yamlExport.ts             # requirement_yaml_v0.5 导出映射
+│   └── yamlExport.ts             # requirement_yaml_v0.11 导出映射
 ├── src/
 │   ├── App.tsx                   # 主要页面和业务交互
 │   ├── App.css                   # 页面样式
@@ -139,15 +139,15 @@ CREATE TABLE IF NOT EXISTS app_data (
 
 客户是需求的归属对象。客户列表中会显示该客户累计需求数量，进入客户后可以查看历史需求。
 
-客户需求面向客户沟通和交付。需求 ID 使用 6 位随机短编号，页面不作为主要信息展示，但会写入 YAML 的 `requirement.id` 和 `traceability.requirement_id`，用于稳定追溯。每个客户需求包含多个版本。
+客户需求面向客户沟通和交付。需求 ID 使用 6 位随机短编号，只用于本地数据查找和版本关系计算；页面和对外 YAML 不展示需求 ID，YAML 通过 `version_id` 和 `parent_version_id` 追溯版本。每个客户需求包含多个版本。
 
 客户需求中只锁定任务 SOP 引用：
 
 - 任务 SOP 版本号
-- 场景名和任务 SOP 名称快照
+- 任务 SOP 名称快照
 - 该需求下的目标采集时长
 
-导出 YAML 或 PDF 时，会根据锁定的场景名、任务 SOP 名称和版本号，从场景库里读取对应任务 SOP 正文。历史数据如果仍带内部编号，系统只用于兼容查找，不再写入新的客户需求或 YAML。
+导出 YAML 或 PDF 时，会根据锁定的任务 SOP 名称和版本号，从场景库里读取对应任务 SOP 正文；场景名由任务 SOP 自身带出。历史数据如果仍带内部编号，系统只用于兼容查找，不再写入新的客户需求或 YAML。
 
 ### 场景与任务 SOP
 
@@ -238,21 +238,54 @@ Authorization: Bearer <APP_PASSWORD>
 
 ## YAML 导出
 
-当前导出 schema 是 `requirement_yaml_v0.5`，顶层结构为：
+当前导出 schema 是 `requirement_yaml_v0.11`，顶层结构为：
 
 ```yaml
-schema_version: requirement_yaml_v0.5
-schema_versions:
-  app_data: app_data_v0.1
-  requirement_yaml: requirement_yaml_v0.5
-  task_sop_yaml: task_sop_yaml_v0.3
-requirement: {}
-customer: {}
-robot: {}
-global_requirements: {}
-production_requirement_items: []
-task_sop_details: []
-traceability: {}
+schema_version: requirement_yaml_v0.11
+requirement:
+  basic_info:
+    title:
+    version:
+    version_id:
+    parent_version_id:
+    status:
+    project_name:
+    deadline:
+    business_goal:
+    required_duration_hours:
+    original_requirement_source:
+    attachments: []
+  customer: {}
+  robot: {}
+  global_requirements:
+    extra_topic_requirements:
+    global_randomization_requirements:
+    additional_notes:
+    collection_operation_requirements: {}
+    annotation_operation_requirements: {}
+  delivery_requirements: {}
+  annotation_requirements: {}
+  quality_inspection_requirements: {}
+  production_requirement_items: []
+  task_sop_details: []
+```
+
+任务 SOP 详情页可单独导出 `task_sop_yaml_v0.5`，顶层结构为：
+
+```yaml
+schema_version: task_sop_yaml_v0.5
+task_sop:
+  sop_version:
+  sop_version_id:
+  parent_sop_version_id:
+  status:
+  scene_name:
+  task_sop_name:
+  description:
+  attachments: []
+  environment_config: {}
+  collection_config: {}
+  annotation_config: {}
 ```
 
 导出逻辑在 `server/yamlExport.ts`。
@@ -260,12 +293,14 @@ traceability: {}
 导出原则：
 
 - 页面字段和 YAML 字段保持语义一致。
-- 客户需求先保存生产需求项；每个生产需求项再保存任务 SOP 名称、场景名和版本引用，导出时读取对应任务 SOP 版本正文。
-- 需求版本、任务 SOP 引用会导出 `version_id` 和 `parent_version_id`，方便追溯版本关系。
-- `production_requirement_items[].task_sop.schema_version` 和 `task_sop_details[].schema_version` 都会标明任务 SOP schema 版本。
+- 客户需求先保存生产需求项；每个生产需求项再保存任务 SOP 名称和版本引用，场景名由任务 SOP 自动带出，导出时读取对应任务 SOP 版本正文。
+- 需求版本、任务 SOP 引用会导出版本号、版本 ID 和父版本 ID，方便追溯版本关系。
+- 任务 SOP schema 版本只在顶层 `schema_version` 标明；环境、采集、标注配置使用各自的 `config_version` 表达业务配置版本。
 - 需求附件、任务 SOP 附件、示例图和物料图片都会导出 `url`；线上使用 `R2_PUBLIC_BASE_URL` 拼公开 bucket 链接。
-- 需求 ID 只用于系统追溯，不作为页面主要展示字段；任务 SOP 内部编号不写入客户需求和 YAML。
-- `traceability` 只保留本地应用稳定可提供的信息。
+- 需求 ID 只用于系统内部查找和版本关系计算，不写入对外 YAML；任务 SOP 内部编号不写入客户需求和 YAML。
+- 对外 YAML 不输出内部 `app_data` schema 版本，也不输出单独的 `traceability` 块。
+- 对外需求 YAML 不输出优先级、交付结构链接和 `scene_data_scope` 摘要；业务目标、总目标时长、原始需求来源和客户附件都归入 `requirement.basic_info`。
+- 客户额外 topic 要求、全局随机性要求、其他补充说明、采集操作要求和标注操作要求归入 `requirement.global_requirements`。
 - 历史遗留字段不主动清理，但导出时不输出已废弃的操作中物料状态结构。
 - `step_order`、`open_questions`、动作标签、随机频率等已从当前主导出结构中移除。
 
@@ -273,7 +308,7 @@ traceability: {}
 
 - 生成 YAML 预览
 - 复制 YAML
-- 点击顶部“导出 YAML”下载文件
+- 点击顶部“导出”菜单下载 YAML 或 PDF
 
 ## PDF 导出
 
@@ -329,10 +364,10 @@ PDF 导出在前端生成，不依赖服务端文件系统：
 客户需求：
 
 - 可以新建需求，并自动生成 6 位随机短 ID。
-- 需求 ID 不在页面中作为主要字段展示，但 YAML 中保留。
-- 可以添加多个生产需求项，每个需求项可以维护名称、描述、场景、目标采集时长和目标采集数量。
+- 需求 ID 不在页面和对外 YAML 中展示；需求 YAML 使用版本 ID 追溯。
+- 可以添加多个生产需求项，每个需求项可以维护名称、描述、目标采集时长和目标采集数量，并选择要使用的任务 SOP 版本。
 - 每个生产需求项可以单独选择任务 SOP，选择时可切换具体版本，默认选择最新版。
-- 生产需求项按场景分组展示，并可跳转查看已选择的任务 SOP 详情。
+- 生产需求项按所选任务 SOP 的所属场景分组展示，并可跳转查看已选择的任务 SOP 详情。
 - 从需求页跳转到任务 SOP 详情时，任务 SOP 页顶部有返回需求页按钮。
 - 总目标时长和生产需求项目标时长合计有差异提示。
 - 如果生产需求项未选择任务 SOP，或选择的任务 SOP 存在草稿/缺失版本，需求确认按钮应禁用或后端拒绝确认。
@@ -344,7 +379,7 @@ YAML：
 
 - 点击“生成预览”能显示 YAML。
 - 点击“复制”能复制 YAML。
-- 点击顶部“导出 YAML”能下载文件。
+- 点击顶部“导出”菜单能下载 YAML 或 PDF。
 - 导出的 YAML 能被 YAML parser 解析。
 - 导出内容包含客户需求中的额外 topic 要求、采集步骤随机性、标注步骤、标注操作要求、采集禁止操作和不完美但可接受的采集操作。
 - 导出内容不包含 `open_questions` 和已废弃的操作中物料状态结构。

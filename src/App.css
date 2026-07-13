@@ -954,6 +954,46 @@ button:disabled {
   color: #b42318;
 }
 
+.export-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.export-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 128px;
+  overflow: hidden;
+  border: 1px solid #d9e3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(23, 32, 51, 0.14);
+}
+
+.export-menu-list button {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  border: 0;
+  background: #ffffff;
+  color: #24364f;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.export-menu-list button:hover {
+  background: #f5f8fc;
+}
+
+.export-menu-list button:disabled {
+  cursor: not-allowed;
+  background: #ffffff;
+  color: #9aa8b8;
+}
+
 .text-button {
   display: inline-flex;
   align-items: center;
@@ -1148,6 +1188,7 @@ button:disabled {
 }
 
 .requirement-section .field.wide {
+  grid-column: 1 / -1;
   margin: 0;
 }
 
@@ -1264,6 +1305,8 @@ button:disabled {
   margin: 0;
 }
 
+.requirement-section-grid .attachment-field,
+.requirement-notes-grid .attachment-field,
 .requirement-notes-grid .field:last-child {
   grid-column: 1 / -1;
 }
@@ -2221,12 +2264,13 @@ button:disabled {
 .state-image-list {
   display: grid;
   gap: 8px;
+  width: 100%;
 }
 
 .state-image-item {
   position: relative;
-  display: block;
-  align-items: center;
+  display: grid;
+  width: 100%;
   border: 1px solid #e3ebf3;
   border-radius: 8px;
   background: #fbfdff;
@@ -2243,8 +2287,9 @@ button:disabled {
 }
 
 .state-image-item .attachment-preview-thumb {
-  width: 144px;
-  height: 108px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
 }
 
 .state-image-item .attachment-preview-thumb img {

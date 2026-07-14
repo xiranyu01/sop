@@ -92,11 +92,11 @@ message Quantity {
     NumericRange range = 2;
   }
 
-  // Unit is a stable unit code, not localized display text.
+  // Unit preserves the source unit code or label. Migration must not invent a
+  // code when legacy data only contains a localized label such as "件".
   string unit = 3 [(buf.validate.field).string = {
     min_len: 1
     max_len: 32
-    pattern: "^[a-z][a-z0-9-]*$"
   }];
 }
 

@@ -7,7 +7,7 @@ import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import type { FrozenDependencyContext, MaterialDescriptor, MaterialStateRule } from "./catalog_pb";
 import { file_coscene_sop_v1alpha1_catalog } from "./catalog_pb";
-import type { AnnotationReadiness, Attribute, ChangePolicy, Lifecycle, NamedValueSource, OperationPolicy, OperationStep, Quantity, RandomizedField, StepRandomization } from "./common_pb";
+import type { AnnotationReadiness, Attribute, ChangePolicy, Lifecycle, NamedValueSource, NumericRange, OperationPolicy, OperationStep, Quantity, RandomizedField, StepRandomization } from "./common_pb";
 import { file_coscene_sop_v1alpha1_common } from "./common_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import { file_google_api_resource } from "../../../google/api/resource_pb";
@@ -19,7 +19,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file coscene/sop/v1alpha1/task_sop.proto.
  */
 export const file_coscene_sop_v1alpha1_task_sop: GenFile = /*@__PURE__*/
-  fileDesc("CiNjb3NjZW5lL3NvcC92MWFscGhhMS90YXNrX3NvcC5wcm90bxIUY29zY2VuZS5zb3AudjFhbHBoYTEi9wMKClRhc2tPYmplY3QSOAoCaWQYASABKAlCLLpIKXInEAEYPzIhXlthLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEh0KDGRpc3BsYXlfbmFtZRgCIAEoCUIHukgEcgIQARJlCghtYXRlcmlhbBgDIAEoCUJO+kEZChdzb3AuY29zY2VuZS5pby9NYXRlcmlhbLpIL3ItMitebWF0ZXJpYWxzL1thLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8kSACIAQESMAoIcXVhbnRpdHkYBCABKAsyHi5jb3NjZW5lLnNvcC52MWFscGhhMS5RdWFudGl0eRINCgVyb2xlcxgFIAMoCRIzCgphdHRyaWJ1dGVzGAYgAygLMh8uY29zY2VuZS5zb3AudjFhbHBoYTEuQXR0cmlidXRlEl8KBmltYWdlcxgHIAMoCUJP+kEbChlzb3AuY29zY2VuZS5pby9BdHRhY2htZW50ukgukgErIilyJzIlXmF0dGFjaG1lbnRzL1thLXowLTldW2EtejAtOS1dezAsNjJ9JBJFChNtYXRlcmlhbF9kZXNjcmlwdG9yGAggASgLMiguY29zY2VuZS5zb3AudjFhbHBoYTEuTWF0ZXJpYWxEZXNjcmlwdG9yQgsKCV9tYXRlcmlhbCJrChFSZWZlcmVuY2VSZWxhdGlvbhIaCglvYmplY3RfaWQYASABKAlCB7pIBHICEAESIgoRcmVsYXRpdmVfcG9zaXRpb24YAiABKAlCB7pIBHICEAESFgoFbGV2ZWwYAyABKA1CB7pIBCoCIAAi8QMKEkxvY2F0aW9uQ29uc3RyYWludBIjCgxkaXNwbGF5X25hbWUYASABKAlCCLpIBXIDGIACSACIAQESPwoOcmVmZXJlbmNlX3BhdGgYAiADKAsyJy5jb3NjZW5lLnNvcC52MWFscGhhMS5SZWZlcmVuY2VSZWxhdGlvbhImCg9zdXBwb3J0X3N1cmZhY2UYAyABKAlCCLpIBXIDGIABSAGIAQESDwoHcmVnaW9ucxgEIAMoCRINCgVwb3NlcxgFIAMoCRINCgVmb3JtcxgGIAMoCRIzCgpwYXJhbWV0ZXJzGAcgAygLMh8uY29zY2VuZS5zb3AudjFhbHBoYTEuQXR0cmlidXRlEhMKC2NvbnN0cmFpbnRzGAggAygJEiwKFWNvbGxlY3Rvcl9pbnN0cnVjdGlvbhgJIAEoCUIIukgFcgMYoB9IAogBARJnCg5leGFtcGxlX2ltYWdlcxgKIAMoCUJP+kEbChlzb3AuY29zY2VuZS5pby9BdHRhY2htZW50ukgukgErIilyJzIlXmF0dGFjaG1lbnRzL1thLXowLTldW2EtejAtOS1dezAsNjJ9JEIPCg1fZGlzcGxheV9uYW1lQhIKEF9zdXBwb3J0X3N1cmZhY2VCGAoWX2NvbGxlY3Rvcl9pbnN0cnVjdGlvbiJ/ChJJbml0aWFsT2JqZWN0U3RhdGUSGgoJb2JqZWN0X2lkGAEgASgJQge6SARyAhABEk0KEWFsbG93ZWRfbG9jYXRpb25zGAIgAygLMiguY29zY2VuZS5zb3AudjFhbHBoYTEuTG9jYXRpb25Db25zdHJhaW50Qgi6SAWSAQIIASJ8ChFUYXJnZXRPYmplY3RTdGF0ZRIaCglvYmplY3RfaWQYASABKAlCB7pIBHICEAESSwoRcmVxdWlyZWRfbG9jYXRpb24YAiABKAsyKC5jb3NjZW5lLnNvcC52MWFscGhhMS5Mb2NhdGlvbkNvbnN0cmFpbnRCBrpIA8gBASKCAQoMT2JqZWN0U3RhdGVzEjkKB2luaXRpYWwYASADKAsyKC5jb3NjZW5lLnNvcC52MWFscGhhMS5Jbml0aWFsT2JqZWN0U3RhdGUSNwoGdGFyZ2V0GAIgAygLMicuY29zY2VuZS5zb3AudjFhbHBoYTEuVGFyZ2V0T2JqZWN0U3RhdGUiPwoKUm9ib3RTdGF0ZRIYCgdpbml0aWFsGAEgASgJQge6SARyAhABEhcKBnRhcmdldBgCIAEoCUIHukgEcgIQASKlAgoSUm9ib3RSYW5kb21pemF0aW9uEg8KB2VuYWJsZWQYASABKAgSMgoGY2hhbmdlGAIgASgLMiIuY29zY2VuZS5zb3AudjFhbHBoYTEuQ2hhbmdlUG9saWN5EjUKBmZpZWxkcxgDIAMoCzIlLmNvc2NlbmUuc29wLnYxYWxwaGExLlJhbmRvbWl6ZWRGaWVsZDqSAbpIjgEaiwEKMHJvYm90X3JhbmRvbWl6YXRpb24uY2hhbmdlX3JlcXVpcmVkX3doZW5fZW5hYmxlZBI0ZW5hYmxlZCByb2JvdCByYW5kb21pemF0aW9uIHJlcXVpcmVzIGEgY2hhbmdlIHBvbGljeRohIXRoaXMuZW5hYmxlZCB8fCBoYXModGhpcy5jaGFuZ2UpIp8EChNPYmplY3RSYW5kb21pemF0aW9uEhwKCm9iamVjdF9pZHMYASADKAlCCLpIBZIBAggBEjoKBmNoYW5nZRgCIAEoCzIiLmNvc2NlbmUuc29wLnYxYWxwaGExLkNoYW5nZVBvbGljeUIGukgDyAEBEj8KBmZpZWxkcxgDIAMoCzIlLmNvc2NlbmUuc29wLnYxYWxwaGExLlJhbmRvbWl6ZWRGaWVsZEIIukgFkgECCAESLAoVY29sbGVjdG9yX2luc3RydWN0aW9uGAQgASgJQgi6SAVyAxigH0gAiAEBEhMKC2NvbnN0cmFpbnRzGAUgAygJEmcKDmV4YW1wbGVfaW1hZ2VzGAYgAygJQk/6QRsKGXNvcC5jb3NjZW5lLmlvL0F0dGFjaG1lbnS6SC6SASsiKXInMiVeYXR0YWNobWVudHMvW2EtejAtOV1bYS16MC05LV17MCw2Mn0kEjkKCWxvY2F0aW9ucxgHIAMoCzImLmNvc2NlbmUuc29wLnYxYWxwaGExLk5hbWVkVmFsdWVTb3VyY2USNQoFcG9zZXMYCCADKAsyJi5jb3NjZW5lLnNvcC52MWFscGhhMS5OYW1lZFZhbHVlU291cmNlEjUKBWZvcm1zGAkgAygLMiYuY29zY2VuZS5zb3AudjFhbHBoYTEuTmFtZWRWYWx1ZVNvdXJjZUIYChZfY29sbGVjdG9yX2luc3RydWN0aW9uIqABCg1SYW5kb21pemF0aW9uEkUKE3JvYm90X2luaXRpYWxfc3RhdGUYASABKAsyKC5jb3NjZW5lLnNvcC52MWFscGhhMS5Sb2JvdFJhbmRvbWl6YXRpb24SSAoVb2JqZWN0X2luaXRpYWxfc3RhdGVzGAIgAygLMikuY29zY2VuZS5zb3AudjFhbHBoYTEuT2JqZWN0UmFuZG9taXphdGlvbiLvAwoNT3BlcmF0aW9uUGxhbhIyCgVzdGVwcxgBIAMoCzIjLmNvc2NlbmUuc29wLnYxYWxwaGExLk9wZXJhdGlvblN0ZXASNQoGcG9saWN5GAIgASgLMiUuY29zY2VuZS5zb3AudjFhbHBoYTEuT3BlcmF0aW9uUG9saWN5EkMKEnN0ZXBfcmFuZG9taXphdGlvbhgDIAEoCzInLmNvc2NlbmUuc29wLnYxYWxwaGExLlN0ZXBSYW5kb21pemF0aW9uEiEKCnN0ZXBfb3JkZXIYBCABKAlCCLpIBXIDGKAfSACIAQE6+wG6SPcBGvQBCixvcGVyYXRpb25fcGxhbi5yYW5kb21pemF0aW9uX3JhbmdlX2luX2JvdW5kcxI6c3RlcCByYW5kb21pemF0aW9uIG11c3QgZW5kIHdpdGhpbiB0aGUgb3BlcmF0aW9uIHN0ZXAgbGlzdBqHASFoYXModGhpcy5zdGVwX3JhbmRvbWl6YXRpb24pIHx8ICF0aGlzLnN0ZXBfcmFuZG9taXphdGlvbi5lbmFibGVkIHx8IHRoaXMuc3RlcF9yYW5kb21pemF0aW9uLmVuZF9zdGVwX251bWJlciA8PSB1aW50KHRoaXMuc3RlcHMuc2l6ZSgpKUINCgtfc3RlcF9vcmRlciLFBAoOQW5ub3RhdGlvblBsYW4SMgoFc3RlcHMYASADKAsyIy5jb3NjZW5lLnNvcC52MWFscGhhMS5PcGVyYXRpb25TdGVwEjUKBnBvbGljeRgCIAEoCzIlLmNvc2NlbmUuc29wLnYxYWxwaGExLk9wZXJhdGlvblBvbGljeRJICglyZWFkaW5lc3MYAyABKA4yKS5jb3NjZW5lLnNvcC52MWFscGhhMS5Bbm5vdGF0aW9uUmVhZGluZXNzQgq6SAeCAQQQASAAEhsKBG5vdGUYBCABKAlCCLpIBXIDGKAfSACIAQESEwoLYWN0aW9uX3RhZ3MYBSADKAkSQwoSc3RlcF9yYW5kb21pemF0aW9uGAYgASgLMicuY29zY2VuZS5zb3AudjFhbHBoYTEuU3RlcFJhbmRvbWl6YXRpb246/QG6SPkBGvYBCi1hbm5vdGF0aW9uX3BsYW4ucmFuZG9taXphdGlvbl9yYW5nZV9pbl9ib3VuZHMSO3N0ZXAgcmFuZG9taXphdGlvbiBtdXN0IGVuZCB3aXRoaW4gdGhlIGFubm90YXRpb24gc3RlcCBsaXN0GocBIWhhcyh0aGlzLnN0ZXBfcmFuZG9taXphdGlvbikgfHwgIXRoaXMuc3RlcF9yYW5kb21pemF0aW9uLmVuYWJsZWQgfHwgdGhpcy5zdGVwX3JhbmRvbWl6YXRpb24uZW5kX3N0ZXBfbnVtYmVyIDw9IHVpbnQodGhpcy5zdGVwcy5zaXplKCkpQgcKBV9ub3RlItsFCgtUYXNrU29wU3BlYxIxCgdvYmplY3RzGAEgAygLMiAuY29zY2VuZS5zb3AudjFhbHBoYTEuVGFza09iamVjdBI1Cgtyb2JvdF9zdGF0ZRgCIAEoCzIgLmNvc2NlbmUuc29wLnYxYWxwaGExLlJvYm90U3RhdGUSOQoNb2JqZWN0X3N0YXRlcxgDIAEoCzIiLmNvc2NlbmUuc29wLnYxYWxwaGExLk9iamVjdFN0YXRlcxI6Cg1yYW5kb21pemF0aW9uGAQgASgLMiMuY29zY2VuZS5zb3AudjFhbHBoYTEuUmFuZG9taXphdGlvbhI3Cgpjb2xsZWN0aW9uGAUgASgLMiMuY29zY2VuZS5zb3AudjFhbHBoYTEuT3BlcmF0aW9uUGxhbhI4Cgphbm5vdGF0aW9uGAYgASgLMiQuY29zY2VuZS5zb3AudjFhbHBoYTEuQW5ub3RhdGlvblBsYW4SOQoRZXhwZWN0ZWRfZHVyYXRpb24YByABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb25IAIgBARIzChxyb2JvdF9vcGVyYXRpb25fcmVxdWlyZW1lbnRzGAggASgJQgi6SAVyAxigH0gBiAEBEjAKKHJvYm90X2luaXRpYWxfcmFuZG9taXphdGlvbl9yZXF1aXJlbWVudHMYCSADKAkSNQoebGVnYWN5X3JhbmRvbWl6YXRpb25fZnJlcXVlbmN5GAogASgJQgi6SAVyAxiAAUgCiAEBEkUKFG1hdGVyaWFsX3N0YXRlX3J1bGVzGAsgAygLMicuY29zY2VuZS5zb3AudjFhbHBoYTEuTWF0ZXJpYWxTdGF0ZVJ1bGVCFAoSX2V4cGVjdGVkX2R1cmF0aW9uQh8KHV9yb2JvdF9vcGVyYXRpb25fcmVxdWlyZW1lbnRzQiEKH19sZWdhY3lfcmFuZG9taXphdGlvbl9mcmVxdWVuY3kicAoZTGVnYWN5UmVmZXJlbmNlQXR0YWNobWVudBIbCgpmaWxlX3Rva2VuGAEgASgJQge6SARyAhABEhkKCGZpbGVuYW1lGAIgASgJQge6SARyAhABEhsKCnNpemVfYnl0ZXMYAyABKANCB7pIBCICKAAi+wgKB1Rhc2tTb3ASRQoEbmFtZRgBIAEoCUI34EEIukgx2AEBciwyKl50YXNrU29wcy9bYS16XShbYS16MC05LV17MCw2MX1bYS16MC05XSk/JBIbCgN1aWQYAiABKAlCDuBBA7pICNgBAXIDsAEBEiAKDGRpc3BsYXlfbmFtZRgDIAEoCUIK4EECukgEcgIQARIiCgtkZXNjcmlwdGlvbhgEIAEoCUIIukgFcgMYoB9IAIgBARJaCgVzY2VuZRgFIAEoCUJL4EEC+kEWChRzb3AuY29zY2VuZS5pby9TY2VuZbpILHIqMihec2NlbmVzL1thLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEj4KCWxpZmVjeWNsZRgGIAEoDjIfLmNvc2NlbmUuc29wLnYxYWxwaGExLkxpZmVjeWNsZUIKukgHggEEEAEgABI6CgRzcGVjGAcgASgLMiEuY29zY2VuZS5zb3AudjFhbHBoYTEuVGFza1NvcFNwZWNCCeBBArpIA8gBARJkCgthdHRhY2htZW50cxgIIAMoCUJP+kEbChlzb3AuY29zY2VuZS5pby9BdHRhY2htZW50ukgukgErIilyJzIlXmF0dGFjaG1lbnRzL1thLXowLTldW2EtejAtOS1dezAsNjJ9JBKWAQoQY3VycmVudF9yZXZpc2lvbhgJIAEoCUJ84EED+kEgCh5zb3AuY29zY2VuZS5pby9UYXNrU29wUmV2aXNpb266SFPYAQFyTjJMXnRhc2tTb3BzL1thLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8vcmV2aXNpb25zL1thLXowLTldW2EtejAtOS1dezAsNjJ9JBI0CgtjcmVhdGVfdGltZRgKIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCA+BBAxI0Cgt1cGRhdGVfdGltZRgLIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCA+BBAxIRCgRldGFnGAwgASgJQgPgQQMSJQoOcmVmZXJlbmNlX3VyaXMYDSADKAlCDbpICpIBByIFcgOIAQESTgoVcmVmZXJlbmNlX2F0dGFjaG1lbnRzGA4gAygLMi8uY29zY2VuZS5zb3AudjFhbHBoYTEuTGVnYWN5UmVmZXJlbmNlQXR0YWNobWVudBIwChlsZWdhY3lfc2NlbmVfZGlzcGxheV9uYW1lGA8gASgJQgi6SAVyAxiAAkgBiAEBEjMKHGxlZ2FjeV9zdWJzY2VuZV9kaXNwbGF5X25hbWUYECABKAlCCLpIBXIDGIACSAKIAQE6Q+pBQAoWc29wLmNvc2NlbmUuaW8vVGFza1NvcBITdGFza1NvcHMve3Rhc2tfc29wfSoIdGFza1NvcHMyB3Rhc2tTb3BCDgoMX2Rlc2NyaXB0aW9uQhwKGl9sZWdhY3lfc2NlbmVfZGlzcGxheV9uYW1lQh8KHV9sZWdhY3lfc3Vic2NlbmVfZGlzcGxheV9uYW1lIrcFCg9UYXNrU29wUmV2aXNpb24SZwoEbmFtZRgBIAEoCUJZ4EEIukhT2AEBck4yTF50YXNrU29wcy9bYS16XShbYS16MC05LV17MCw2MX1bYS16MC05XSk/L3JldmlzaW9ucy9bYS16MC05XVthLXowLTktXXswLDYyfSQSOgoIc25hcHNob3QYAiABKAsyHS5jb3NjZW5lLnNvcC52MWFscGhhMS5UYXNrU29wQgngQQO6SAPIAQESmQEKEXByZXZpb3VzX3JldmlzaW9uGAMgASgJQnngQQP6QSAKHnNvcC5jb3NjZW5lLmlvL1Rhc2tTb3BSZXZpc2lvbrpIUHJOMkxedGFza1NvcHMvW2Etel0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPy9yZXZpc2lvbnMvW2EtejAtOV1bYS16MC05LV17MCw2Mn0kSACIAQESVAoNdmVyc2lvbl9sYWJlbBgEIAEoCUI94EEDukg3cjUyM14oMHxbMS05XVswLTldKilcLigwfFsxLTldWzAtOV0qKVwuKDB8WzEtOV1bMC05XSopJBI0CgtjcmVhdGVfdGltZRgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCA+BBAxJPChNmcm96ZW5fZGVwZW5kZW5jaWVzGAYgASgLMi0uY29zY2VuZS5zb3AudjFhbHBoYTEuRnJvemVuRGVwZW5kZW5jeUNvbnRleHRCA+BBAzpw6kFtCh5zb3AuY29zY2VuZS5pby9UYXNrU29wUmV2aXNpb24SKHRhc2tTb3BzL3t0YXNrX3NvcH0vcmV2aXNpb25zL3tyZXZpc2lvbn0qEHRhc2tTb3BSZXZpc2lvbnMyD3Rhc2tTb3BSZXZpc2lvbkIUChJfcHJldmlvdXNfcmV2aXNpb25iBnByb3RvMw", [file_buf_validate_validate, file_coscene_sop_v1alpha1_catalog, file_coscene_sop_v1alpha1_common, file_google_api_field_behavior, file_google_api_resource, file_google_protobuf_duration, file_google_protobuf_timestamp]);
+  fileDesc("CiNjb3NjZW5lL3NvcC92MWFscGhhMS90YXNrX3NvcC5wcm90bxIUY29zY2VuZS5zb3AudjFhbHBoYTEi9wMKClRhc2tPYmplY3QSOAoCaWQYASABKAlCLLpIKXInEAEYPzIhXlthLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEh0KDGRpc3BsYXlfbmFtZRgCIAEoCUIHukgEcgIQARJlCghtYXRlcmlhbBgDIAEoCUJO+kEZChdzb3AuY29zY2VuZS5pby9NYXRlcmlhbLpIL3ItMitebWF0ZXJpYWxzL1thLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8kSACIAQESMAoIcXVhbnRpdHkYBCABKAsyHi5jb3NjZW5lLnNvcC52MWFscGhhMS5RdWFudGl0eRINCgVyb2xlcxgFIAMoCRIzCgphdHRyaWJ1dGVzGAYgAygLMh8uY29zY2VuZS5zb3AudjFhbHBoYTEuQXR0cmlidXRlEl8KBmltYWdlcxgHIAMoCUJP+kEbChlzb3AuY29zY2VuZS5pby9BdHRhY2htZW50ukgukgErIilyJzIlXmF0dGFjaG1lbnRzL1thLXowLTldW2EtejAtOS1dezAsNjJ9JBJFChNtYXRlcmlhbF9kZXNjcmlwdG9yGAggASgLMiguY29zY2VuZS5zb3AudjFhbHBoYTEuTWF0ZXJpYWxEZXNjcmlwdG9yQgsKCV9tYXRlcmlhbCL7AgoRUmVmZXJlbmNlUmVsYXRpb24SHwoJb2JqZWN0X2lkGAEgASgJQge6SARyAhABSACIAQESKAoRcmVsYXRpdmVfcG9zaXRpb24YAiABKAlCCLpIBXIDGIACSAGIAQESFgoFbGV2ZWwYAyABKA1CB7pIBCoCIAASJwoQcmVmZXJlbmNlX29iamVjdBgEIAEoCUIIukgFcgMYgAJIAogBATqgAbpInAEamQEKInJlZmVyZW5jZV9yZWxhdGlvbi50YXJnZXRfcmVxdWlyZWQSQG9iamVjdF9pZCBvciByZWZlcmVuY2Vfb2JqZWN0IG11c3QgaWRlbnRpZnkgdGhlIHJlZmVyZW5jZSB0YXJnZXQaMWhhcyh0aGlzLm9iamVjdF9pZCkgfHwgaGFzKHRoaXMucmVmZXJlbmNlX29iamVjdClCDAoKX29iamVjdF9pZEIUChJfcmVsYXRpdmVfcG9zaXRpb25CEwoRX3JlZmVyZW5jZV9vYmplY3Qi8QMKEkxvY2F0aW9uQ29uc3RyYWludBIjCgxkaXNwbGF5X25hbWUYASABKAlCCLpIBXIDGIACSACIAQESPwoOcmVmZXJlbmNlX3BhdGgYAiADKAsyJy5jb3NjZW5lLnNvcC52MWFscGhhMS5SZWZlcmVuY2VSZWxhdGlvbhImCg9zdXBwb3J0X3N1cmZhY2UYAyABKAlCCLpIBXIDGIABSAGIAQESDwoHcmVnaW9ucxgEIAMoCRINCgVwb3NlcxgFIAMoCRINCgVmb3JtcxgGIAMoCRIzCgpwYXJhbWV0ZXJzGAcgAygLMh8uY29zY2VuZS5zb3AudjFhbHBoYTEuQXR0cmlidXRlEhMKC2NvbnN0cmFpbnRzGAggAygJEiwKFWNvbGxlY3Rvcl9pbnN0cnVjdGlvbhgJIAEoCUIIukgFcgMYoB9IAogBARJnCg5leGFtcGxlX2ltYWdlcxgKIAMoCUJP+kEbChlzb3AuY29zY2VuZS5pby9BdHRhY2htZW50ukgukgErIilyJzIlXmF0dGFjaG1lbnRzL1thLXowLTldW2EtejAtOS1dezAsNjJ9JEIPCg1fZGlzcGxheV9uYW1lQhIKEF9zdXBwb3J0X3N1cmZhY2VCGAoWX2NvbGxlY3Rvcl9pbnN0cnVjdGlvbiJ/ChJJbml0aWFsT2JqZWN0U3RhdGUSGgoJb2JqZWN0X2lkGAEgASgJQge6SARyAhABEk0KEWFsbG93ZWRfbG9jYXRpb25zGAIgAygLMiguY29zY2VuZS5zb3AudjFhbHBoYTEuTG9jYXRpb25Db25zdHJhaW50Qgi6SAWSAQIIASJ8ChFUYXJnZXRPYmplY3RTdGF0ZRIaCglvYmplY3RfaWQYASABKAlCB7pIBHICEAESSwoRcmVxdWlyZWRfbG9jYXRpb24YAiABKAsyKC5jb3NjZW5lLnNvcC52MWFscGhhMS5Mb2NhdGlvbkNvbnN0cmFpbnRCBrpIA8gBASJtCg9OdW1lcmljU2FtcGxpbmcSFQoLZml4ZWRfdmFsdWUYASABKAFIABIzCgVyYW5nZRgCIAEoCzIiLmNvc2NlbmUuc29wLnYxYWxwaGExLk51bWVyaWNSYW5nZUgAQg4KBXZhbHVlEgW6SAIIASKhAgoYRHVyaW5nT3BlcmF0aW9uUGFyYW1ldGVyEioKBG5hbWUYASABKAlCHLpIGXIXEAEYPzIRXlthLXpdW2EtejAtOV9dKiQSHQoMZGlzcGxheV9uYW1lGAIgASgJQge6SARyAhABEh0KCnZhbHVlX3R5cGUYAyABKAlCCbpIBnIEEAEYIBIaCgR1bml0GAQgASgJQge6SARyAhggSACIAQESFgoOYWxsb3dlZF92YWx1ZXMYBSADKAkSPAoIc2FtcGxpbmcYBiABKAsyJS5jb3NjZW5lLnNvcC52MWFscGhhMS5OdW1lcmljU2FtcGxpbmdIAYgBARITCgtjb25zdHJhaW50cxgHIAMoCUIHCgVfdW5pdEILCglfc2FtcGxpbmcifAoaRHVyaW5nT3BlcmF0aW9uT2JqZWN0U3RhdGUSGgoJb2JqZWN0X2lkGAEgASgJQge6SARyAhABEkIKCnBhcmFtZXRlcnMYAiADKAsyLi5jb3NjZW5lLnNvcC52MWFscGhhMS5EdXJpbmdPcGVyYXRpb25QYXJhbWV0ZXIizgEKDE9iamVjdFN0YXRlcxI5Cgdpbml0aWFsGAEgAygLMiguY29zY2VuZS5zb3AudjFhbHBoYTEuSW5pdGlhbE9iamVjdFN0YXRlEjcKBnRhcmdldBgCIAMoCzInLmNvc2NlbmUuc29wLnYxYWxwaGExLlRhcmdldE9iamVjdFN0YXRlEkoKEGR1cmluZ19vcGVyYXRpb24YAyADKAsyMC5jb3NjZW5lLnNvcC52MWFscGhhMS5EdXJpbmdPcGVyYXRpb25PYmplY3RTdGF0ZSI/CgpSb2JvdFN0YXRlEhgKB2luaXRpYWwYASABKAlCB7pIBHICEAESFwoGdGFyZ2V0GAIgASgJQge6SARyAhABIqUCChJSb2JvdFJhbmRvbWl6YXRpb24SDwoHZW5hYmxlZBgBIAEoCBIyCgZjaGFuZ2UYAiABKAsyIi5jb3NjZW5lLnNvcC52MWFscGhhMS5DaGFuZ2VQb2xpY3kSNQoGZmllbGRzGAMgAygLMiUuY29zY2VuZS5zb3AudjFhbHBoYTEuUmFuZG9taXplZEZpZWxkOpIBukiOARqLAQowcm9ib3RfcmFuZG9taXphdGlvbi5jaGFuZ2VfcmVxdWlyZWRfd2hlbl9lbmFibGVkEjRlbmFibGVkIHJvYm90IHJhbmRvbWl6YXRpb24gcmVxdWlyZXMgYSBjaGFuZ2UgcG9saWN5GiEhdGhpcy5lbmFibGVkIHx8IGhhcyh0aGlzLmNoYW5nZSkilQQKE09iamVjdFJhbmRvbWl6YXRpb24SHAoKb2JqZWN0X2lkcxgBIAMoCUIIukgFkgECCAESOgoGY2hhbmdlGAIgASgLMiIuY29zY2VuZS5zb3AudjFhbHBoYTEuQ2hhbmdlUG9saWN5Qga6SAPIAQESNQoGZmllbGRzGAMgAygLMiUuY29zY2VuZS5zb3AudjFhbHBoYTEuUmFuZG9taXplZEZpZWxkEiwKFWNvbGxlY3Rvcl9pbnN0cnVjdGlvbhgEIAEoCUIIukgFcgMYoB9IAIgBARITCgtjb25zdHJhaW50cxgFIAMoCRJnCg5leGFtcGxlX2ltYWdlcxgGIAMoCUJP+kEbChlzb3AuY29zY2VuZS5pby9BdHRhY2htZW50ukgukgErIilyJzIlXmF0dGFjaG1lbnRzL1thLXowLTldW2EtejAtOS1dezAsNjJ9JBI5Cglsb2NhdGlvbnMYByADKAsyJi5jb3NjZW5lLnNvcC52MWFscGhhMS5OYW1lZFZhbHVlU291cmNlEjUKBXBvc2VzGAggAygLMiYuY29zY2VuZS5zb3AudjFhbHBoYTEuTmFtZWRWYWx1ZVNvdXJjZRI1CgVmb3JtcxgJIAMoCzImLmNvc2NlbmUuc29wLnYxYWxwaGExLk5hbWVkVmFsdWVTb3VyY2VCGAoWX2NvbGxlY3Rvcl9pbnN0cnVjdGlvbiKRAQocRHVyaW5nT3BlcmF0aW9uUmFuZG9taXphdGlvbhIcCgpvYmplY3RfaWRzGAEgAygJQgi6SAWSAQIIARI6CgZjaGFuZ2UYAiABKAsyIi5jb3NjZW5lLnNvcC52MWFscGhhMS5DaGFuZ2VQb2xpY3lCBrpIA8gBARIXCg9wYXJhbWV0ZXJfbmFtZXMYAyADKAki9QEKDVJhbmRvbWl6YXRpb24SRQoTcm9ib3RfaW5pdGlhbF9zdGF0ZRgBIAEoCzIoLmNvc2NlbmUuc29wLnYxYWxwaGExLlJvYm90UmFuZG9taXphdGlvbhJIChVvYmplY3RfaW5pdGlhbF9zdGF0ZXMYAiADKAsyKS5jb3NjZW5lLnNvcC52MWFscGhhMS5PYmplY3RSYW5kb21pemF0aW9uElMKF29iamVjdF9kdXJpbmdfb3BlcmF0aW9uGAMgAygLMjIuY29zY2VuZS5zb3AudjFhbHBoYTEuRHVyaW5nT3BlcmF0aW9uUmFuZG9taXphdGlvbiLvAwoNT3BlcmF0aW9uUGxhbhIyCgVzdGVwcxgBIAMoCzIjLmNvc2NlbmUuc29wLnYxYWxwaGExLk9wZXJhdGlvblN0ZXASNQoGcG9saWN5GAIgASgLMiUuY29zY2VuZS5zb3AudjFhbHBoYTEuT3BlcmF0aW9uUG9saWN5EkMKEnN0ZXBfcmFuZG9taXphdGlvbhgDIAEoCzInLmNvc2NlbmUuc29wLnYxYWxwaGExLlN0ZXBSYW5kb21pemF0aW9uEiEKCnN0ZXBfb3JkZXIYBCABKAlCCLpIBXIDGKAfSACIAQE6+wG6SPcBGvQBCixvcGVyYXRpb25fcGxhbi5yYW5kb21pemF0aW9uX3JhbmdlX2luX2JvdW5kcxI6c3RlcCByYW5kb21pemF0aW9uIG11c3QgZW5kIHdpdGhpbiB0aGUgb3BlcmF0aW9uIHN0ZXAgbGlzdBqHASFoYXModGhpcy5zdGVwX3JhbmRvbWl6YXRpb24pIHx8ICF0aGlzLnN0ZXBfcmFuZG9taXphdGlvbi5lbmFibGVkIHx8IHRoaXMuc3RlcF9yYW5kb21pemF0aW9uLmVuZF9zdGVwX251bWJlciA8PSB1aW50KHRoaXMuc3RlcHMuc2l6ZSgpKUINCgtfc3RlcF9vcmRlciLFBAoOQW5ub3RhdGlvblBsYW4SMgoFc3RlcHMYASADKAsyIy5jb3NjZW5lLnNvcC52MWFscGhhMS5PcGVyYXRpb25TdGVwEjUKBnBvbGljeRgCIAEoCzIlLmNvc2NlbmUuc29wLnYxYWxwaGExLk9wZXJhdGlvblBvbGljeRJICglyZWFkaW5lc3MYAyABKA4yKS5jb3NjZW5lLnNvcC52MWFscGhhMS5Bbm5vdGF0aW9uUmVhZGluZXNzQgq6SAeCAQQQASAAEhsKBG5vdGUYBCABKAlCCLpIBXIDGKAfSACIAQESEwoLYWN0aW9uX3RhZ3MYBSADKAkSQwoSc3RlcF9yYW5kb21pemF0aW9uGAYgASgLMicuY29zY2VuZS5zb3AudjFhbHBoYTEuU3RlcFJhbmRvbWl6YXRpb246/QG6SPkBGvYBCi1hbm5vdGF0aW9uX3BsYW4ucmFuZG9taXphdGlvbl9yYW5nZV9pbl9ib3VuZHMSO3N0ZXAgcmFuZG9taXphdGlvbiBtdXN0IGVuZCB3aXRoaW4gdGhlIGFubm90YXRpb24gc3RlcCBsaXN0GocBIWhhcyh0aGlzLnN0ZXBfcmFuZG9taXphdGlvbikgfHwgIXRoaXMuc3RlcF9yYW5kb21pemF0aW9uLmVuYWJsZWQgfHwgdGhpcy5zdGVwX3JhbmRvbWl6YXRpb24uZW5kX3N0ZXBfbnVtYmVyIDw9IHVpbnQodGhpcy5zdGVwcy5zaXplKCkpQgcKBV9ub3RlItsFCgtUYXNrU29wU3BlYxIxCgdvYmplY3RzGAEgAygLMiAuY29zY2VuZS5zb3AudjFhbHBoYTEuVGFza09iamVjdBI1Cgtyb2JvdF9zdGF0ZRgCIAEoCzIgLmNvc2NlbmUuc29wLnYxYWxwaGExLlJvYm90U3RhdGUSOQoNb2JqZWN0X3N0YXRlcxgDIAEoCzIiLmNvc2NlbmUuc29wLnYxYWxwaGExLk9iamVjdFN0YXRlcxI6Cg1yYW5kb21pemF0aW9uGAQgASgLMiMuY29zY2VuZS5zb3AudjFhbHBoYTEuUmFuZG9taXphdGlvbhI3Cgpjb2xsZWN0aW9uGAUgASgLMiMuY29zY2VuZS5zb3AudjFhbHBoYTEuT3BlcmF0aW9uUGxhbhI4Cgphbm5vdGF0aW9uGAYgASgLMiQuY29zY2VuZS5zb3AudjFhbHBoYTEuQW5ub3RhdGlvblBsYW4SOQoRZXhwZWN0ZWRfZHVyYXRpb24YByABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb25IAIgBARIzChxyb2JvdF9vcGVyYXRpb25fcmVxdWlyZW1lbnRzGAggASgJQgi6SAVyAxigH0gBiAEBEjAKKHJvYm90X2luaXRpYWxfcmFuZG9taXphdGlvbl9yZXF1aXJlbWVudHMYCSADKAkSNQoebGVnYWN5X3JhbmRvbWl6YXRpb25fZnJlcXVlbmN5GAogASgJQgi6SAVyAxiAAUgCiAEBEkUKFG1hdGVyaWFsX3N0YXRlX3J1bGVzGAsgAygLMicuY29zY2VuZS5zb3AudjFhbHBoYTEuTWF0ZXJpYWxTdGF0ZVJ1bGVCFAoSX2V4cGVjdGVkX2R1cmF0aW9uQh8KHV9yb2JvdF9vcGVyYXRpb25fcmVxdWlyZW1lbnRzQiEKH19sZWdhY3lfcmFuZG9taXphdGlvbl9mcmVxdWVuY3kicAoZTGVnYWN5UmVmZXJlbmNlQXR0YWNobWVudBIbCgpmaWxlX3Rva2VuGAEgASgJQge6SARyAhABEhkKCGZpbGVuYW1lGAIgASgJQge6SARyAhABEhsKCnNpemVfYnl0ZXMYAyABKANCB7pIBCICKAAiwQkKB1Rhc2tTb3ASRQoEbmFtZRgBIAEoCUI34EEIukgx2AEBciwyKl50YXNrU29wcy9bYS16XShbYS16MC05LV17MCw2MX1bYS16MC05XSk/JBIbCgN1aWQYAiABKAlCDuBBA7pICNgBAXIDsAEBEiAKDGRpc3BsYXlfbmFtZRgDIAEoCUIK4EECukgEcgIQARIiCgtkZXNjcmlwdGlvbhgEIAEoCUIIukgFcgMYoB9IAIgBARJaCgVzY2VuZRgFIAEoCUJL4EEC+kEWChRzb3AuY29zY2VuZS5pby9TY2VuZbpILHIqMihec2NlbmVzL1thLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEj4KCWxpZmVjeWNsZRgGIAEoDjIfLmNvc2NlbmUuc29wLnYxYWxwaGExLkxpZmVjeWNsZUIKukgHggEEEAEgABI6CgRzcGVjGAcgASgLMiEuY29zY2VuZS5zb3AudjFhbHBoYTEuVGFza1NvcFNwZWNCCeBBArpIA8gBARJkCgthdHRhY2htZW50cxgIIAMoCUJP+kEbChlzb3AuY29zY2VuZS5pby9BdHRhY2htZW50ukgukgErIilyJzIlXmF0dGFjaG1lbnRzL1thLXowLTldW2EtejAtOS1dezAsNjJ9JBKWAQoQY3VycmVudF9yZXZpc2lvbhgJIAEoCUJ84EED+kEgCh5zb3AuY29zY2VuZS5pby9UYXNrU29wUmV2aXNpb266SFPYAQFyTjJMXnRhc2tTb3BzL1thLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8vcmV2aXNpb25zL1thLXowLTldW2EtejAtOS1dezAsNjJ9JBI0CgtjcmVhdGVfdGltZRgKIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCA+BBAxI0Cgt1cGRhdGVfdGltZRgLIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCA+BBAxIRCgRldGFnGAwgASgJQgPgQQMSJQoOcmVmZXJlbmNlX3VyaXMYDSADKAlCDbpICpIBByIFcgOIAQESTgoVcmVmZXJlbmNlX2F0dGFjaG1lbnRzGA4gAygLMi8uY29zY2VuZS5zb3AudjFhbHBoYTEuTGVnYWN5UmVmZXJlbmNlQXR0YWNobWVudBIwChlsZWdhY3lfc2NlbmVfZGlzcGxheV9uYW1lGA8gASgJQgi6SAVyAxiAAkgBiAEBEjMKHGxlZ2FjeV9zdWJzY2VuZV9kaXNwbGF5X25hbWUYECABKAlCCLpIBXIDGIACSAKIAQESKwoUbGVnYWN5X3N1YnNjZW5lX2NvZGUYESABKAlCCLpIBXIDGIABSAOIAQE6Q+pBQAoWc29wLmNvc2NlbmUuaW8vVGFza1NvcBITdGFza1NvcHMve3Rhc2tfc29wfSoIdGFza1NvcHMyB3Rhc2tTb3BCDgoMX2Rlc2NyaXB0aW9uQhwKGl9sZWdhY3lfc2NlbmVfZGlzcGxheV9uYW1lQh8KHV9sZWdhY3lfc3Vic2NlbmVfZGlzcGxheV9uYW1lQhcKFV9sZWdhY3lfc3Vic2NlbmVfY29kZSK3BQoPVGFza1NvcFJldmlzaW9uEmcKBG5hbWUYASABKAlCWeBBCLpIU9gBAXJOMkxedGFza1NvcHMvW2Etel0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPy9yZXZpc2lvbnMvW2EtejAtOV1bYS16MC05LV17MCw2Mn0kEjoKCHNuYXBzaG90GAIgASgLMh0uY29zY2VuZS5zb3AudjFhbHBoYTEuVGFza1NvcEIJ4EEDukgDyAEBEpkBChFwcmV2aW91c19yZXZpc2lvbhgDIAEoCUJ54EED+kEgCh5zb3AuY29zY2VuZS5pby9UYXNrU29wUmV2aXNpb266SFByTjJMXnRhc2tTb3BzL1thLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8vcmV2aXNpb25zL1thLXowLTldW2EtejAtOS1dezAsNjJ9JEgAiAEBElQKDXZlcnNpb25fbGFiZWwYBCABKAlCPeBBA7pIN3I1MjNeKDB8WzEtOV1bMC05XSopXC4oMHxbMS05XVswLTldKilcLigwfFsxLTldWzAtOV0qKSQSNAoLY3JlYXRlX3RpbWUYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wQgPgQQMSTwoTZnJvemVuX2RlcGVuZGVuY2llcxgGIAEoCzItLmNvc2NlbmUuc29wLnYxYWxwaGExLkZyb3plbkRlcGVuZGVuY3lDb250ZXh0QgPgQQM6cOpBbQoec29wLmNvc2NlbmUuaW8vVGFza1NvcFJldmlzaW9uEih0YXNrU29wcy97dGFza19zb3B9L3JldmlzaW9ucy97cmV2aXNpb259KhB0YXNrU29wUmV2aXNpb25zMg90YXNrU29wUmV2aXNpb25CFAoSX3ByZXZpb3VzX3JldmlzaW9uYgZwcm90bzM", [file_buf_validate_validate, file_coscene_sop_v1alpha1_catalog, file_coscene_sop_v1alpha1_common, file_google_api_field_behavior, file_google_api_resource, file_google_protobuf_duration, file_google_protobuf_timestamp]);
 
 /**
  * TaskObject is a stable object within one TaskSop. Other task fields reference its local ID.
@@ -82,19 +82,32 @@ export const TaskObjectSchema: GenMessage<TaskObject> = /*@__PURE__*/
  */
 export type ReferenceRelation = Message<"coscene.sop.v1alpha1.ReferenceRelation"> & {
   /**
-   * @generated from field: string object_id = 1;
+   * object_id is set when the source reference resolves to a task-local object.
+   *
+   * @generated from field: optional string object_id = 1;
    */
-  objectId: string;
+  objectId?: string | undefined;
 
   /**
-   * @generated from field: string relative_position = 2;
+   * Some legacy references identify only the object and intentionally leave
+   * the relative position unset.
+   *
+   * @generated from field: optional string relative_position = 2;
    */
-  relativePosition: string;
+  relativePosition?: string | undefined;
 
   /**
    * @generated from field: uint32 level = 3;
    */
   level: number;
+
+  /**
+   * reference_object preserves the source vocabulary/display value even when
+   * it is an environmental reference rather than a task-local object.
+   *
+   * @generated from field: optional string reference_object = 4;
+   */
+  referenceObject?: string | undefined;
 };
 
 /**
@@ -217,6 +230,111 @@ export const TargetObjectStateSchema: GenMessage<TargetObjectState> = /*@__PURE_
   messageDesc(file_coscene_sop_v1alpha1_task_sop, 4);
 
 /**
+ * NumericSampling preserves the sampling rule for a numeric state parameter.
+ *
+ * @generated from message coscene.sop.v1alpha1.NumericSampling
+ */
+export type NumericSampling = Message<"coscene.sop.v1alpha1.NumericSampling"> & {
+  /**
+   * @generated from oneof coscene.sop.v1alpha1.NumericSampling.value
+   */
+  value: {
+    /**
+     * @generated from field: double fixed_value = 1;
+     */
+    value: number;
+    case: "fixedValue";
+  } | {
+    /**
+     * @generated from field: coscene.sop.v1alpha1.NumericRange range = 2;
+     */
+    value: NumericRange;
+    case: "range";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message coscene.sop.v1alpha1.NumericSampling.
+ * Use `create(NumericSamplingSchema)` to create a new message.
+ */
+export const NumericSamplingSchema: GenMessage<NumericSampling> = /*@__PURE__*/
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 5);
+
+/**
+ * DuringOperationParameter describes a mutable object parameter observed or
+ * controlled while the task is executing.
+ *
+ * @generated from message coscene.sop.v1alpha1.DuringOperationParameter
+ */
+export type DuringOperationParameter = Message<"coscene.sop.v1alpha1.DuringOperationParameter"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: string display_name = 2;
+   */
+  displayName: string;
+
+  /**
+   * @generated from field: string value_type = 3;
+   */
+  valueType: string;
+
+  /**
+   * @generated from field: optional string unit = 4;
+   */
+  unit?: string | undefined;
+
+  /**
+   * @generated from field: repeated string allowed_values = 5;
+   */
+  allowedValues: string[];
+
+  /**
+   * @generated from field: optional coscene.sop.v1alpha1.NumericSampling sampling = 6;
+   */
+  sampling?: NumericSampling | undefined;
+
+  /**
+   * @generated from field: repeated string constraints = 7;
+   */
+  constraints: string[];
+};
+
+/**
+ * Describes the message coscene.sop.v1alpha1.DuringOperationParameter.
+ * Use `create(DuringOperationParameterSchema)` to create a new message.
+ */
+export const DuringOperationParameterSchema: GenMessage<DuringOperationParameter> = /*@__PURE__*/
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 6);
+
+/**
+ * DuringOperationObjectState groups runtime parameters by task-local object.
+ *
+ * @generated from message coscene.sop.v1alpha1.DuringOperationObjectState
+ */
+export type DuringOperationObjectState = Message<"coscene.sop.v1alpha1.DuringOperationObjectState"> & {
+  /**
+   * @generated from field: string object_id = 1;
+   */
+  objectId: string;
+
+  /**
+   * @generated from field: repeated coscene.sop.v1alpha1.DuringOperationParameter parameters = 2;
+   */
+  parameters: DuringOperationParameter[];
+};
+
+/**
+ * Describes the message coscene.sop.v1alpha1.DuringOperationObjectState.
+ * Use `create(DuringOperationObjectStateSchema)` to create a new message.
+ */
+export const DuringOperationObjectStateSchema: GenMessage<DuringOperationObjectState> = /*@__PURE__*/
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 7);
+
+/**
  * ObjectStates separates permissible initial states from required target states.
  *
  * @generated from message coscene.sop.v1alpha1.ObjectStates
@@ -231,6 +349,11 @@ export type ObjectStates = Message<"coscene.sop.v1alpha1.ObjectStates"> & {
    * @generated from field: repeated coscene.sop.v1alpha1.TargetObjectState target = 2;
    */
   target: TargetObjectState[];
+
+  /**
+   * @generated from field: repeated coscene.sop.v1alpha1.DuringOperationObjectState during_operation = 3;
+   */
+  duringOperation: DuringOperationObjectState[];
 };
 
 /**
@@ -238,7 +361,7 @@ export type ObjectStates = Message<"coscene.sop.v1alpha1.ObjectStates"> & {
  * Use `create(ObjectStatesSchema)` to create a new message.
  */
 export const ObjectStatesSchema: GenMessage<ObjectStates> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 5);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 8);
 
 /**
  * RobotState records human-readable initial and target robot conditions.
@@ -262,7 +385,7 @@ export type RobotState = Message<"coscene.sop.v1alpha1.RobotState"> & {
  * Use `create(RobotStateSchema)` to create a new message.
  */
 export const RobotStateSchema: GenMessage<RobotState> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 6);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 9);
 
 /**
  * RobotRandomization controls changes to robot initial state.
@@ -291,7 +414,7 @@ export type RobotRandomization = Message<"coscene.sop.v1alpha1.RobotRandomizatio
  * Use `create(RobotRandomizationSchema)` to create a new message.
  */
 export const RobotRandomizationSchema: GenMessage<RobotRandomization> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 7);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 10);
 
 /**
  * ObjectRandomization controls changes to one or more task objects.
@@ -310,6 +433,9 @@ export type ObjectRandomization = Message<"coscene.sop.v1alpha1.ObjectRandomizat
   change?: ChangePolicy | undefined;
 
   /**
+   * Legacy rules may intentionally carry only a change policy and no selected
+   * fields yet; preserve that state without fabricating a placeholder field.
+   *
    * @generated from field: repeated coscene.sop.v1alpha1.RandomizedField fields = 3;
    */
   fields: RandomizedField[];
@@ -350,7 +476,37 @@ export type ObjectRandomization = Message<"coscene.sop.v1alpha1.ObjectRandomizat
  * Use `create(ObjectRandomizationSchema)` to create a new message.
  */
 export const ObjectRandomizationSchema: GenMessage<ObjectRandomization> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 8);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 11);
+
+/**
+ * DuringOperationRandomization controls runtime parameter changes for one or
+ * more task-local objects.
+ *
+ * @generated from message coscene.sop.v1alpha1.DuringOperationRandomization
+ */
+export type DuringOperationRandomization = Message<"coscene.sop.v1alpha1.DuringOperationRandomization"> & {
+  /**
+   * @generated from field: repeated string object_ids = 1;
+   */
+  objectIds: string[];
+
+  /**
+   * @generated from field: coscene.sop.v1alpha1.ChangePolicy change = 2;
+   */
+  change?: ChangePolicy | undefined;
+
+  /**
+   * @generated from field: repeated string parameter_names = 3;
+   */
+  parameterNames: string[];
+};
+
+/**
+ * Describes the message coscene.sop.v1alpha1.DuringOperationRandomization.
+ * Use `create(DuringOperationRandomizationSchema)` to create a new message.
+ */
+export const DuringOperationRandomizationSchema: GenMessage<DuringOperationRandomization> = /*@__PURE__*/
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 12);
 
 /**
  * Randomization contains all task randomization policies.
@@ -367,6 +523,11 @@ export type Randomization = Message<"coscene.sop.v1alpha1.Randomization"> & {
    * @generated from field: repeated coscene.sop.v1alpha1.ObjectRandomization object_initial_states = 2;
    */
   objectInitialStates: ObjectRandomization[];
+
+  /**
+   * @generated from field: repeated coscene.sop.v1alpha1.DuringOperationRandomization object_during_operation = 3;
+   */
+  objectDuringOperation: DuringOperationRandomization[];
 };
 
 /**
@@ -374,7 +535,7 @@ export type Randomization = Message<"coscene.sop.v1alpha1.Randomization"> & {
  * Use `create(RandomizationSchema)` to create a new message.
  */
 export const RandomizationSchema: GenMessage<Randomization> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 9);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 13);
 
 /**
  * OperationPlan contains ordered steps and their policy.
@@ -408,7 +569,7 @@ export type OperationPlan = Message<"coscene.sop.v1alpha1.OperationPlan"> & {
  * Use `create(OperationPlanSchema)` to create a new message.
  */
 export const OperationPlanSchema: GenMessage<OperationPlan> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 10);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 14);
 
 /**
  * AnnotationPlan contains annotation-specific steps and policy.
@@ -452,7 +613,7 @@ export type AnnotationPlan = Message<"coscene.sop.v1alpha1.AnnotationPlan"> & {
  * Use `create(AnnotationPlanSchema)` to create a new message.
  */
 export const AnnotationPlanSchema: GenMessage<AnnotationPlan> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 11);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 15);
 
 /**
  * TaskSopSpec is the complete desired task configuration.
@@ -521,7 +682,7 @@ export type TaskSopSpec = Message<"coscene.sop.v1alpha1.TaskSopSpec"> & {
  * Use `create(TaskSopSpecSchema)` to create a new message.
  */
 export const TaskSopSpecSchema: GenMessage<TaskSopSpec> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 12);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 16);
 
 /**
  * LegacyReferenceAttachment preserves existing externally managed reference metadata.
@@ -550,7 +711,7 @@ export type LegacyReferenceAttachment = Message<"coscene.sop.v1alpha1.LegacyRefe
  * Use `create(LegacyReferenceAttachmentSchema)` to create a new message.
  */
 export const LegacyReferenceAttachmentSchema: GenMessage<LegacyReferenceAttachment> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 13);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 17);
 
 /**
  * TaskSop is the current representation of a reusable task SOP.
@@ -637,6 +798,11 @@ export type TaskSop = Message<"coscene.sop.v1alpha1.TaskSop"> & {
    * @generated from field: optional string legacy_subscene_display_name = 16;
    */
   legacySubsceneDisplayName?: string | undefined;
+
+  /**
+   * @generated from field: optional string legacy_subscene_code = 17;
+   */
+  legacySubsceneCode?: string | undefined;
 };
 
 /**
@@ -644,7 +810,7 @@ export type TaskSop = Message<"coscene.sop.v1alpha1.TaskSop"> & {
  * Use `create(TaskSopSchema)` to create a new message.
  */
 export const TaskSopSchema: GenMessage<TaskSop> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 14);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 18);
 
 /**
  * TaskSopRevision is an immutable historical snapshot of a TaskSop.
@@ -688,5 +854,5 @@ export type TaskSopRevision = Message<"coscene.sop.v1alpha1.TaskSopRevision"> & 
  * Use `create(TaskSopRevisionSchema)` to create a new message.
  */
 export const TaskSopRevisionSchema: GenMessage<TaskSopRevision> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_task_sop, 15);
+  messageDesc(file_coscene_sop_v1alpha1_task_sop, 19);
 

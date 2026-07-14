@@ -155,6 +155,26 @@ export interface ObjectTargetState {
   constraints?: string[];
 }
 
+export interface DuringOperationParameter {
+  name: string;
+  displayName: string;
+  valueType: string;
+  unit?: string;
+  allowedValues?: string[];
+  sampling?: {
+    mode: 'fixed' | 'range';
+    value?: number;
+    min?: number;
+    max?: number;
+  };
+  constraints: string[];
+}
+
+export interface DuringOperationObjectState {
+  object: string;
+  parameters: DuringOperationParameter[];
+}
+
 export interface RandomizedField {
   field: string;
   displayName: string;
@@ -183,10 +203,20 @@ export interface Randomization {
       constraints: string[];
     }>;
   };
+  materialStateDuringOperation?: {
+    rules: Array<{
+      targetMaterial: string;
+      changeFrequency: ChangeFrequency;
+      changeIntervalRecords?: number;
+      randomizedFields: { parameters: Array<{ name: string }> };
+    }>;
+  };
 }
 
 export interface SubsceneVersion {
   version: string;
+  versionId?: string;
+  parentVersionId?: string;
   status: EntityStatus;
   title: string;
   sceneName?: string;
@@ -218,6 +248,7 @@ export interface SubsceneVersion {
   objectStates: {
     initial: ObjectInitialState[];
     target: ObjectTargetState[];
+    duringOperation?: DuringOperationObjectState[];
   };
   materialStateRules?: MaterialStateRule[];
   annotation: {

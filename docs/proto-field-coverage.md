@@ -35,7 +35,7 @@ Every item in the persisted `GlobalFieldGroup` union has a corresponding
 | Legacy fields | Canonical mapping | Classification |
 | --- | --- | --- |
 | `SubsceneVersion.version`, `versionId`, `parentVersionId`, `status`, `updatedAt` | `TaskSopRevision.{version_label,name,previous_revision,create_time}` and `TaskSop.lifecycle` | Revision domain; legacy IDs retained as conversion provenance/report data rather than duplicate business fields |
-| `title`, `sceneName`, `subsceneName`, `description` | `TaskSop.{display_name,legacy_scene_display_name,legacy_subscene_display_name,description}` | Domain |
+| `title`, `sceneName`, `subsceneName`, `Subscene.code`, `description` | `TaskSop.{display_name,legacy_scene_display_name,legacy_subscene_display_name,legacy_subscene_code,description}` | Domain |
 | `attachments` | `TaskSop.attachments` and frozen `Attachment` entries | Domain |
 | `requiredDurationHours` | `TaskSopSpec.expected_duration` | Domain |
 | each scenario material’s ID/SKU/type/quantity/color/composition/package | `TaskObject.{id,material,quantity,material_descriptor}` | Domain snapshot |
@@ -47,8 +47,10 @@ Every item in the persisted `GlobalFieldGroup` union has a corresponding
 | material randomization instruction/images/constraints | like-named `ObjectRandomization` fields | Domain |
 | operation `stepOrder` and ordered steps (`order`, Chinese/English descriptions and skills) | `OperationPlan.step_order` and `OperationStep.{order,description,atomic_skill,english_description,english_atomic_skill}` | Domain; list order and explicit order are retained |
 | operation allowed/acceptable/forbidden text items | `OperationPlan.policy` / `OperationRule` | Domain |
-| initial object locations, ordered reference levels, surfaces, regions, poses, forms, parameters, instructions, images, constraints | `InitialObjectState`, `LocationConstraint`, and `ReferenceRelation.level` | Domain |
+| initial object locations, ordered reference levels, source reference vocabulary, resolvable local object IDs, surfaces, regions, poses, forms, parameters, instructions, images, constraints | `InitialObjectState`, `LocationConstraint`, and `ReferenceRelation.{level,reference_object,object_id}` | Domain |
 | target object required location and the same state vocabulary | `TargetObjectState.required_location` / `LocationConstraint` | Domain |
+| runtime object parameters (`objectStates.duringOperation`) including value type, unit, allowed values, numeric sampling, and constraints | `DuringOperationObjectState` / `DuringOperationParameter` / `NumericSampling` | Domain |
+| runtime material parameter randomization (`randomization.materialStateDuringOperation`) | `DuringOperationRandomization` with task-local object IDs, `ChangePolicy`, and parameter names | Domain |
 | embedded `materialStateRules` | `TaskSopSpec.material_state_rules` | Frozen task-specific domain snapshot |
 | annotation status/note/tags/steps/policies/randomization | `AnnotationPlan` | Domain |
 | `references.recordUrls` | `TaskSop.reference_uris` | Domain external references |

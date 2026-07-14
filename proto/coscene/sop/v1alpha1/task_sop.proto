@@ -34,9 +34,21 @@ message TaskObject {
 
 // ReferenceRelation is one level in an ordered object-relative location path.
 message ReferenceRelation {
-  string object_id = 1 [(buf.validate.field).string.min_len = 1];
-  string relative_position = 2 [(buf.validate.field).string.min_len = 1];
+  option (buf.validate.message).cel = {
+    id: "reference_relation.target_required"
+    message: "object_id or reference_object must identify the reference target"
+    expression: "has(this.object_id) || has(this.reference_object)"
+  };
+
+  // object_id is set when the source reference resolves to a task-local object.
+  optional string object_id = 1 [(buf.validate.field).string.min_len = 1];
+  // Some legacy references identify only the object and intentionally leave
+  // the relative position unset.
+  optional string relative_position = 2 [(buf.validate.field).string.max_len = 256];
   uint32 level = 3 [(buf.validate.field).uint32.gt = 0];
+  // reference_object preserves the source vocabulary/display value even when
+  // it is an environmental reference rather than a task-local object.
+  optional string reference_object = 4 [(buf.validate.field).string.max_len = 256];
 }
 
 // LocationConstraint describes one acceptable or required object placement.
@@ -68,10 +80,46 @@ message TargetObjectState {
   LocationConstraint required_location = 2 [(buf.validate.field).required = true];
 }
 
+// NumericSampling preserves the sampling rule for a numeric state parameter.
+message NumericSampling {
+  oneof value {
+    option (buf.validate.oneof).required = true;
+
+    double fixed_value = 1;
+    NumericRange range = 2;
+  }
+}
+
+// DuringOperationParameter describes a mutable object parameter observed or
+// controlled while the task is executing.
+message DuringOperationParameter {
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z][a-z0-9_]*$"
+  }];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  string value_type = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 32
+  }];
+  optional string unit = 4 [(buf.validate.field).string.max_len = 32];
+  repeated string allowed_values = 5;
+  optional NumericSampling sampling = 6;
+  repeated string constraints = 7;
+}
+
+// DuringOperationObjectState groups runtime parameters by task-local object.
+message DuringOperationObjectState {
+  string object_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated DuringOperationParameter parameters = 2;
+}
+
 // ObjectStates separates permissible initial states from required target states.
 message ObjectStates {
   repeated InitialObjectState initial = 1;
   repeated TargetObjectState target = 2;
+  repeated DuringOperationObjectState during_operation = 3;
 }
 
 // RobotState records human-readable initial and target robot conditions.
@@ -97,7 +145,9 @@ message RobotRandomization {
 message ObjectRandomization {
   repeated string object_ids = 1 [(buf.validate.field).repeated.min_items = 1];
   ChangePolicy change = 2 [(buf.validate.field).required = true];
-  repeated RandomizedField fields = 3 [(buf.validate.field).repeated.min_items = 1];
+  // Legacy rules may intentionally carry only a change policy and no selected
+  // fields yet; preserve that state without fabricating a placeholder field.
+  repeated RandomizedField fields = 3;
   optional string collector_instruction = 4 [(buf.validate.field).string.max_len = 4000];
   repeated string constraints = 5;
   repeated string example_images = 6 [
@@ -109,10 +159,19 @@ message ObjectRandomization {
   repeated NamedValueSource forms = 9;
 }
 
+// DuringOperationRandomization controls runtime parameter changes for one or
+// more task-local objects.
+message DuringOperationRandomization {
+  repeated string object_ids = 1 [(buf.validate.field).repeated.min_items = 1];
+  ChangePolicy change = 2 [(buf.validate.field).required = true];
+  repeated string parameter_names = 3;
+}
+
 // Randomization contains all task randomization policies.
 message Randomization {
   RobotRandomization robot_initial_state = 1;
   repeated ObjectRandomization object_initial_states = 2;
+  repeated DuringOperationRandomization object_during_operation = 3;
 }
 
 // OperationPlan contains ordered steps and their policy.
@@ -224,6 +283,7 @@ message TaskSop {
   repeated LegacyReferenceAttachment reference_attachments = 14;
   optional string legacy_scene_display_name = 15 [(buf.validate.field).string.max_len = 256];
   optional string legacy_subscene_display_name = 16 [(buf.validate.field).string.max_len = 256];
+  optional string legacy_subscene_code = 17 [(buf.validate.field).string.max_len = 128];
 }
 
 // TaskSopRevision is an immutable historical snapshot of a TaskSop.

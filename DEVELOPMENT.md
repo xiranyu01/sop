@@ -53,6 +53,28 @@ pnpm typecheck
 pnpm build
 ```
 
+## 旧数据迁移预检（inactive generation）
+
+Proto v1alpha1 迁移只构建独立的 `BUILDING` / `VALIDATED` generation；这些命令不会创建或修改 active marker，也不会删除 `data/*.json` 或 D1 `app_data`。本地预检和构建示例：
+
+```bash
+pnpm migration preflight --legacy-dir data
+pnpm migration build --legacy-dir data --canonical-root .canonical --attachment-root uploads
+pnpm migration resume --legacy-dir data --canonical-root .canonical --attachment-root uploads
+pnpm migration validate --legacy-dir data --canonical-root .canonical --attachment-root uploads
+pnpm migration report --canonical-root .canonical --generation <generation-id>
+```
+
+相同 source/converter/schema/identity fingerprint 的完成态重跑必须是 no-op；中断的 `BUILDING` generation 可由 `resume` 继续。源数据或 converter 版本变化会创建新的 generation，不能写回旧 generation。报告出现 identity collision、缺失/歧义引用、坏日期/时间、不可达的托管附件或 semantic reconciliation 失败时，generation 保持 `BUILDING` 且禁止后续激活。
+
+D1 表结构通过 expand-only SQL 添加：
+
+```bash
+pnpm wrangler d1 migrations apply <database-name> --remote
+```
+
+远程执行前必须记录 D1 Time Travel bookmark 和当前 maintenance epoch。应用层迁移使用 `migrateLegacyD1()` 以及 D1 binding 的 transactional `batch`，按 epoch 条件发布 `VALIDATED`；本阶段不提供 activation 命令。切换 active marker、冻结写入、烟测和回滚属于后续 cutover 单元。
+
 ## 目录结构
 
 ```text

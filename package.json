@@ -15,6 +15,7 @@
     "proto:lint": "buf lint",
     "proto:build": "buf build",
     "proto:drift": "node scripts/check-proto-drift.mjs",
+    "migration": "tsx server/migrations/cli.ts",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",

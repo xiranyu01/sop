@@ -1,11 +1,4 @@
-CREATE TABLE IF NOT EXISTS app_data (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
--- Expand-only canonical migration namespace. It is deliberately separate from
--- app_data and does not create or update an active-generation marker.
+-- Expand-only: legacy app_data remains untouched for rollback compatibility.
 CREATE TABLE IF NOT EXISTS canonical_migration_generations (
   generation_id TEXT PRIMARY KEY,
   lifecycle TEXT NOT NULL CHECK (lifecycle IN ('BUILDING', 'VALIDATED')),

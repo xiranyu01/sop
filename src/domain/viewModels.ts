@@ -1,5 +1,4 @@
 import type {
-  AppMetadata,
   ChangeFrequency,
   Customer,
   EntityStatus,
@@ -19,7 +18,6 @@ import type {
   SubsceneVersion,
   TextItem,
 } from '../../shared/transport/restDto';
-import { defaultAppMetadata } from '../schemaVersions';
 
 /**
  * Form-oriented projection of the canonical Proto domain.
@@ -29,7 +27,6 @@ import { defaultAppMetadata } from '../schemaVersions';
  * forms can migrate without duplicating domain rules in the browser.
  */
 export interface AppViewModel {
-  metadata: AppMetadata;
   customers: Customer[];
   materials: Material[];
   robotModels: RobotModel[];
@@ -62,7 +59,6 @@ export type {
 
 export function createEmptyAppViewModel(): AppViewModel {
   return {
-    metadata: { ...defaultAppMetadata },
     customers: [],
     materials: [],
     robotModels: [],
@@ -71,22 +67,4 @@ export function createEmptyAppViewModel(): AppViewModel {
     globalFields: [],
     materialStateRules: [],
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Decodes and validates the canonical ProtoJSON envelope before projecting
- * generated messages into form-oriented view models.
- */
-export async function decodeAppViewModel(value: unknown): Promise<AppViewModel> {
-  if (!isRecord(value)) throw new Error('Invalid canonical app data envelope');
-  const [{ decodeCanonicalSnapshot }, { projectCanonicalToRest }] = await Promise.all([
-    import('../../server/domain/appStore'),
-    import('../../server/domain/services/projection'),
-  ]);
-  const snapshot = decodeCanonicalSnapshot(JSON.stringify(value));
-  return projectCanonicalToRest(snapshot);
 }

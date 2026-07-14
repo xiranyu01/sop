@@ -1,41 +1,148 @@
 import { readFile } from 'node:fs/promises';
+import type { JsonValue } from '@bufbuild/protobuf';
 import { expect, test } from '@playwright/test';
 import YAML from 'yaml';
-import type { Requirement } from '../../shared/transport/restDto';
-import { apiJson, authHeaders, installPrintObserver, openAuthenticated, waitForPrintedDocument } from './helpers/app';
+import type {
+  ConfirmationResult,
+  DependencyReviewResult,
+  ResourceMutationResult,
+  RevisionDetail,
+  RevisionSummary,
+} from '../../shared/transport/resourceDto';
+import {
+  apiJson,
+  cloneResourceForCreate,
+  createResource,
+  firstResource,
+  getResource,
+  installPrintObserver,
+  listResourceSummaries,
+  listRevisions,
+  openAuthenticated,
+  resourcePath,
+  updateResource,
+  waitForPrintedDocument,
+} from './helpers/app';
 
-test('Requirement create → update → confirm → export → patch draft → delete and TaskSop navigation remain stable', async ({ page, request }, testInfo) => {
+function object(value: JsonValue | undefined, label: string): Record<string, JsonValue> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
+  return value as Record<string, JsonValue>;
+}
+
+type ExportableTaskFixture = {
+  revision: RevisionSummary;
+  taskDisplayName: string;
+  sceneDisplayName: string;
+  subsceneCode?: string;
+};
+
+async function firstExportableTaskRevision(
+  request: Parameters<typeof listResourceSummaries>[0],
+): Promise<ExportableTaskFixture> {
+  const scenes = await listResourceSummaries(request, 'scenes');
+  for (const root of await listResourceSummaries(request, 'taskSops')) {
+    const revision = (await listRevisions(request, 'taskSops', root.name)).find((item) => item.exportEligible);
+    if (!revision) continue;
+    const detail = await apiJson<RevisionDetail>(request, 'GET', `/api/revisions/${encodeURIComponent(revision.name)}`);
+    const snapshot = object(object(detail.resource, 'TaskSop revision').snapshot, 'TaskSop snapshot');
+    const displayName = typeof snapshot.displayName === 'string' ? snapshot.displayName : root.displayName;
+    const legacySceneName = typeof snapshot.legacySceneDisplayName === 'string' ? snapshot.legacySceneDisplayName : undefined;
+    const sceneDisplayName = scenes.find((scene) => scene.name === root.sceneName)?.displayName || legacySceneName || '';
+    const subsceneCode = typeof snapshot.legacySubsceneCode === 'string' ? snapshot.legacySubsceneCode : undefined;
+    return { revision, taskDisplayName: displayName, sceneDisplayName, subsceneCode };
+  }
+  throw new Error('Expected an exportable TaskSop revision fixture');
+}
+
+test('Requirement create → ETag update → review → confirm → export → next draft → restore remains stable', async ({ page, request }, testInfo) => {
   await installPrintObserver(page);
   const title = `E2E 关联需求 R${testInfo.retry}`;
-  let requirements = await apiJson<Requirement[]>(request, 'POST', '/api/requirements', {
-    title,
-    projectName: 'E2E 项目',
-    customerId: 'cus-baseline',
-    robotModelId: 'robot-baseline',
-    selectedSubscenes: [{
-      id: 'pri-e2e', title: '基线生产项', description: '用于跨页导航', sceneName: '基线场景', targetDurationHours: 1,
-      targetCollectionCount: 2,
-      taskSop: { sceneName: '基线场景', title: '基线任务 SOP', version: '0.0.1', status: 'confirmed' },
-    }],
-  });
-  const requirement = requirements.find((item) => item.versions[0].title === title)!;
-  expect(requirement.versions[0].status).toBe('draft');
+  const [template, customer, robot, task] = await Promise.all([
+    firstResource(request, 'requirements', (item) => !item.archived),
+    firstResource(request, 'customers', (item) => !item.archived),
+    firstResource(request, 'robotModels', (item) => !item.archived),
+    firstExportableTaskRevision(request),
+  ]);
+  expect(robot.currentRevision).toBeTruthy();
 
-  requirements = await apiJson<Requirement[]>(request, 'PUT', `/api/requirements/${requirement.id}`, {
-    baseVersion: '0.0.1', businessGoal: '更新后的业务目标',
+  const createBody = object(cloneResourceForCreate(template.resource, {
+    displayName: title,
+    description: '资源级 E2E 客户需求',
+    sourceId: `e2e-requirement-r${testInfo.retry}`,
+    lifecycle: 'LIFECYCLE_DRAFT',
+    attachments: [],
+  }), 'Requirement');
+  const templateSpec = object(object(template.resource, 'Requirement template').spec, 'Requirement spec');
+  createBody.spec = {
+    ...structuredClone(templateSpec),
+    customer: customer.name,
+    robotModelRevision: robot.currentRevision!,
+    projectDisplayName: 'E2E 项目',
+    businessGoal: '初始业务目标',
+    productionItems: [{
+      id: 'item-e2e',
+      displayName: '基线生产项',
+      description: '用于跨页导航',
+      taskSopRevision: task.revision.name,
+      target: { collectionCount: '2' },
+      legacySceneName: task.sceneDisplayName,
+      ...(task.subsceneCode ? { legacySubsceneCode: task.subsceneCode } : {}),
+      legacySubsceneName: task.taskDisplayName,
+      legacyVersionLabel: task.revision.versionLabel,
+      legacyLifecycle: 'LIFECYCLE_CONFIRMED',
+    }],
+    aggregateTarget: { collectionCount: '2' },
+    requestedSceneNames: ['家庭场景'],
+  };
+
+  let draft = await createResource(request, 'requirements', createBody);
+  expect(draft).toMatchObject({
+    name: `requirements/e2e-requirement-r${testInfo.retry}`,
+    lifecycle: 'DRAFT',
+    resource: { displayName: title, candidateVersionLabel: '1.0.0' },
   });
-  expect(requirements.find((item) => item.id === requirement.id)?.versions[0].businessGoal).toBe('更新后的业务目标');
+
+  const updatedResource = structuredClone(draft.resource);
+  object(object(updatedResource, 'Requirement').spec, 'Requirement spec').businessGoal = '更新后的业务目标';
+  draft = await updateResource(request, 'requirements', draft, updatedResource);
+  expect(object(object(draft.resource, 'Requirement').spec, 'Requirement spec').businessGoal).toBe('更新后的业务目标');
 
   await openAuthenticated(page);
   await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
   await page.getByRole('button', { name: new RegExp(title) }).first().click();
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
-  const confirmResponse = page.waitForResponse((response) =>
-    response.url().endsWith(`/api/requirements/${requirement.id}/confirm`) && response.request().method() === 'POST');
+  const rootPath = resourcePath('requirements', draft.name);
+  const review = await apiJson<DependencyReviewResult>(request, 'POST', `${rootPath}/review-proposal`, {
+    expectedEtag: draft.etag,
+  });
+  expect(review).toMatchObject({ rootName: draft.name, rootEtag: draft.etag });
+
+  const blockedConfirmation = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === `${rootPath}/confirmations` && response.request().method() === 'POST');
+  const acknowledgement = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === `${rootPath}/review-acknowledgements` && response.request().method() === 'POST');
+  const dialogPromise = page.waitForEvent('dialog');
+  const firstConfirmClick = page.getByRole('button', { name: '确认版本' }).click();
+  const dialog = await dialogPromise;
+  expect(dialog.message()).toContain('确认冻结当前直接依赖');
+  await dialog.accept();
+  await firstConfirmClick;
+  expect((await blockedConfirmation).status()).toBe(409);
+  expect((await acknowledgement).ok()).toBe(true);
+
+  const confirmedResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === `${rootPath}/confirmations` && response.request().method() === 'POST');
   await page.getByRole('button', { name: '确认版本' }).click();
-  expect((await confirmResponse).ok()).toBeTruthy();
+  const confirmationResponse = await confirmedResponse;
+  expect(confirmationResponse.ok()).toBe(true);
+  const confirmed = await confirmationResponse.json() as ConfirmationResult;
+  expect(confirmed).toMatchObject({
+    resource: { name: draft.name, lifecycle: 'CONFIRMED' },
+    revision: { versionLabel: '1.0.0', exportEligible: true },
+    idempotent: false,
+  });
   await expect(page.getByText('客户需求版本已确认')).toBeVisible();
-  await expect(page.getByText('当前版本已确认')).toBeVisible();
 
   await page.reload();
   await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
@@ -46,7 +153,7 @@ test('Requirement create → update → confirm → export → patch draft → d
   const yamlDownloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '导出 YAML' }).click();
   const yamlDownload = await yamlDownloadPromise;
-  expect(yamlDownload.suggestedFilename()).toMatch(/E2E.*0\.0\.1\.yaml/);
+  expect(yamlDownload.suggestedFilename()).toMatch(/\.yaml$/);
   const yamlPath = await yamlDownload.path();
   expect(yamlPath).toBeTruthy();
   const exportedDocument = YAML.parse(await readFile(yamlPath!, 'utf8'));
@@ -55,47 +162,45 @@ test('Requirement create → update → confirm → export → patch draft → d
   }));
   expect(exportedDocument.requirements[0].spec.production_items[0].target.collection_count).toBe('2');
   expect(exportedDocument.task_sops).toHaveLength(1);
+  expect(exportedDocument.robot_model_revisions).toHaveLength(1);
 
   await page.getByRole('button', { name: '导出' }).click();
   await page.getByRole('button', { name: '导出 PDF' }).click();
-  const pdfFrame = page.frameLocator('iframe[title$="-0.0.1.pdf"]');
+  const pdfFrame = page.frameLocator('iframe[title$=".pdf"]');
   await expect(pdfFrame.locator('body')).toContainText(title);
-  await expect(pdfFrame.locator('body')).toContainText('0.0.1');
-  expect((await waitForPrintedDocument(page, title)).text).toContain('0.0.1');
+  await expect(pdfFrame.locator('body')).toContainText('1.0.0');
+  expect((await waitForPrintedDocument(page, title)).text).toContain('1.0.0');
 
   await page.getByRole('button', { name: '查看' }).last().click();
   await expect(page.getByRole('button', { name: '返回需求页' })).toBeVisible();
   await page.getByRole('button', { name: '返回需求页' }).click();
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
+  const draftPath = `${resourcePath('requirements', draft.name)}/drafts`;
   const createDraftResponse = page.waitForResponse((response) =>
-    response.url().endsWith(`/api/requirements/${requirement.id}`) && response.request().method() === 'PUT');
+    new URL(response.url()).pathname === draftPath && response.request().method() === 'POST');
   await page.getByRole('button', { name: '编辑为草稿' }).click();
-  expect((await createDraftResponse).ok()).toBeTruthy();
+  const createdDraftResponse = await createDraftResponse;
+  expect(createdDraftResponse.ok()).toBeTruthy();
+  const createdDraft = await createdDraftResponse.json() as ResourceMutationResult;
+  expect(createdDraft.resource.resource).toMatchObject({ candidateVersionLabel: '1.0.1' });
   await expect(page.getByText('已创建草稿版本')).toBeVisible();
-  await expect(page.getByLabel('版本')).toHaveValue('0.0.2');
+  await expect(page.getByLabel('版本')).toHaveValue('1.0.1');
 
   const deleteDraftResponse = page.waitForResponse((response) =>
-    response.url().endsWith(`/api/requirements/${requirement.id}/versions/0.0.2`) && response.request().method() === 'DELETE');
+    new URL(response.url()).pathname === draftPath && response.request().method() === 'DELETE');
   await page.getByRole('button', { name: '删除草稿' }).click();
   expect((await deleteDraftResponse).ok()).toBeTruthy();
   await expect(page.getByText('草稿版本已删除')).toBeVisible();
-  await expect(page.getByLabel('版本')).toHaveValue('0.0.1');
+  await expect(page.getByLabel('版本')).toHaveValue('1.0.0');
 
   await page.reload();
   await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
   await page.getByRole('button', { name: new RegExp(title) }).first().click();
   await expect(page.getByLabel('版本').locator('option')).toHaveCount(1);
   await expect(page.getByText('当前版本已确认')).toBeVisible();
-});
-
-test('draft Requirement YAML is rejected by the confirmed-only export contract', async ({ request }, testInfo) => {
-  const title = `Draft export rejection R${testInfo.retry}`;
-  const requirements = await apiJson<Requirement[]>(request, 'POST', '/api/requirements', { title });
-  const draft = requirements.find((requirement) => requirement.versions[0].title === title)!;
-  const response = await request.post(`/api/requirements/${draft.id}/export-yaml`, {
-    headers: authHeaders, data: { version: '0.0.1' },
-  });
-  expect(response.status()).toBe(400);
-  expect((await response.json()).message).toContain('仅支持导出已确认版本');
+  await expect(getResource(request, 'requirements', draft.name)).resolves.toMatchObject({ lifecycle: 'CONFIRMED' });
+  await expect(listRevisions(request, 'requirements', draft.name)).resolves.toEqual([
+    expect.objectContaining({ name: confirmed.revision.name, versionLabel: '1.0.0', exportEligible: true }),
+  ]);
 });

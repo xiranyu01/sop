@@ -1051,6 +1051,14 @@ button:disabled {
   box-shadow: 0 14px 34px rgba(23, 32, 51, 0.16);
 }
 
+.save-state-stack {
+  pointer-events: auto;
+}
+
+.save-state-stack .notice {
+  pointer-events: auto;
+}
+
 .notice.success {
   border: 1px solid #a8e5cd;
   background: #ecfbf5;

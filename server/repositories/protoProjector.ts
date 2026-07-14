@@ -1,3 +1,18 @@
+import type { DescMessage, JsonValue } from '@bufbuild/protobuf';
+import {
+  AttachmentSchema,
+  CustomerSchema,
+  GlobalFieldSchema,
+  MaterialSchema,
+  MaterialStateRuleSchema,
+  RobotModelRevisionSchema,
+  RobotModelSchema,
+  SceneSchema,
+} from '../../gen/coscene/sop/v1alpha1/catalog_pb';
+import { ExportBundleSchema } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
+import { RequirementRevisionSchema, RequirementSchema } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
+import { TaskSopRevisionSchema, TaskSopSchema } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
+import { fromDomainJsonString, toDomainJson } from '../../shared/domain/codec';
 import type {
   CatalogResourceKind,
   CurrentLifecycle,
@@ -21,6 +36,12 @@ export type ProjectedResourceColumns = {
   candidateSourceVersionId?: string;
   currentRevisionName?: string;
   reviewedManifestDigest?: string;
+  sku?: string;
+  fieldGroup?: string;
+  fieldStatus?: string;
+  sceneName?: string;
+  customerName?: string;
+  robotModelRevisionName?: string;
 };
 
 export type ProjectedRevisionColumns = {
@@ -59,6 +80,22 @@ const schemaKinds: Readonly<Record<string, CatalogResourceKind | CurrentResource
   RequirementRevision: 'REQUIREMENT_REVISION',
 };
 
+const schemaDescriptors: Readonly<Record<string, DescMessage>> = {
+  Customer: CustomerSchema,
+  Material: MaterialSchema,
+  Scene: SceneSchema,
+  GlobalField: GlobalFieldSchema,
+  MaterialStateRule: MaterialStateRuleSchema,
+  Attachment: AttachmentSchema,
+  RobotModel: RobotModelSchema,
+  TaskSop: TaskSopSchema,
+  Requirement: RequirementSchema,
+  RobotModelRevision: RobotModelRevisionSchema,
+  TaskSopRevision: TaskSopRevisionSchema,
+  RequirementRevision: RequirementRevisionSchema,
+  ExportBundle: ExportBundleSchema,
+};
+
 function parseObject(protoJson: string, label: string): JsonObject {
   let parsed: unknown;
   try {
@@ -70,6 +107,23 @@ function parseObject(protoJson: string, label: string): JsonObject {
     throw new TypeError(`${label} ProtoJSON must be an object`);
   }
   return parsed as JsonObject;
+}
+
+function parseProtoObject(protoSchema: string, protoJson: string, label: string): JsonObject {
+  const schema = schemaDescriptors[schemaLeaf(protoSchema)];
+  if (!schema) throw new TypeError(`Unsupported Proto schema: ${protoSchema}`);
+  parseObject(protoJson, label);
+  let decoded;
+  try {
+    decoded = fromDomainJsonString(schema, protoJson);
+  } catch (cause) {
+    throw new TypeError(`${label} ProtoJSON is invalid`, { cause });
+  }
+  const normalized = toDomainJson(schema, decoded) as JsonValue;
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    throw new TypeError(`${label} ProtoJSON must be an object`);
+  }
+  return normalized as JsonObject;
 }
 
 function field(object: JsonObject, camelCase: string, snakeCase = camelCase): unknown {
@@ -167,10 +221,30 @@ export function withReviewedDependencyDigest(protoJson: string, etag: string, di
 }
 
 export function projectResource(protoSchema: string, protoJson: string): ProjectedResourceColumns {
-  const message = parseObject(protoJson, 'resource');
+  const message = parseProtoObject(protoSchema, protoJson, 'resource');
   const kind = schemaKind(protoSchema);
   if (isRevisionKind(kind)) throw new TypeError(`${protoSchema} is a revision schema`);
   const currentKind = isCurrentKind(kind) ? kind : undefined;
+  const specValue = field(message, 'spec');
+  const spec = specValue && typeof specValue === 'object' && !Array.isArray(specValue)
+    ? specValue as JsonObject
+    : undefined;
+  const sku = kind === 'MATERIAL' ? optionalString(field(message, 'sku'), 'sku') : undefined;
+  const fieldGroup = kind === 'GLOBAL_FIELD'
+    ? optionalString(field(message, 'group'), 'group')
+    : undefined;
+  const fieldStatus = kind === 'GLOBAL_FIELD'
+    ? optionalString(field(message, 'status'), 'status')
+    : undefined;
+  const sceneName = kind === 'TASK_SOP'
+    ? optionalString(field(message, 'scene'), 'scene')
+    : undefined;
+  const customerName = kind === 'REQUIREMENT' && spec
+    ? optionalString(field(spec, 'customer'), 'spec.customer')
+    : undefined;
+  const robotModelRevisionName = kind === 'REQUIREMENT' && spec
+    ? optionalString(field(spec, 'robotModelRevision', 'robot_model_revision'), 'spec.robotModelRevision')
+    : undefined;
   return {
     name: requiredString(field(message, 'name'), 'name'),
     uid: requiredString(field(message, 'uid'), 'uid'),
@@ -185,6 +259,12 @@ export function projectResource(protoSchema: string, protoJson: string): Project
       'displayName',
     ),
     etag: requiredString(field(message, 'etag'), 'etag'),
+    ...(sku ? { sku } : {}),
+    ...(fieldGroup ? { fieldGroup } : {}),
+    ...(fieldStatus ? { fieldStatus } : {}),
+    ...(sceneName ? { sceneName } : {}),
+    ...(customerName ? { customerName } : {}),
+    ...(robotModelRevisionName ? { robotModelRevisionName } : {}),
     ...(currentKind ? {
       lifecycle: lifecycle(field(message, 'lifecycle'), currentKind),
       candidateVersionSequence: optionalInteger(
@@ -213,7 +293,7 @@ export function projectRevision(
   protoJson: string,
   physical: Partial<Pick<ProjectedRevisionColumns, 'revisionOrigin' | 'lifecycle' | 'exportEligible'>> = {},
 ): ProjectedRevisionColumns {
-  const revision = parseObject(protoJson, 'revision');
+  const revision = parseProtoObject(protoSchema, protoJson, 'revision');
   const kind = schemaKind(protoSchema);
   if (!isRevisionKind(kind)) throw new TypeError(`${protoSchema} is not a revision schema`);
   const snapshot = field(revision, 'snapshot');
@@ -247,7 +327,7 @@ export function projectRevision(
 }
 
 export function projectBundle(protoJson: string): ProjectedBundleColumns {
-  const bundle = parseObject(protoJson, 'bundle');
+  const bundle = parseProtoObject(ExportBundleSchema.typeName, protoJson, 'bundle');
   const contentValue = field(bundle, 'content');
   if (!contentValue || typeof contentValue !== 'object' || Array.isArray(contentValue)) throw new TypeError('bundle.content must be an object');
   const content = contentValue as JsonObject;
@@ -276,7 +356,9 @@ export function projectionDifferences(
   projected: Readonly<Record<string, unknown>>,
 ): string[] {
   const differences: string[] = [];
-  for (const [key, projectedValue] of Object.entries(projected)) {
+  const keys = new Set([...Object.keys(stored), ...Object.keys(projected)]);
+  for (const key of keys) {
+    const projectedValue = projected[key];
     const storedValue = stored[key];
     const normalizedStored = storedValue === null ? undefined : storedValue;
     if (normalizedStored !== projectedValue) differences.push(key);

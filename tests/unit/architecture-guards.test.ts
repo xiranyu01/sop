@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -25,6 +25,22 @@ describe('architecture regression guards', () => {
     const result = await run('scripts/check-no-global-snapshot.mjs', [fixture]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('snapshot_json');
+  });
+
+  it('rejects a whole-site snapshot in the authoritative Proto tree', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'sop-proto-snapshot-'));
+    await mkdir(join(fixture, 'proto'), { recursive: true });
+    await writeFile(join(fixture, 'proto', 'snapshot.proto'), [
+      'syntax = "proto3";',
+      'package coscene.sop.v1alpha1;',
+      'message CanonicalSnapshot {}',
+      '',
+    ].join('\n'));
+
+    const result = await run('scripts/check-no-global-snapshot.mjs', [fixture]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('CanonicalSnapshot');
+    expect(result.stderr).toContain('proto/snapshot.proto');
   });
 
   it('keeps repository fixtures and bootstrap conversion out of runtime imports', async () => {
@@ -58,6 +74,45 @@ describe('architecture regression guards', () => {
   it('accepts the production mutation manifest', async () => {
     const result = await run('scripts/check-mutation-contract.mjs', [resolve(cwd, 'server/http/mutation-contract.json')]);
     expect(result).toMatchObject({ status: 0 });
+  });
+
+  it('rejects a production handler mutation that is absent from the manifest', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'sop-handler-mutation-'));
+    const handlerPath = join(fixture, 'resourceApi.ts');
+    const handler = await readFile(resolve(cwd, 'server/http/resourceApi.ts'), 'utf8');
+    await writeFile(
+      handlerPath,
+      `${handler}\nif (pathname === '/api/resources/:kind/:name/purge' && method === 'DELETE') return new Response(null);\n`,
+    );
+
+    const result = await run('scripts/check-mutation-contract.mjs', [
+      resolve(cwd, 'server/http/mutation-contract.json'),
+      handlerPath,
+      resolve(cwd, 'server/domain/repository.ts'),
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('source mutation missing from manifest: DELETE /api/resources/:kind/:name/purge');
+  });
+
+  it('rejects an unclassified method added to the production repository contract', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'sop-repository-mutation-'));
+    const repositoryPath = join(fixture, 'repository.ts');
+    const repository = await readFile(resolve(cwd, 'server/domain/repository.ts'), 'utf8');
+    await writeFile(
+      repositoryPath,
+      repository.replace(
+        '  auditProjectionParity(): Promise<void>;\n}',
+        '  auditProjectionParity(): Promise<void>;\n  purgeAll(): Promise<void>;\n}',
+      ),
+    );
+
+    const result = await run('scripts/check-mutation-contract.mjs', [
+      resolve(cwd, 'server/http/mutation-contract.json'),
+      resolve(cwd, 'server/http/resourceApi.ts'),
+      repositoryPath,
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unclassified repository method: purgeAll');
   });
 
   it('rejects secret files and credential assignments while allowing examples', async () => {

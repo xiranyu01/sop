@@ -6,3 +6,18 @@ pages_build_output_dir = "dist"
 binding = "DB"
 database_name = "sop-prod"
 database_id = "21d042f0-61d8-4344-b9eb-73b43c3c870d"
+
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "sop-attachments"
+
+# Pages bindings are non-inheritable. Keeping an explicit preview family here
+# prevents preview deployments from silently inheriting production storage.
+# The first preview provisioning command fills database_id in this section.
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "sop-preview"
+
+[[env.preview.r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "sop-preview-attachments"

@@ -10,6 +10,7 @@
     { "method": "POST", "path": "/api/resources/:kind/:name/archive", "scope": "resource", "resourceParam": "name", "operation": "resource.archive" },
     { "method": "GET", "path": "/api/resources/:kind/:name/revisions", "scope": "protected-read" },
     { "method": "POST", "path": "/api/resources/:kind/:name/drafts", "scope": "lifecycle", "resourceParam": "name", "operation": "lifecycle.start-draft" },
+    { "method": "DELETE", "path": "/api/resources/:kind/:name/drafts", "scope": "lifecycle", "resourceParam": "name", "operation": "lifecycle.discard-draft" },
     { "method": "POST", "path": "/api/resources/:kind/:name/review-proposal", "scope": "protected-read" },
     { "method": "POST", "path": "/api/resources/:kind/:name/review-acknowledgements", "scope": "lifecycle", "resourceParam": "name", "operation": "lifecycle.acknowledge-review" },
     { "method": "POST", "path": "/api/resources/:kind/:name/confirmations", "scope": "lifecycle", "resourceParam": "name", "operation": "lifecycle.confirm" },
@@ -22,18 +23,18 @@
     { "method": "DELETE", "path": "/api/resources/:kind/:name/attachments/:uid", "scope": "attachment", "resourceParam": "name", "operation": "attachment.unlink" }
   ],
   "repositoryMutations": [
-    { "operation": "resource.create", "scope": "resource" },
-    { "operation": "resource.update", "scope": "resource" },
-    { "operation": "resource.archive", "scope": "resource" },
-    { "operation": "robot-model.append-revision", "scope": "resource" },
-    { "operation": "lifecycle.start-draft", "scope": "lifecycle" },
-    { "operation": "lifecycle.acknowledge-review", "scope": "lifecycle" },
-    { "operation": "lifecycle.confirm", "scope": "lifecycle" },
-    { "operation": "attachment.initialize", "scope": "attachment" },
-    { "operation": "attachment.upload-part", "scope": "attachment" },
-    { "operation": "attachment.complete", "scope": "attachment" },
-    { "operation": "attachment.abort", "scope": "attachment" },
-    { "operation": "attachment.unlink", "scope": "attachment" }
+    { "operation": "resource.create", "scope": "resource", "repositoryMethods": ["createCatalog", "createCurrent", "createRobotModel"] },
+    { "operation": "resource.update", "scope": "resource", "repositoryMethods": ["updateCatalog", "updateCurrent", "saveRobotModel"] },
+    { "operation": "resource.archive", "scope": "resource", "repositoryMethods": ["archiveCatalog", "archiveCurrent"] },
+    { "operation": "robot-model.append-revision", "scope": "resource", "repositoryMethods": ["createRobotModel", "saveRobotModel", "createRevision"] },
+    { "operation": "lifecycle.start-draft", "scope": "lifecycle", "repositoryMethods": ["createRevision", "updateCurrent"] },
+    { "operation": "lifecycle.discard-draft", "scope": "lifecycle", "repositoryMethods": ["updateCurrent"] },
+    { "operation": "lifecycle.acknowledge-review", "scope": "lifecycle", "repositoryMethods": ["replaceReviewedDependencies"] },
+    { "operation": "lifecycle.confirm", "scope": "lifecycle", "repositoryMethods": ["confirm", "createExportBundle"] },
+    { "operation": "attachment.initialize", "scope": "attachment", "repositoryMethods": [] },
+    { "operation": "attachment.upload-part", "scope": "attachment", "repositoryMethods": [] },
+    { "operation": "attachment.complete", "scope": "attachment", "repositoryMethods": [] },
+    { "operation": "attachment.abort", "scope": "attachment", "repositoryMethods": [] },
+    { "operation": "attachment.unlink", "scope": "attachment", "repositoryMethods": [] }
   ]
 }
-

@@ -4,9 +4,9 @@
 
 `coscene.sop.v1alpha1` is the source of truth for the normalized SOP domain model. The existing YAML files were used only to discover business concepts; this schema does not preserve their field names or document shapes.
 
-The application now stores canonical Proto snapshots behind namespace/epoch concurrency control, validates decoded ProtoJSON with Protovalidate, serves canonical data to the browser, and exports confirmed revisions through the separate `coscene.sop.export.v1alpha1` contract. Service RPCs and YAML import remain intentionally out of scope.
+The application validates ProtoJSON with Protovalidate and persists each catalog resource, current resource, immutable revision, reviewed dependency, and sealed export bundle as an independent D1 record. D1 query columns are projections of the Proto messages, not a second domain definition. Confirmed revisions export through the separate `coscene.sop.export.v1alpha1` contract. Service RPCs and YAML import remain intentionally out of scope.
 
-The existing REST route shapes, `shared/transport/restDto.ts`, `data/*.json`, D1 `app_data`, the deterministic legacy converter, and the old exporter fallback are temporary compatibility/rollback boundaries. They are not alternative domain authorities and are removed only after the production rollback window closes.
+The deterministic legacy converter is operator-only bootstrap code for repository fixtures. Runtime requests never read fixture files, `app_data`, a site-wide snapshot, or a fallback exporter. Browser forms and REST DTOs are boundary mappings over the same generated Proto contract.
 
 ## Decisions
 
@@ -100,51 +100,47 @@ The service layer must additionally validate rules that require graph or collect
 - revision snapshot names and `previous_revision` references share the same parent as the revision;
 - every resource reference exists and points to an allowed lifecycle/revision;
 - a Requirement can only be confirmed when all pinned SOP revisions are confirmed;
-- attachment and catalog resources referenced by immutable revisions satisfy retention policy;
+- attachment references are structurally valid; this release intentionally performs no live R2, URL reachability, hash, size, retention, or cleanup validation during confirmation/export;
 - workload totals and other cross-item business constraints are consistent.
 
-## Implementation and remaining migration boundary
+## Runtime and persistence boundary
 
-Completed:
+The implemented runtime follows these rules:
 
-1. generated TypeScript and strict runtime validation;
-2. deterministic, resumable legacy conversion with reconciliation reports and stable identity;
-3. canonical file/D1 namespaces with epoch fencing, atomic commits and write freeze/reopen;
-4. canonical revision and attachment lifecycle services;
-5. browser reads from `/api/canonical-data` and strict ProtoJSON decoding before projection to form view models;
-6. confirmed-only Proto-backed YAML bundle export with deterministic serialization and traceable identity;
-7. removal of the old `src/types.ts` shared-domain barrel.
+1. generated TypeScript plus strict ProtoJSON decoding and validation;
+2. resource-scoped D1 records with optimistic concurrency per mutable resource;
+3. one current editable TaskSop/Requirement draft and immutable confirmed revisions;
+4. read-only imported legacy draft checkpoints that cannot be selected, confirmed, or exported;
+5. atomic root confirmation that writes one revision, one sealed bundle, and the current pointer;
+6. browser summary pagination plus on-demand detail reads through resource routes;
+7. confirmed-only, bundle-backed YAML and versioned PDF rendering with traceable identity;
+8. bounded R2 attachment upload with D1 metadata and no lifecycle cleanup in this release.
 
-Intentionally retained during rollout:
+`data/*.json` and the converter under `server/bootstrap/` are allowed only in the explicit operator bootstrap. A fresh environment transitions its fixed release marker from `EMPTY` to `IN_PROGRESS` to `COMPLETE`; normal reads remain blocked until the exact `COMPLETE` marker and projection audit pass. There is no online old-format migration, namespace activation, dual write, rollback adapter, canonical-data endpoint, or whole-site persistence row.
 
-- existing REST mutation routes and form DTOs;
-- `shared/transport/restDto.ts` as the transport-only type boundary;
-- the deterministic converter in the live mutation adapter;
-- `data/*.json` and D1 `app_data` as bootstrap/rollback inputs;
-- legacy exporter utilities used by compatibility tests/fallback paths;
-- current local/R2/S3 attachment transports.
+## Deployment order
 
-The largest remaining contraction is the write path: it currently projects Proto to REST DTO, applies the existing route mutation, then converts and validates the result back into Proto. A later change should make commands mutate canonical resources directly. Compatibility storage and converter deletion must wait until that work is deployed and the production rollback window is explicitly closed.
+This repository has not entered production and intentionally initializes a fresh D1 database:
 
-## Rollout order
+1. review the fixed release manifest and dry-run fixture conversion;
+2. apply `migrations/` to the environment's empty D1 database;
+3. run the operator bootstrap for that D1 database;
+4. require the exact readiness marker and integrity audit;
+5. deploy Pages and verify resource, revision, attachment, and frozen-export flows;
+6. restart without bootstrap and verify the same persisted records.
 
-Steps 1–6 below are implemented in this branch; step 7 requires a controlled production operation:
-
-1. approve v1alpha1 resources and semantics;
-2. generate and validate Proto;
-3. build deterministic seed/live-data generations with ambiguity reporting;
-4. persist canonical resources and immutable revisions behind `AppStore`;
-5. move runtime reads, lifecycle rules, attachment reachability and export to canonical services;
-6. move browser reads to canonical Proto data and keep forms behind explicit view-model mappings;
-7. prepare, freeze, explicitly activate, smoke-test and reopen the production namespace according to [`storage-migration-v1alpha1.md`](storage-migration-v1alpha1.md), then close the rollback window before deleting adapters.
+Exact commands and D1 Time Travel recovery are documented in [`operations/deployment-and-recovery.md`](operations/deployment-and-recovery.md).
 
 ## Verification
 
 Run:
 
 ```text
-pnpm proto:format
 pnpm proto:check
+pnpm proto:drift
+pnpm verify
+pnpm test:e2e
+pnpm test:e2e:pages
 ```
 
 The repository installs the official `@bufbuild/buf` CLI at the pinned version `1.71.0`, so `pnpm install` provisions the same tool locally and in CI/deployment environments. `pnpm build` also runs the non-mutating Proto checks so deployment cannot bypass them.

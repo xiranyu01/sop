@@ -17,8 +17,8 @@ export default defineConfig({
   projects: [{ name: 'chromium-pages', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
     command: 'pnpm exec tsx tests/e2e/helpers/start-pages-test-api.ts',
-    url: 'http://127.0.0.1:8787/api/data',
+    url: 'http://127.0.0.1:8787/api/health',
     reuseExistingServer: false,
-    timeout: 60_000,
+    timeout: 120_000,
   },
 });

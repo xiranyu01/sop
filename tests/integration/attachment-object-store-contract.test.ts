@@ -1,12 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AttachmentObjectStore } from '../../server/domain/attachmentObjectStore';
 import { createR2AttachmentStore, type R2BucketLike } from '../../server/r2AttachmentStore';
 import { createS3AttachmentStore, type S3AttachmentConfig } from '../../server/s3AttachmentStore';
-import { createFileStore } from '../../server/store';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -227,9 +223,5 @@ function attachmentObjectStoreContract(name: string, factory: Factory): void {
   });
 }
 
-attachmentObjectStoreContract('local attachment object store', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'sop-attachment-contract-'));
-  return createFileStore({ dataDir: path.join(root, 'data'), uploadsDir: path.join(root, 'uploads'), exportsDir: path.join(root, 'exports') });
-});
 attachmentObjectStoreContract('R2 attachment object store', () => createR2AttachmentStore(createFakeR2Bucket()));
 attachmentObjectStoreContract('S3 attachment object store', () => createS3AttachmentStore(createFakeS3Config()));

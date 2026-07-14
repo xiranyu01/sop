@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convertLegacyToV1alpha1 } from '../../server/migrations/legacyToV1alpha1';
+import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
 import { seedData } from '../e2e/fixtures/seed';
 
 describe('frozen vocabulary closure', () => {
@@ -25,9 +25,9 @@ describe('frozen vocabulary closure', () => {
     const result = convertLegacyToV1alpha1(data);
 
     expect(result.report.ok).toBe(true);
-    expect(result.snapshot.taskSopRevisions[0].frozenDependencies!.globalFields.map((field) => field.sourceId))
+    expect(result.resources.taskSopRevisions[0].frozenDependencies!.globalFields.map((field) => field.sourceId))
       .toEqual(['field-baseline']);
-    expect(result.snapshot.requirementRevisions[0].frozenDependencies!.globalFields.map((field) => field.sourceId))
+    expect(result.resources.requirementRevisions[0].frozenDependencies!.globalFields.map((field) => field.sourceId))
       .toContain('field-format');
   });
 

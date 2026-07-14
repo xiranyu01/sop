@@ -199,6 +199,13 @@ describe('ProtoJSON storage projector', () => {
       displayName: 'Cup',
       etag: 'new',
     })).toEqual(['displayName', 'etag']);
+
+    expect(projectionDifferences({
+      name: 'materials/cup',
+      sku: 'stale-physical-value',
+    }, {
+      name: 'materials/cup',
+    })).toEqual(['sku']);
   });
 
   it('fails closed for malformed, incomplete, unsupported, or wrong-category ProtoJSON', () => {
@@ -208,6 +215,9 @@ describe('ProtoJSON storage projector', () => {
       .toThrow('Unsupported Proto schema');
     expect(() => projectResource('Material', json({ name: 'materials/cup', uid: 'uid', displayName: 'Cup' })))
       .toThrow('etag must be a non-empty string');
+    expect(() => projectResource('Material', json({
+      name: 'materials/cup', uid: 'uid', displayName: 'Cup', etag: 'etag', unknownField: true,
+    }))).toThrow('resource ProtoJSON is invalid');
     expect(() => projectResource('TaskSopRevision', json({}))).toThrow('is a revision schema');
     expect(() => projectRevision('TaskSop', json({}))).toThrow('is not a revision schema');
     expect(() => projectBundle(json({ content: { root: { kind: 0 } } })))

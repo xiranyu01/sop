@@ -15,7 +15,7 @@ import {
   type D1PreparedStatementLike,
   type D1RunResultLike,
 } from '../repositories/d1ResourceRepository';
-import { decodeLegacyAppData } from '../migrations/legacyToV1alpha1';
+import { decodeLegacyAppData } from './legacyToV1alpha1';
 
 const fixtureFiles = {
   metadata: 'metadata.json',
@@ -238,7 +238,12 @@ export async function runBootstrapCli(
     return;
   }
   const repository = createD1ResourceRepository(databaseFromOptions(options), {
-    onRowSizeWarning: (warning) => write(JSON.stringify({ event: 'bootstrap_row_size_warning', ...warning })),
+    onRowSizeWarning: (warning) => write(JSON.stringify({
+      event: warning.bytes >= warning.rejectionLimitBytes
+        ? 'bootstrap_row_size_rejected'
+        : 'bootstrap_row_size_warning',
+      ...warning,
+    })),
   });
   const result = await bootstrapRepository(repository, data);
   write(JSON.stringify({ releaseManifest: repositoryReleaseManifest, result }, null, 2));

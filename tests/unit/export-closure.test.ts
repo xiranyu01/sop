@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Lifecycle } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { buildExportBundle } from '../../server/export/bundle';
 import { resolveExportClosure } from '../../server/export/closure';
-import { convertLegacyToV1alpha1 } from '../../server/migrations/legacyToV1alpha1';
+import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
 import { seedData } from '../e2e/fixtures/seed';
 
 function requirementSnapshot() {
@@ -20,7 +20,7 @@ function requirementSnapshot() {
       taskSop: { sceneName: '基线场景', title: '基线任务 SOP', version: '0.0.1', status: 'confirmed' },
     },
   ];
-  return convertLegacyToV1alpha1(data).snapshot;
+  return convertLegacyToV1alpha1(data).resources;
 }
 
 describe('canonical export closure', () => {
@@ -38,7 +38,7 @@ describe('canonical export closure', () => {
   });
 
   it('exports a standalone TaskSop without inventing Requirement or Robot dependencies', () => {
-    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
     const closure = resolveExportClosure(snapshot, {
       kind: 'task_sop', sourceId: 'scene-baseline-NO.001', versionLabel: '0.0.1',
     });
@@ -49,7 +49,7 @@ describe('canonical export closure', () => {
   });
 
   it('fails closed for draft roots, draft dependencies, and missing pinned revisions', () => {
-    const draft = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
+    const draft = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
     expect(() => resolveExportClosure(draft, {
       kind: 'requirement', sourceId: 'REQ001', versionLabel: '0.0.1',
     })).toThrow('仅支持导出已确认版本');

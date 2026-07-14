@@ -1,6 +1,9 @@
 import type {
   AtomicConfirmationInput,
   AtomicConfirmationResult,
+  AtomicRobotModelCreateInput,
+  AtomicRobotModelSaveInput,
+  AtomicRobotModelSaveResult,
   CatalogResourceKind,
   CatalogResourceRecord,
   CurrentResourceKind,
@@ -22,12 +25,14 @@ import type {
 } from '../domain/repository';
 import {
   InvalidCursorError,
+  MAX_BULK_RESOURCE_NAMES,
   ProjectionMismatchError,
   RepositoryNotReadyError,
   ResourceConflictError,
   ResourceNotFoundError,
 } from '../domain/repository';
 import { guardProspectiveRow, type RowSizeWarning, type VariableLengthValue } from '../domain/rowSize';
+import { decodeExportBundle } from '../export/codec';
 import {
   projectBundle,
   projectResource,
@@ -72,6 +77,9 @@ type CatalogRow = {
   kind: CatalogResourceKind;
   source_id: string | null;
   display_name: string;
+  sku: string | null;
+  field_group: string | null;
+  field_status: string | null;
   etag: string;
   proto_schema: string;
   proto_json: string;
@@ -86,6 +94,9 @@ type CurrentRow = {
   kind: CurrentResourceKind;
   source_id: string | null;
   display_name: string;
+  scene_name: string | null;
+  customer_name: string | null;
+  robot_model_revision_name: string | null;
   lifecycle: CurrentResourceRecord['lifecycle'];
   candidate_version_sequence: number | null;
   candidate_version_label: string | null;
@@ -111,6 +122,8 @@ type RevisionRow = {
   revision_origin: RevisionRecord['revisionOrigin'];
   lifecycle: RevisionRecord['lifecycle'];
   export_eligible: number;
+  confirmation_command_id: string | null;
+  confirmed_from_etag: string | null;
   proto_schema: string;
   revision_proto_json: string;
   frozen_dependencies_proto_json: string | null;
@@ -141,16 +154,22 @@ type ReviewedDependencyRow = {
 
 type MetaRow = { key: string; value: string; updated_at: string };
 
-const CATALOG_DETAIL_COLUMNS = `name, uid, kind, source_id, display_name, etag,
+const CATALOG_DETAIL_COLUMNS = `name, uid, kind, source_id, display_name, sku, field_group, field_status, etag,
   proto_schema, proto_json, archived_at, created_at, updated_at`;
-const CURRENT_DETAIL_COLUMNS = `name, uid, kind, source_id, display_name, lifecycle,
+const CURRENT_DETAIL_COLUMNS = `name, uid, kind, source_id, display_name, scene_name, customer_name,
+  robot_model_revision_name, lifecycle,
   candidate_version_sequence, candidate_version_label, candidate_source_version_id, current_revision_name,
   reviewed_manifest_digest, etag, proto_schema, proto_json, archived_at, created_at, updated_at`;
 const REVISION_DETAIL_COLUMNS = `name, uid, owner_name, kind, version_sequence, version_label,
-  previous_revision_name, revision_origin, lifecycle, export_eligible, proto_schema,
-  revision_proto_json, frozen_dependencies_proto_json, created_at`;
+  previous_revision_name, revision_origin, lifecycle, export_eligible,
+  confirmation_command_id, confirmed_from_etag, proto_schema, revision_proto_json,
+  frozen_dependencies_proto_json, created_at`;
 const BUNDLE_DETAIL_COLUMNS = `root_revision_name, root_kind, schema_version, renderer_version,
   content_size_bytes, content_sha256, proto_schema, bundle_proto_json, created_at`;
+
+/** Keeps each D1 result comfortably below the Worker memory ceiling even when
+ * every returned ProtoJSON row is close to the repository's 1.8 MB guard. */
+export const PROJECTION_AUDIT_PAGE_SIZE = 16;
 
 const CATALOG_KINDS = new Set<CatalogResourceKind>([
   'CUSTOMER',
@@ -192,6 +211,41 @@ function decodeCursor(cursor?: string): string {
   }
 }
 
+type RevisionCursor = { sequence: number; name: string };
+
+function encodeRevisionCursor(sequence: number, name: string): string {
+  const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, sequence, name }));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+function decodeRevisionCursor(cursor?: string): RevisionCursor {
+  if (!cursor) return { sequence: 0, name: '' };
+  try {
+    const standard = cursor.replaceAll('-', '+').replaceAll('_', '/');
+    const padded = standard.padEnd(Math.ceil(standard.length / 4) * 4, '=');
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as {
+      version?: unknown;
+      sequence?: unknown;
+      name?: unknown;
+    };
+    if (
+      value.version !== 1
+      || typeof value.sequence !== 'number'
+      || !Number.isSafeInteger(value.sequence)
+      || value.sequence < 1
+      || typeof value.name !== 'string'
+      || value.name === ''
+    ) throw new Error('invalid');
+    return { sequence: value.sequence, name: value.name };
+  } catch {
+    throw new InvalidCursorError();
+  }
+}
+
 function pageLimit(request?: PageRequest): number {
   const requested = request?.limit ?? 100;
   if (!Number.isInteger(requested) || requested <= 0) throw new RangeError('Page limit must be a positive integer');
@@ -206,6 +260,17 @@ function toPage<T extends { name: string }>(rows: T[], limit: number): PageResul
   };
 }
 
+function toRevisionPage(rows: RevisionSummary[], limit: number): PageResult<RevisionSummary> {
+  const items = rows.slice(0, limit);
+  const last = items.at(-1);
+  return {
+    items,
+    ...(rows.length > limit && last
+      ? { nextCursor: encodeRevisionCursor(last.versionSequence, last.name) }
+      : {}),
+  };
+}
+
 function catalogRecord(row: CatalogRow): CatalogResourceRecord {
   return {
     name: row.name,
@@ -213,6 +278,9 @@ function catalogRecord(row: CatalogRow): CatalogResourceRecord {
     kind: row.kind,
     sourceId: optional(row.source_id),
     displayName: row.display_name,
+    sku: optional(row.sku),
+    fieldGroup: optional(row.field_group),
+    fieldStatus: optional(row.field_status),
     etag: row.etag,
     protoSchema: row.proto_schema,
     protoJson: row.proto_json,
@@ -229,6 +297,9 @@ function currentRecord(row: CurrentRow): CurrentResourceRecord {
     kind: row.kind,
     sourceId: optional(row.source_id),
     displayName: row.display_name,
+    sceneName: optional(row.scene_name),
+    customerName: optional(row.customer_name),
+    robotModelRevisionName: optional(row.robot_model_revision_name),
     lifecycle: row.lifecycle,
     candidateVersionSequence: optional(row.candidate_version_sequence),
     candidateVersionLabel: optional(row.candidate_version_label),
@@ -256,6 +327,8 @@ function revisionRecord(row: RevisionRow): RevisionRecord {
     revisionOrigin: row.revision_origin,
     lifecycle: row.lifecycle,
     exportEligible: row.export_eligible === 1,
+    confirmationCommandId: optional(row.confirmation_command_id),
+    confirmedFromEtag: optional(row.confirmed_from_etag),
     protoSchema: row.proto_schema,
     revisionProtoJson: row.revision_proto_json,
     frozenDependenciesProtoJson: optional(row.frozen_dependencies_proto_json),
@@ -264,7 +337,7 @@ function revisionRecord(row: RevisionRow): RevisionRecord {
 }
 
 function revisionSummary(row: Omit<RevisionRow,
-  'proto_schema' | 'revision_proto_json' | 'frozen_dependencies_proto_json'>): RevisionSummary {
+  'confirmation_command_id' | 'confirmed_from_etag' | 'proto_schema' | 'revision_proto_json' | 'frozen_dependencies_proto_json'>): RevisionSummary {
   return {
     name: row.name,
     uid: row.uid,
@@ -319,6 +392,9 @@ function assertCatalogParity(row: CatalogRow): void {
       kind: row.kind,
       sourceId: optional(row.source_id),
       displayName: row.display_name,
+      sku: optional(row.sku),
+      fieldGroup: optional(row.field_group),
+      fieldStatus: optional(row.field_status),
       etag: row.etag,
     },
     projected,
@@ -335,6 +411,9 @@ function assertCurrentParity(row: CurrentRow): void {
       kind: row.kind,
       sourceId: optional(row.source_id),
       displayName: row.display_name,
+      sceneName: optional(row.scene_name),
+      customerName: optional(row.customer_name),
+      robotModelRevisionName: optional(row.robot_model_revision_name),
       etag: row.etag,
       lifecycle: row.lifecycle,
       candidateVersionSequence: optional(row.candidate_version_sequence),
@@ -387,6 +466,10 @@ function assertBundleParity(row: BundleRow): void {
   if (differences.length > 0) throw new ProjectionMismatchError(row.root_revision_name, differences);
 }
 
+function failIntegrity(key: string, expected: string, actual?: string): never {
+  throw new RepositoryNotReadyError(`integrity.${key}`, expected, actual);
+}
+
 function catalogVariableColumns(record: CatalogResourceRecord): Record<string, VariableLengthValue> {
   return {
     name: record.name,
@@ -394,6 +477,9 @@ function catalogVariableColumns(record: CatalogResourceRecord): Record<string, V
     kind: record.kind,
     sourceId: record.sourceId,
     displayName: record.displayName,
+    sku: record.sku,
+    fieldGroup: record.fieldGroup,
+    fieldStatus: record.fieldStatus,
     etag: record.etag,
     protoSchema: record.protoSchema,
     protoJson: record.protoJson,
@@ -410,6 +496,9 @@ function currentVariableColumns(record: CurrentResourceRecord): Record<string, V
     kind: record.kind,
     sourceId: record.sourceId,
     displayName: record.displayName,
+    sceneName: record.sceneName,
+    customerName: record.customerName,
+    robotModelRevisionName: record.robotModelRevisionName,
     etag: record.etag,
     protoSchema: record.protoSchema,
     protoJson: record.protoJson,
@@ -434,6 +523,8 @@ function revisionVariableColumns(record: RevisionRecord): Record<string, Variabl
     previousRevisionName: record.previousRevisionName,
     revisionOrigin: record.revisionOrigin,
     lifecycle: record.lifecycle,
+    confirmationCommandId: record.confirmationCommandId,
+    confirmedFromEtag: record.confirmedFromEtag,
     protoSchema: record.protoSchema,
     revisionProtoJson: record.revisionProtoJson,
     frozenDependenciesProtoJson: record.frozenDependenciesProtoJson,
@@ -499,6 +590,9 @@ export function createD1ResourceRepository(
       kind: projected.kind as CatalogResourceKind,
       sourceId: projected.sourceId,
       displayName: projected.displayName,
+      sku: projected.sku,
+      fieldGroup: projected.fieldGroup,
+      fieldStatus: projected.fieldStatus,
       etag: projected.etag,
       protoSchema: input.protoSchema,
       protoJson,
@@ -549,6 +643,9 @@ export function createD1ResourceRepository(
       kind: projected.kind as CurrentResourceKind,
       sourceId: projected.sourceId,
       displayName: projected.displayName,
+      sceneName: projected.sceneName,
+      customerName: projected.customerName,
+      robotModelRevisionName: projected.robotModelRevisionName,
       lifecycle: projected.lifecycle,
       candidateVersionSequence: projected.candidateVersionSequence,
       candidateVersionLabel: projected.candidateVersionLabel,
@@ -593,11 +690,16 @@ export function createD1ResourceRepository(
     const record: RevisionRecord = {
       ...projected,
       versionSequence: input.versionSequence,
+      confirmationCommandId: input.confirmationCommandId,
+      confirmedFromEtag: input.confirmedFromEtag,
       protoSchema: input.protoSchema,
       revisionProtoJson: input.revisionProtoJson,
       frozenDependenciesProtoJson: input.frozenDependenciesProtoJson,
       createdAt: input.now ?? now(),
     };
+    if ((record.confirmationCommandId === undefined) !== (record.confirmedFromEtag === undefined)) {
+      throw new TypeError('Confirmation revision receipt must include both command id and source etag');
+    }
     guardProspectiveRow(record.kind, record.name, revisionVariableColumns(record), warn);
     return record;
   }
@@ -637,20 +739,45 @@ export function createD1ResourceRepository(
     return catalogRecord(row);
   }
 
+  function bulkNames(names: readonly string[]): string[] {
+    if (names.length > MAX_BULK_RESOURCE_NAMES) {
+      throw new RangeError(`Bulk resource read limit exceeded: ${names.length} > ${MAX_BULK_RESOURCE_NAMES}`);
+    }
+    return [...new Set(names)].sort((left, right) => left.localeCompare(right, 'en'));
+  }
+
+  async function getCatalogs(names: readonly string[]): Promise<CatalogResourceRecord[]> {
+    const normalized = bulkNames(names);
+    if (normalized.length === 0) return [];
+    const result = await db.prepare(`SELECT ${CATALOG_DETAIL_COLUMNS}
+      FROM SOP_CATALOG_RESOURCES
+      WHERE name IN (SELECT value FROM json_each(?))
+      ORDER BY name ASC`).bind(JSON.stringify(normalized)).all<CatalogRow>();
+    return result.results.map((row) => {
+      assertCatalogParity(row);
+      return catalogRecord(row);
+    });
+  }
+
   async function listCatalog(kind: CatalogResourceKind, page?: PageRequest): Promise<PageResult<ResourceSummary>> {
     const limit = pageLimit(page);
     const cursor = decodeCursor(page?.cursor);
-    const result = await db.prepare(`SELECT name, uid, kind, source_id, display_name, etag, archived_at
+    const result = await db.prepare(`SELECT name, uid, kind, source_id, display_name,
+      sku, field_group, field_status, etag, archived_at
       FROM SOP_CATALOG_RESOURCES
       WHERE kind = ? AND archived_at IS NULL AND name > ?
       ORDER BY name ASC LIMIT ?`).bind(kind, cursor, limit + 1).all<Pick<CatalogRow,
-        'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'etag' | 'archived_at'>>();
+        'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'sku' | 'field_group'
+        | 'field_status' | 'etag' | 'archived_at'>>();
     return toPage(result.results.map((row) => ({
       name: row.name,
       uid: row.uid,
       kind: row.kind,
       sourceId: optional(row.source_id),
       displayName: row.display_name,
+      sku: optional(row.sku),
+      fieldGroup: optional(row.field_group),
+      fieldStatus: optional(row.field_status),
       etag: row.etag,
       archivedAt: optional(row.archived_at),
     })), limit);
@@ -660,10 +787,12 @@ export function createD1ResourceRepository(
     const createdAt = input.now ?? now();
     const record = buildCatalog(input, createdAt);
     await db.prepare(`INSERT INTO SOP_CATALOG_RESOURCES (
-      name, uid, kind, source_id, display_name, etag, proto_schema, proto_json,
+      name, uid, kind, source_id, display_name, sku, field_group, field_status,
+      etag, proto_schema, proto_json,
       archived_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-      record.name, record.uid, record.kind, record.sourceId ?? null, record.displayName, record.etag,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      record.name, record.uid, record.kind, record.sourceId ?? null, record.displayName,
+      record.sku ?? null, record.fieldGroup ?? null, record.fieldStatus ?? null, record.etag,
       record.protoSchema, record.protoJson, record.archivedAt ?? null, record.createdAt, record.updatedAt,
     ).run();
     return record;
@@ -689,10 +818,12 @@ export function createD1ResourceRepository(
     );
     if (identityDifferences.length > 0) projectionError(name, identityDifferences);
     const result = await db.prepare(`UPDATE SOP_CATALOG_RESOURCES SET
-      source_id = ?, display_name = ?, etag = ?, proto_schema = ?, proto_json = ?,
+      source_id = ?, display_name = ?, sku = ?, field_group = ?, field_status = ?,
+      etag = ?, proto_schema = ?, proto_json = ?,
       archived_at = ?, updated_at = ?
       WHERE name = ? AND etag = ?`).bind(
-      record.sourceId ?? null, record.displayName, record.etag, record.protoSchema, record.protoJson,
+      record.sourceId ?? null, record.displayName, record.sku ?? null, record.fieldGroup ?? null,
+      record.fieldStatus ?? null, record.etag, record.protoSchema, record.protoJson,
       record.archivedAt ?? null, record.updatedAt, name, expectedEtag,
     ).run();
     if (changes(result) !== 1) return stale(name, expectedEtag, 'SOP_CATALOG_RESOURCES');
@@ -709,17 +840,22 @@ export function createD1ResourceRepository(
   async function listCurrent(kind: CurrentResourceKind, page?: PageRequest): Promise<PageResult<ResourceSummary>> {
     const limit = pageLimit(page);
     const cursor = decodeCursor(page?.cursor);
-    const result = await db.prepare(`SELECT name, uid, kind, source_id, display_name, lifecycle, etag, archived_at
+    const result = await db.prepare(`SELECT name, uid, kind, source_id, display_name,
+      scene_name, customer_name, robot_model_revision_name, lifecycle, etag, archived_at
       FROM SOP_CURRENT_RESOURCES
       WHERE kind = ? AND archived_at IS NULL AND name > ?
       ORDER BY name ASC LIMIT ?`).bind(kind, cursor, limit + 1).all<Pick<CurrentRow,
-        'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'lifecycle' | 'etag' | 'archived_at'>>();
+        'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'scene_name' | 'customer_name'
+        | 'robot_model_revision_name' | 'lifecycle' | 'etag' | 'archived_at'>>();
     return toPage(result.results.map((row) => ({
       name: row.name,
       uid: row.uid,
       kind: row.kind,
       sourceId: optional(row.source_id),
       displayName: row.display_name,
+      sceneName: optional(row.scene_name),
+      customerName: optional(row.customer_name),
+      robotModelRevisionName: optional(row.robot_model_revision_name),
       lifecycle: row.lifecycle,
       etag: row.etag,
       archivedAt: optional(row.archived_at),
@@ -730,11 +866,14 @@ export function createD1ResourceRepository(
     const createdAt = input.now ?? now();
     const record = buildCurrent(input, createdAt);
     await db.prepare(`INSERT INTO SOP_CURRENT_RESOURCES (
-      name, uid, kind, source_id, display_name, lifecycle, candidate_version_sequence,
+      name, uid, kind, source_id, display_name, scene_name, customer_name,
+      robot_model_revision_name, lifecycle, candidate_version_sequence,
       candidate_version_label, candidate_source_version_id, current_revision_name,
       reviewed_manifest_digest, etag, proto_schema, proto_json, archived_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-      record.name, record.uid, record.kind, record.sourceId ?? null, record.displayName, record.lifecycle,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      record.name, record.uid, record.kind, record.sourceId ?? null, record.displayName,
+      record.sceneName ?? null, record.customerName ?? null, record.robotModelRevisionName ?? null,
+      record.lifecycle,
       record.candidateVersionSequence ?? null, record.candidateVersionLabel ?? null,
       record.candidateSourceVersionId ?? null, record.currentRevisionName ?? null,
       record.reviewedManifestDigest ?? null, record.etag, record.protoSchema, record.protoJson,
@@ -764,11 +903,13 @@ export function createD1ResourceRepository(
     if (identityDifferences.length > 0) projectionError(name, identityDifferences);
     if (archive && record.lifecycle !== 'ARCHIVED') projectionError(name, ['lifecycle']);
     const result = await db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
-      source_id = ?, display_name = ?, lifecycle = ?, candidate_version_sequence = ?,
+      source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
+      robot_model_revision_name = ?, lifecycle = ?, candidate_version_sequence = ?,
       candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
       reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
       WHERE name = ? AND etag = ?`).bind(
-      record.sourceId ?? null, record.displayName, record.lifecycle, record.candidateVersionSequence ?? null,
+      record.sourceId ?? null, record.displayName, record.sceneName ?? null, record.customerName ?? null,
+      record.robotModelRevisionName ?? null, record.lifecycle, record.candidateVersionSequence ?? null,
       record.candidateVersionLabel ?? null, record.candidateSourceVersionId ?? null,
       record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, record.etag,
       record.protoSchema, record.protoJson, record.archivedAt ?? null, record.updatedAt, name, expectedEtag,
@@ -784,27 +925,45 @@ export function createD1ResourceRepository(
     return revisionRecord(row);
   }
 
+  async function getRevisions(names: readonly string[]): Promise<RevisionRecord[]> {
+    const normalized = bulkNames(names);
+    if (normalized.length === 0) return [];
+    const result = await db.prepare(`SELECT ${REVISION_DETAIL_COLUMNS}
+      FROM SOP_REVISIONS
+      WHERE name IN (SELECT value FROM json_each(?))
+      ORDER BY name ASC`).bind(JSON.stringify(normalized)).all<RevisionRow>();
+    return result.results.map((row) => {
+      assertRevisionParity(row);
+      return revisionRecord(row);
+    });
+  }
+
   async function listRevisions(ownerName: string, page?: PageRequest): Promise<PageResult<RevisionSummary>> {
     const limit = pageLimit(page);
-    const cursor = decodeCursor(page?.cursor);
+    const cursor = decodeRevisionCursor(page?.cursor);
     const result = await db.prepare(`SELECT name, uid, owner_name, kind, version_sequence,
       version_label, previous_revision_name, revision_origin, lifecycle, export_eligible, created_at
-      FROM SOP_REVISIONS WHERE owner_name = ? AND name > ?
-      ORDER BY name ASC LIMIT ?`).bind(ownerName, cursor, limit + 1).all<Omit<RevisionRow,
-        'proto_schema' | 'revision_proto_json' | 'frozen_dependencies_proto_json'>>();
-    return toPage(result.results.map(revisionSummary), limit);
+      FROM SOP_REVISIONS WHERE owner_name = ?
+        AND (version_sequence > ? OR (version_sequence = ? AND name > ?))
+      ORDER BY version_sequence ASC, name ASC LIMIT ?`).bind(
+        ownerName, cursor.sequence, cursor.sequence, cursor.name, limit + 1,
+      ).all<Omit<RevisionRow,
+        'confirmation_command_id' | 'confirmed_from_etag' | 'proto_schema'
+        | 'revision_proto_json' | 'frozen_dependencies_proto_json'>>();
+    return toRevisionPage(result.results.map(revisionSummary), limit);
   }
 
   async function createRevision(input: RevisionWriteInput): Promise<RevisionRecord> {
     const record = buildRevision(input);
     await db.prepare(`INSERT INTO SOP_REVISIONS (
       name, uid, owner_name, kind, version_sequence, version_label, previous_revision_name,
-      revision_origin, lifecycle, export_eligible, proto_schema, revision_proto_json,
-      frozen_dependencies_proto_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      revision_origin, lifecycle, export_eligible, confirmation_command_id, confirmed_from_etag,
+      proto_schema, revision_proto_json, frozen_dependencies_proto_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       record.name, record.uid, record.ownerName, record.kind, record.versionSequence, record.versionLabel,
       record.previousRevisionName ?? null, record.revisionOrigin, record.lifecycle,
-      record.exportEligible ? 1 : 0, record.protoSchema, record.revisionProtoJson,
+      record.exportEligible ? 1 : 0, record.confirmationCommandId ?? null, record.confirmedFromEtag ?? null,
+      record.protoSchema, record.revisionProtoJson,
       record.frozenDependenciesProtoJson ?? null, record.createdAt,
     ).run();
     return record;
@@ -922,16 +1081,151 @@ export function createD1ResourceRepository(
       revision.uid !== expectedRevision.uid
       || revision.ownerName !== expectedRevision.ownerName
       || revision.versionSequence !== expectedRevision.versionSequence
+      || revision.confirmationCommandId !== expectedRevision.confirmationCommandId
+      || revision.confirmedFromEtag !== expectedRevision.confirmedFromEtag
       || bundle.rootKind !== expectedBundle.rootKind
       || bundle.contentSha256 !== expectedBundle.contentSha256
     ) return undefined;
     return { root, revision, bundle, idempotent: true };
   }
 
-  async function confirm(input: AtomicConfirmationInput): Promise<AtomicConfirmationResult> {
+  async function readIdempotentRobotSave(
+    root: CurrentResourceRecord,
+    expectedRevision: RevisionRecord,
+  ): Promise<AtomicRobotModelSaveResult | undefined> {
+    if (root.kind !== 'ROBOT_MODEL' || root.currentRevisionName !== expectedRevision.name) return undefined;
+    const revision = await getRevision(expectedRevision.name);
+    if (!revision || revision.kind !== 'ROBOT_MODEL_REVISION' ||
+      revision.uid !== expectedRevision.uid || revision.ownerName !== root.name ||
+      revision.versionSequence !== expectedRevision.versionSequence ||
+      revision.protoSchema !== expectedRevision.protoSchema ||
+      revision.revisionProtoJson !== expectedRevision.revisionProtoJson ||
+      revision.frozenDependenciesProtoJson !== expectedRevision.frozenDependenciesProtoJson) return undefined;
+    return { root, revision, idempotent: true };
+  }
+
+  async function createRobotModel(input: AtomicRobotModelCreateInput): Promise<AtomicRobotModelSaveResult> {
+    const createdAt = input.current.now ?? now();
+    const root = buildCurrent(input.current, createdAt);
+    const revision = buildRevision(input.revision);
+    const invalid: string[] = [];
+    if (root.kind !== 'ROBOT_MODEL' || root.lifecycle !== 'ACTIVE') invalid.push('root.kind');
+    if (root.currentRevisionName !== revision.name) invalid.push('currentRevisionName');
+    if (revision.kind !== 'ROBOT_MODEL_REVISION' || revision.ownerName !== root.name) invalid.push('revision.ownerName');
+    if (revision.versionSequence !== 1 || revision.previousRevisionName !== undefined) invalid.push('revision.sequence');
+    if (revision.lifecycle !== 'CONFIRMED' || revision.exportEligible) invalid.push('revision.lifecycle');
+    if (invalid.length > 0) projectionError(root.name, invalid);
+
+    // The root and its first immutable revision form one aggregate. The
+    // physical pointer is filled only after the revision exists; D1 batch
+    // atomicity keeps that temporary state invisible and rolls everything
+    // back on a duplicate identity or failed guard.
+    const results = await db.batch([
+      db.prepare(`INSERT INTO SOP_CURRENT_RESOURCES (
+        name, uid, kind, source_id, display_name, scene_name, customer_name,
+        robot_model_revision_name, lifecycle, candidate_version_sequence,
+        candidate_version_label, candidate_source_version_id, current_revision_name,
+        reviewed_manifest_digest, etag, proto_schema, proto_json, archived_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`).bind(
+        root.name, root.uid, root.kind, root.sourceId ?? null, root.displayName,
+        root.sceneName ?? null, root.customerName ?? null, root.robotModelRevisionName ?? null,
+        root.lifecycle, root.candidateVersionSequence ?? null, root.candidateVersionLabel ?? null,
+        root.candidateSourceVersionId ?? null, root.reviewedManifestDigest ?? null, root.etag,
+        root.protoSchema, root.protoJson, root.archivedAt ?? null, root.createdAt, root.updatedAt,
+      ),
+      db.prepare(`INSERT INTO SOP_REVISIONS (
+        name, uid, owner_name, kind, version_sequence, version_label, previous_revision_name,
+        revision_origin, lifecycle, export_eligible, confirmation_command_id, confirmed_from_etag,
+        proto_schema, revision_proto_json, frozen_dependencies_proto_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+        revision.name, revision.uid, revision.ownerName, revision.kind, revision.versionSequence,
+        revision.versionLabel, revision.previousRevisionName ?? null, revision.revisionOrigin,
+        revision.lifecycle, revision.exportEligible ? 1 : 0,
+        revision.confirmationCommandId ?? null, revision.confirmedFromEtag ?? null, revision.protoSchema,
+        revision.revisionProtoJson, revision.frozenDependenciesProtoJson ?? null, revision.createdAt,
+      ),
+      db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET current_revision_name = ?
+        WHERE name = ? AND etag = ?`).bind(revision.name, root.name, root.etag),
+    ]);
+    if (changes(results[0]) !== 1 || changes(results[1]) !== 1 || changes(results[2]) !== 1) {
+      throw new Error('RobotModel creation batch completed without the guarded revision pointer');
+    }
+    return { root, revision, idempotent: false };
+  }
+
+  async function saveRobotModel(input: AtomicRobotModelSaveInput): Promise<AtomicRobotModelSaveResult> {
     const stored = await getCurrent(input.rootName);
     if (!stored) throw new ResourceNotFoundError(input.rootName);
     const revision = buildRevision(input.revision);
+    const idempotent = await readIdempotentRobotSave(stored, revision);
+    if (idempotent) return idempotent;
+    if (stored.kind !== 'ROBOT_MODEL' || stored.lifecycle !== 'ACTIVE') {
+      throw new TypeError('Only an active RobotModel can append a revision');
+    }
+    if (stored.etag !== input.expectedEtag) {
+      throw new ResourceConflictError(input.rootName, input.expectedEtag, stored.etag);
+    }
+    const root = buildCurrent(input.current, stored.createdAt, stored.archivedAt);
+    const invalid: string[] = [];
+    if (root.name !== stored.name || root.uid !== stored.uid || root.kind !== 'ROBOT_MODEL') invalid.push('rootIdentity');
+    if (root.lifecycle !== 'ACTIVE') invalid.push('lifecycle');
+    if (root.currentRevisionName !== revision.name) invalid.push('currentRevisionName');
+    if (revision.kind !== 'ROBOT_MODEL_REVISION' || revision.ownerName !== root.name) invalid.push('revision.ownerName');
+    if (revision.lifecycle !== 'CONFIRMED' || revision.exportEligible) invalid.push('revision.lifecycle');
+    if (invalid.length > 0) projectionError(input.rootName, invalid);
+
+    // The first conditional update claims the root etag but temporarily keeps
+    // the old physical pointer. The batch then inserts the immutable revision
+    // only if that claim succeeded and finally advances the pointer. D1 batch
+    // atomicity prevents the temporary projection from becoming observable.
+    const results = await db.batch([
+      db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
+        source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
+        robot_model_revision_name = ?, lifecycle = ?, candidate_version_sequence = ?,
+        candidate_version_label = ?, candidate_source_version_id = ?,
+        reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
+      WHERE name = ? AND etag = ?`).bind(
+        root.sourceId ?? null, root.displayName, root.sceneName ?? null, root.customerName ?? null,
+        root.robotModelRevisionName ?? null, root.lifecycle, root.candidateVersionSequence ?? null,
+        root.candidateVersionLabel ?? null, root.candidateSourceVersionId ?? null,
+        root.reviewedManifestDigest ?? null, root.etag, root.protoSchema, root.protoJson,
+        root.archivedAt ?? null, root.updatedAt, input.rootName, input.expectedEtag,
+      ),
+      db.prepare(`INSERT INTO SOP_REVISIONS (
+        name, uid, owner_name, kind, version_sequence, version_label, previous_revision_name,
+        revision_origin, lifecycle, export_eligible, proto_schema, revision_proto_json,
+        frozen_dependencies_proto_json, created_at
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM SOP_CURRENT_RESOURCES WHERE name = ? AND etag = ?)`).bind(
+        revision.name, revision.uid, revision.ownerName, revision.kind, revision.versionSequence,
+        revision.versionLabel, revision.previousRevisionName ?? null, revision.revisionOrigin,
+        revision.lifecycle, revision.exportEligible ? 1 : 0, revision.protoSchema,
+        revision.revisionProtoJson, revision.frozenDependenciesProtoJson ?? null, revision.createdAt,
+        input.rootName, root.etag,
+      ),
+      db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET current_revision_name = ?
+        WHERE name = ? AND etag = ?`).bind(revision.name, input.rootName, root.etag),
+    ]);
+    if (changes(results[0]) === 1 && changes(results[1]) === 1 && changes(results[2]) === 1) {
+      return { root, revision, idempotent: false };
+    }
+    const latest = await getCurrent(input.rootName);
+    if (latest) {
+      const retry = await readIdempotentRobotSave(latest, revision);
+      if (retry) return retry;
+      throw new ResourceConflictError(input.rootName, input.expectedEtag, latest.etag);
+    }
+    throw new ResourceNotFoundError(input.rootName);
+  }
+
+  async function confirm(input: AtomicConfirmationInput): Promise<AtomicConfirmationResult> {
+    const stored = await getCurrent(input.rootName);
+    if (!stored) throw new ResourceNotFoundError(input.rootName);
+    const revision = buildRevision({
+      ...input.revision,
+      confirmationCommandId: input.commandId,
+      confirmedFromEtag: input.expectedEtag,
+    });
     const bundle = buildBundle(input.bundle);
 
     const idempotent = await readIdempotentConfirmation(stored, revision, bundle);
@@ -972,12 +1266,13 @@ export function createD1ResourceRepository(
       ),
       db.prepare(`INSERT INTO SOP_REVISIONS (
         name, uid, owner_name, kind, version_sequence, version_label, previous_revision_name,
-        revision_origin, lifecycle, export_eligible, proto_schema, revision_proto_json,
-        frozen_dependencies_proto_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+        revision_origin, lifecycle, export_eligible, confirmation_command_id, confirmed_from_etag,
+        proto_schema, revision_proto_json, frozen_dependencies_proto_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
         revision.name, revision.uid, revision.ownerName, revision.kind, revision.versionSequence,
         revision.versionLabel, revision.previousRevisionName ?? null, revision.revisionOrigin,
-        revision.lifecycle, revision.exportEligible ? 1 : 0, revision.protoSchema,
+        revision.lifecycle, revision.exportEligible ? 1 : 0,
+        revision.confirmationCommandId ?? null, revision.confirmedFromEtag ?? null, revision.protoSchema,
         revision.revisionProtoJson, revision.frozenDependenciesProtoJson ?? null, revision.createdAt,
       ),
       db.prepare(`INSERT INTO SOP_EXPORT_BUNDLES (
@@ -989,13 +1284,15 @@ export function createD1ResourceRepository(
         bundle.createdAt,
       ),
       db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
-        source_id = ?, display_name = ?, lifecycle = ?, candidate_version_sequence = ?,
+        source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
+        robot_model_revision_name = ?, lifecycle = ?, candidate_version_sequence = ?,
         candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
         reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
       WHERE name = ? AND etag = ? AND EXISTS (
         SELECT 1 FROM SOP_CONFIRMATION_COMMANDS WHERE command_id = ? AND root_name = ?
       )`).bind(
-        root.sourceId ?? null, root.displayName, root.lifecycle, root.candidateVersionSequence ?? null,
+        root.sourceId ?? null, root.displayName, root.sceneName ?? null, root.customerName ?? null,
+        root.robotModelRevisionName ?? null, root.lifecycle, root.candidateVersionSequence ?? null,
         root.candidateVersionLabel ?? null, root.candidateSourceVersionId ?? null,
         root.currentRevisionName ?? null, root.reviewedManifestDigest ?? null, root.etag,
         root.protoSchema, root.protoJson, root.archivedAt ?? null, root.updatedAt,
@@ -1047,21 +1344,232 @@ export function createD1ResourceRepository(
     return meta;
   }
 
+  async function auditPayloadPages<Row>(input: {
+    columns: string;
+    table: string;
+    keyColumn: string;
+    key(row: Row): string;
+    validate(row: Row): void;
+  }): Promise<void> {
+    let cursor = '';
+    while (true) {
+      const page = await db.prepare(`SELECT ${input.columns} FROM ${input.table}
+        WHERE ${input.keyColumn} > ?
+        ORDER BY ${input.keyColumn} ASC LIMIT ?`)
+        .bind(cursor, PROJECTION_AUDIT_PAGE_SIZE).all<Row>();
+      for (const row of page.results) input.validate(row);
+      if (page.results.length < PROJECTION_AUDIT_PAGE_SIZE) return;
+      const nextCursor = input.key(page.results.at(-1)!);
+      if (!nextCursor || nextCursor <= cursor) throw new Error(`Projection audit cursor did not advance for ${input.table}`);
+      cursor = nextCursor;
+    }
+  }
+
+  async function auditRelationalIntegrity(): Promise<void> {
+    const invalidCurrentRevision = await db.prepare(`SELECT
+        current.name, current.kind, current.current_revision_name,
+        revision.name AS revision_name, revision.kind AS revision_kind,
+        CASE current.kind
+          WHEN 'TASK_SOP' THEN 'TASK_SOP_REVISION'
+          WHEN 'REQUIREMENT' THEN 'REQUIREMENT_REVISION'
+        END AS expected_revision_kind
+      FROM SOP_CURRENT_RESOURCES AS current
+      LEFT JOIN SOP_REVISIONS AS revision ON revision.name = current.current_revision_name
+      WHERE current.lifecycle = 'CONFIRMED'
+        AND current.kind IN ('TASK_SOP', 'REQUIREMENT')
+        AND (
+          revision.name IS NULL
+          OR revision.owner_name <> current.name
+          OR revision.kind <> CASE current.kind
+            WHEN 'TASK_SOP' THEN 'TASK_SOP_REVISION'
+            WHEN 'REQUIREMENT' THEN 'REQUIREMENT_REVISION'
+          END
+          OR revision.lifecycle <> 'CONFIRMED'
+          OR revision.export_eligible <> 1
+          OR revision.revision_origin = 'IMPORTED_DRAFT_CHECKPOINT'
+        )
+      ORDER BY current.name ASC LIMIT 1`).first<{
+        name: string;
+        current_revision_name: string | null;
+        revision_kind: string | null;
+        expected_revision_kind: string;
+      }>();
+    if (invalidCurrentRevision) {
+      failIntegrity(
+        `current.${invalidCurrentRevision.name}.revision`,
+        `eligible ${invalidCurrentRevision.expected_revision_kind} owned by ${invalidCurrentRevision.name}`,
+        invalidCurrentRevision.current_revision_name ?? invalidCurrentRevision.revision_kind ?? '<missing>',
+      );
+    }
+
+    const invalidCurrentBundle = await db.prepare(`SELECT
+        current.name, revision.name AS revision_name,
+        bundle.root_kind AS actual_root_kind,
+        CASE current.kind WHEN 'TASK_SOP' THEN 'TASK_SOP' ELSE 'REQUIREMENT' END AS expected_root_kind
+      FROM SOP_CURRENT_RESOURCES AS current
+      JOIN SOP_REVISIONS AS revision ON revision.name = current.current_revision_name
+      LEFT JOIN SOP_EXPORT_BUNDLES AS bundle ON bundle.root_revision_name = revision.name
+      WHERE current.lifecycle = 'CONFIRMED'
+        AND current.kind IN ('TASK_SOP', 'REQUIREMENT')
+        AND (
+          bundle.root_revision_name IS NULL
+          OR bundle.root_kind <> CASE current.kind WHEN 'TASK_SOP' THEN 'TASK_SOP' ELSE 'REQUIREMENT' END
+        )
+      ORDER BY current.name ASC LIMIT 1`).first<{
+        name: string;
+        revision_name: string;
+        actual_root_kind: string | null;
+        expected_root_kind: string;
+      }>();
+    if (invalidCurrentBundle) {
+      failIntegrity(
+        `current.${invalidCurrentBundle.name}.bundle`,
+        `${invalidCurrentBundle.expected_root_kind} bundle for ${invalidCurrentBundle.revision_name}`,
+        invalidCurrentBundle.actual_root_kind ?? '<missing>',
+      );
+    }
+
+    const invalidRevisionBundle = await db.prepare(`SELECT
+        revision.name, bundle.root_kind,
+        CASE WHEN revision.kind IN ('TASK_SOP_REVISION', 'REQUIREMENT_REVISION')
+          AND revision.lifecycle = 'CONFIRMED'
+          AND revision.export_eligible = 1
+          AND revision.revision_origin <> 'IMPORTED_DRAFT_CHECKPOINT'
+        THEN 1 ELSE 0 END AS eligible
+      FROM SOP_REVISIONS AS revision
+      LEFT JOIN SOP_EXPORT_BUNDLES AS bundle ON bundle.root_revision_name = revision.name
+      WHERE (
+        revision.kind IN ('TASK_SOP_REVISION', 'REQUIREMENT_REVISION')
+        AND revision.lifecycle = 'CONFIRMED'
+        AND revision.export_eligible = 1
+        AND revision.revision_origin <> 'IMPORTED_DRAFT_CHECKPOINT'
+        AND bundle.root_revision_name IS NULL
+      ) OR (
+        NOT (
+          revision.kind IN ('TASK_SOP_REVISION', 'REQUIREMENT_REVISION')
+          AND revision.lifecycle = 'CONFIRMED'
+          AND revision.export_eligible = 1
+          AND revision.revision_origin <> 'IMPORTED_DRAFT_CHECKPOINT'
+        )
+        AND bundle.root_revision_name IS NOT NULL
+      )
+      ORDER BY revision.name ASC LIMIT 1`).first<{
+        name: string;
+        root_kind: string | null;
+        eligible: number;
+      }>();
+    if (invalidRevisionBundle) {
+      failIntegrity(
+        `revision.${invalidRevisionBundle.name}.bundle`,
+        invalidRevisionBundle.eligible === 1 ? 'exactly one sealed export bundle' : 'no sealed export bundle',
+        invalidRevisionBundle.root_kind ?? '<missing>',
+      );
+    }
+
+    const invalidBundleRevision = await db.prepare(`SELECT
+        bundle.root_revision_name, bundle.root_kind, revision.kind AS revision_kind
+      FROM SOP_EXPORT_BUNDLES AS bundle
+      LEFT JOIN SOP_REVISIONS AS revision ON revision.name = bundle.root_revision_name
+      WHERE revision.name IS NULL
+        OR revision.kind <> CASE bundle.root_kind
+          WHEN 'TASK_SOP' THEN 'TASK_SOP_REVISION'
+          ELSE 'REQUIREMENT_REVISION'
+        END
+        OR revision.lifecycle <> 'CONFIRMED'
+        OR revision.export_eligible <> 1
+        OR revision.revision_origin = 'IMPORTED_DRAFT_CHECKPOINT'
+      ORDER BY bundle.root_revision_name ASC LIMIT 1`).first<{
+        root_revision_name: string;
+        root_kind: ExportBundleRecord['rootKind'];
+        revision_kind: string | null;
+      }>();
+    if (invalidBundleRevision) {
+      const requiredKind = invalidBundleRevision.root_kind === 'TASK_SOP'
+        ? 'TASK_SOP_REVISION'
+        : 'REQUIREMENT_REVISION';
+      failIntegrity(
+        `bundle.${invalidBundleRevision.root_revision_name}.revision`,
+        `eligible ${requiredKind}`,
+        invalidBundleRevision.revision_kind ?? '<missing>',
+      );
+    }
+
+    const invalidDependencyRoot = await db.prepare(`SELECT
+        dependency.root_name, current.kind AS root_kind
+      FROM SOP_REVIEWED_DEPENDENCIES AS dependency
+      LEFT JOIN SOP_CURRENT_RESOURCES AS current ON current.name = dependency.root_name
+      WHERE current.name IS NULL OR current.kind NOT IN ('TASK_SOP', 'REQUIREMENT')
+      ORDER BY dependency.root_name ASC LIMIT 1`).first<{
+        root_name: string;
+        root_kind: string | null;
+      }>();
+    if (invalidDependencyRoot) {
+      failIntegrity(
+        `reviewedDependency.${invalidDependencyRoot.root_name}.root`,
+        'existing TaskSop or Requirement root',
+        invalidDependencyRoot.root_kind ?? '<missing>',
+      );
+    }
+
+    const excessiveDependencies = await db.prepare(`SELECT root_name, count(*) AS dependency_count
+      FROM SOP_REVIEWED_DEPENDENCIES
+      GROUP BY root_name HAVING count(*) > 500
+      ORDER BY root_name ASC LIMIT 1`).first<{ root_name: string; dependency_count: number }>();
+    if (excessiveDependencies) {
+      failIntegrity(
+        `reviewedDependency.${excessiveDependencies.root_name}.count`,
+        'at most 500',
+        String(excessiveDependencies.dependency_count),
+      );
+    }
+  }
+
   async function auditProjectionParity(): Promise<void> {
-    const [catalog, current, revisions, bundles] = await Promise.all([
-      db.prepare(`SELECT ${CATALOG_DETAIL_COLUMNS} FROM SOP_CATALOG_RESOURCES`).all<CatalogRow>(),
-      db.prepare(`SELECT ${CURRENT_DETAIL_COLUMNS} FROM SOP_CURRENT_RESOURCES`).all<CurrentRow>(),
-      db.prepare(`SELECT ${REVISION_DETAIL_COLUMNS} FROM SOP_REVISIONS`).all<RevisionRow>(),
-      db.prepare(`SELECT ${BUNDLE_DETAIL_COLUMNS} FROM SOP_EXPORT_BUNDLES`).all<BundleRow>(),
-    ]);
-    for (const row of catalog.results) assertCatalogParity(row);
-    for (const row of current.results) assertCurrentParity(row);
-    for (const row of revisions.results) assertRevisionParity(row);
-    for (const row of bundles.results) assertBundleParity(row);
+    await auditPayloadPages<CatalogRow>({
+      columns: CATALOG_DETAIL_COLUMNS,
+      table: 'SOP_CATALOG_RESOURCES',
+      keyColumn: 'name',
+      key: (row) => row.name,
+      validate: assertCatalogParity,
+    });
+    await auditPayloadPages<CurrentRow>({
+      columns: CURRENT_DETAIL_COLUMNS,
+      table: 'SOP_CURRENT_RESOURCES',
+      keyColumn: 'name',
+      key: (row) => row.name,
+      validate: assertCurrentParity,
+    });
+    await auditPayloadPages<RevisionRow>({
+      columns: REVISION_DETAIL_COLUMNS,
+      table: 'SOP_REVISIONS',
+      keyColumn: 'name',
+      key: (row) => row.name,
+      validate: assertRevisionParity,
+    });
+    await auditPayloadPages<BundleRow>({
+      columns: BUNDLE_DETAIL_COLUMNS,
+      table: 'SOP_EXPORT_BUNDLES',
+      keyColumn: 'root_revision_name',
+      key: (row) => row.root_revision_name,
+      validate(row) {
+        assertBundleParity(row);
+        try {
+          decodeExportBundle(row.bundle_proto_json);
+        } catch (error) {
+          failIntegrity(
+            `bundle.${row.root_revision_name}.content`,
+            'valid sealed content hash and size',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    });
+    await auditRelationalIntegrity();
   }
 
   return {
     getCatalog,
+    getCatalogs,
     listCatalog,
     createCatalog,
     updateCatalog: (name, expectedEtag, input) => writeCatalog(name, expectedEtag, input, false),
@@ -1072,12 +1580,15 @@ export function createD1ResourceRepository(
     updateCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, false),
     archiveCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, true),
     getRevision,
+    getRevisions,
     listRevisions,
     createRevision,
     getExportBundle,
     createExportBundle,
     loadReviewedDependencies,
     replaceReviewedDependencies,
+    createRobotModel,
+    saveRobotModel,
     confirm,
     getMeta,
     compareAndSetMeta,

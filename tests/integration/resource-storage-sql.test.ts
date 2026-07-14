@@ -107,6 +107,9 @@ describe.skipIf(!sqliteAvailable)('resource storage SQL contract', () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
     expect(result.stdout.trim().split('\n')).toEqual([
+      'SOP_ATTACHMENT_METADATA',
+      'SOP_ATTACHMENT_PART_RESERVATIONS',
+      'SOP_ATTACHMENT_UPLOADS',
       'SOP_CATALOG_RESOURCES',
       'SOP_CONFIRMATION_COMMANDS',
       'SOP_CURRENT_RESOURCES',

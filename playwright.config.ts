@@ -10,7 +10,7 @@ export default defineConfig({
   expect: { timeout: 5_000 },
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: 'http://127.0.0.1:8787',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -22,16 +22,10 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'pnpm exec tsx tests/e2e/helpers/start-test-api.ts',
-      url: 'http://127.0.0.1:8787/api/data',
+      command: 'pnpm exec tsx tests/e2e/helpers/start-pages-test-api.ts',
+      url: 'http://127.0.0.1:8787/api/health',
       reuseExistingServer: false,
-      timeout: 30_000,
-    },
-    {
-      command: 'pnpm exec vite --host 127.0.0.1 --port 4173',
-      url: 'http://127.0.0.1:4173',
-      reuseExistingServer: false,
-      timeout: 30_000,
+      timeout: 120_000,
     },
   ],
 });

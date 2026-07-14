@@ -14,12 +14,28 @@ Local, preview, and production must use different Cloudflare resources:
 | Preview | preview database | preview bucket | Cloudflare preview secrets | preview database only |
 | Production | production database | production bucket | Cloudflare production secrets | production database only |
 
-Required runtime bindings are `DB` and `APP_PASSWORD`; attachment deployments
-also bind their environment's R2 bucket. The bootstrap operator uses
+Required runtime bindings are `DB`, `ATTACHMENTS`, and `APP_PASSWORD`.
+`R2_PUBLIC_BASE_URL` is a per-environment HTTPS custom-domain or `r2.dev` origin
+used to derive the stable public URL recorded for each new attachment. Never
+reuse a D1 database, R2 bucket, public origin, or password across local, preview,
+and production. The bootstrap operator uses
 `CLOUDFLARE_ACCOUNT_ID` (or `CF_ACCOUNT_ID`), `CLOUDFLARE_API_TOKEN` (or
 `CF_API_TOKEN`), and the target database UUID through `--database-id` or
 `SOP_D1_DATABASE_ID`. Keep the API token in the operator's secret store. Do not
 put credentials in a command line, tracked env file, log, or support bundle.
+
+Before the first preview release, provision the resources declared under
+`env.preview` and let Wrangler record the generated D1 UUID in that section:
+
+```bash
+pnpm exec wrangler d1 create sop-preview --env preview --binding DB --update-config
+pnpm exec wrangler r2 bucket create sop-preview-attachments --env preview --binding ATTACHMENTS --update-config
+```
+
+Review the resulting diff before deployment. `pnpm check:architecture` rejects
+missing preview bindings and equal preview/production database IDs, database
+names, or bucket names. Production and preview passwords/public attachment
+origins remain environment secrets/settings and must not be committed.
 
 ## Release order: schema, bootstrap, readiness, deploy
 

@@ -11,6 +11,9 @@ CREATE TABLE SOP_CATALOG_RESOURCES (
   )),
   source_id TEXT,
   display_name TEXT NOT NULL,
+  sku TEXT,
+  field_group TEXT,
+  field_status TEXT,
   etag TEXT NOT NULL,
   proto_schema TEXT NOT NULL,
   proto_json TEXT NOT NULL,
@@ -30,6 +33,85 @@ CREATE UNIQUE INDEX SOP_CATALOG_KIND_SOURCE_ID
 CREATE INDEX SOP_CATALOG_ACTIVE_NAME
   ON SOP_CATALOG_RESOURCES(kind, name)
   WHERE archived_at IS NULL;
+CREATE INDEX SOP_CATALOG_GLOBAL_FIELD_GROUP
+  ON SOP_CATALOG_RESOURCES(field_group, field_status, name)
+  WHERE kind = 'GLOBAL_FIELD' AND archived_at IS NULL;
+CREATE INDEX SOP_CATALOG_MATERIAL_SKU
+  ON SOP_CATALOG_RESOURCES(sku, name)
+  WHERE kind = 'MATERIAL' AND archived_at IS NULL;
+
+-- Multipart upload state is deliberately separate from the business resource
+-- rows. R2 owns bytes; D1 owns only bounded session receipts and the completed
+-- metadata needed to retain a stable uid/object key. No lifecycle/cleanup
+-- columns or physical-delete queue exist in this release.
+CREATE TABLE SOP_ATTACHMENT_UPLOADS (
+  uid TEXT PRIMARY KEY,
+  owner_scope TEXT NOT NULL CHECK (owner_scope IN ('material', 'task_sop', 'requirement')),
+  owner_uid TEXT NOT NULL,
+  object_key TEXT NOT NULL UNIQUE,
+  upload_id TEXT NOT NULL UNIQUE,
+  filename TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 104857600),
+  public_url TEXT,
+  metadata_json TEXT NOT NULL,
+  parts_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (length(trim(uid)) > 0),
+  CHECK (length(trim(owner_uid)) > 0),
+  CHECK (object_key = 'attachments/' || owner_scope || '/' || owner_uid || '/' || uid),
+  CHECK (length(CAST(filename AS BLOB)) BETWEEN 1 AND 255),
+  CHECK (length(trim(media_type)) BETWEEN 1 AND 255),
+  CHECK (public_url IS NULL OR substr(public_url, 1, 8) = 'https://'),
+  CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
+  CHECK (length(CAST(metadata_json AS BLOB)) <= 16384),
+  CHECK (json_valid(parts_json) AND json_type(parts_json) = 'array'),
+  CHECK (json_array_length(parts_json) <= 10)
+);
+
+CREATE INDEX SOP_ATTACHMENT_UPLOAD_OWNER
+  ON SOP_ATTACHMENT_UPLOADS(owner_scope, owner_uid, uid);
+
+-- A part is reserved in D1 before R2 receives bytes. The reservation prevents
+-- concurrent requests (including different Worker isolates) from overwriting
+-- one multipart part and leaving D1 with the other request's receipt.
+CREATE TABLE SOP_ATTACHMENT_PART_RESERVATIONS (
+  uid TEXT NOT NULL,
+  upload_id TEXT NOT NULL,
+  part_number INTEGER NOT NULL CHECK (part_number BETWEEN 1 AND 10),
+  reservation_token TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (uid, part_number),
+  FOREIGN KEY (uid) REFERENCES SOP_ATTACHMENT_UPLOADS(uid) ON DELETE CASCADE,
+  CHECK (length(trim(upload_id)) > 0),
+  CHECK (length(trim(reservation_token)) > 0)
+);
+
+CREATE TABLE SOP_ATTACHMENT_METADATA (
+  uid TEXT PRIMARY KEY,
+  owner_scope TEXT NOT NULL CHECK (owner_scope IN ('material', 'task_sop', 'requirement')),
+  owner_uid TEXT NOT NULL,
+  object_key TEXT NOT NULL UNIQUE,
+  filename TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 104857600),
+  public_url TEXT,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  CHECK (length(trim(uid)) > 0),
+  CHECK (length(trim(owner_uid)) > 0),
+  CHECK (object_key = 'attachments/' || owner_scope || '/' || owner_uid || '/' || uid),
+  CHECK (length(CAST(filename AS BLOB)) BETWEEN 1 AND 255),
+  CHECK (length(trim(media_type)) BETWEEN 1 AND 255),
+  CHECK (public_url IS NULL OR substr(public_url, 1, 8) = 'https://'),
+  CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
+  CHECK (length(CAST(metadata_json AS BLOB)) <= 16384)
+);
+
+CREATE INDEX SOP_ATTACHMENT_METADATA_OWNER
+  ON SOP_ATTACHMENT_METADATA(owner_scope, owner_uid, uid);
 
 -- One mutable row per RobotModel, TaskSop, or Requirement. Revision history is
 -- stored independently below and is never encoded as another current row.
@@ -39,6 +121,9 @@ CREATE TABLE SOP_CURRENT_RESOURCES (
   kind TEXT NOT NULL CHECK (kind IN ('ROBOT_MODEL', 'TASK_SOP', 'REQUIREMENT')),
   source_id TEXT,
   display_name TEXT NOT NULL,
+  scene_name TEXT,
+  customer_name TEXT,
+  robot_model_revision_name TEXT,
   lifecycle TEXT NOT NULL CHECK (lifecycle IN ('ACTIVE', 'DRAFT', 'CONFIRMED', 'ARCHIVED')),
   candidate_version_sequence INTEGER,
   candidate_version_label TEXT,
@@ -91,6 +176,12 @@ CREATE UNIQUE INDEX SOP_CURRENT_KIND_SOURCE_ID
 CREATE INDEX SOP_CURRENT_ACTIVE_NAME
   ON SOP_CURRENT_RESOURCES(kind, name)
   WHERE archived_at IS NULL;
+CREATE INDEX SOP_CURRENT_TASK_SCENE
+  ON SOP_CURRENT_RESOURCES(scene_name, name)
+  WHERE kind = 'TASK_SOP' AND archived_at IS NULL;
+CREATE INDEX SOP_CURRENT_REQUIREMENT_CUSTOMER
+  ON SOP_CURRENT_RESOURCES(customer_name, name)
+  WHERE kind = 'REQUIREMENT' AND archived_at IS NULL;
 
 -- Immutable confirmed revisions and imported legacy draft checkpoints.
 CREATE TABLE SOP_REVISIONS (
@@ -108,6 +199,8 @@ CREATE TABLE SOP_REVISIONS (
   )),
   lifecycle TEXT NOT NULL CHECK (lifecycle IN ('DRAFT', 'CONFIRMED')),
   export_eligible INTEGER NOT NULL CHECK (export_eligible IN (0, 1)),
+  confirmation_command_id TEXT UNIQUE,
+  confirmed_from_etag TEXT,
   proto_schema TEXT NOT NULL,
   revision_proto_json TEXT NOT NULL,
   frozen_dependencies_proto_json TEXT,
@@ -116,6 +209,18 @@ CREATE TABLE SOP_REVISIONS (
   CHECK (length(trim(uid)) > 0),
   CHECK (length(trim(version_label)) > 0),
   CHECK (previous_revision_name IS NULL OR previous_revision_name <> name),
+  CHECK (
+    (confirmation_command_id IS NULL AND confirmed_from_etag IS NULL)
+    OR
+    (confirmation_command_id IS NOT NULL
+      AND confirmed_from_etag IS NOT NULL
+      AND length(trim(confirmation_command_id)) > 0
+      AND length(trim(confirmed_from_etag)) > 0
+      AND revision_origin = 'RUNTIME_CONFIRMED'
+      AND kind IN ('TASK_SOP_REVISION', 'REQUIREMENT_REVISION')
+      AND lifecycle = 'CONFIRMED'
+      AND export_eligible = 1)
+  ),
   CHECK (
     (revision_origin = 'IMPORTED_DRAFT_CHECKPOINT'
       AND kind = 'TASK_SOP_REVISION'
@@ -289,6 +394,35 @@ BEGIN
   SELECT CASE WHEN (
     SELECT count(*) FROM SOP_REVIEWED_DEPENDENCIES WHERE root_name = NEW.root_name
   ) >= 500 THEN RAISE(ABORT, 'dependency guard: maximum 500') END;
+END;
+
+-- Review acknowledgement must fail atomically if a dependency changed after
+-- the proposal was displayed. The same fixed-shape lookup is reused by the
+-- confirmation guard; no dependency-sized parameter list is constructed.
+CREATE TRIGGER SOP_REVIEWED_DEPENDENCY_TOKEN_VALID
+BEFORE INSERT ON SOP_REVIEWED_DEPENDENCIES
+BEGIN
+  SELECT CASE WHEN NEW.token_kind = 'ETAG' AND NOT EXISTS (
+    SELECT 1 FROM SOP_CATALOG_RESOURCES AS catalog
+    WHERE catalog.name = NEW.dependency_name
+      AND catalog.uid = NEW.dependency_uid
+      AND catalog.etag = NEW.reviewed_token
+      AND catalog.archived_at IS NULL
+    UNION ALL
+    SELECT 1 FROM SOP_CURRENT_RESOURCES AS current_resource
+    WHERE current_resource.name = NEW.dependency_name
+      AND current_resource.uid = NEW.dependency_uid
+      AND current_resource.etag = NEW.reviewed_token
+      AND current_resource.archived_at IS NULL
+  ) THEN RAISE(ABORT, 'dependency guard: stale etag token') END;
+  SELECT CASE WHEN NEW.token_kind = 'REVISION_UID' AND NOT EXISTS (
+    SELECT 1 FROM SOP_REVISIONS AS revision
+    WHERE revision.name = NEW.dependency_name
+      AND revision.uid = NEW.dependency_uid
+      AND revision.uid = NEW.reviewed_token
+      AND revision.lifecycle = 'CONFIRMED'
+      AND revision.revision_origin <> 'IMPORTED_DRAFT_CHECKPOINT'
+  ) THEN RAISE(ABORT, 'dependency guard: stale revision token') END;
 END;
 
 CREATE TRIGGER SOP_EXPORT_BUNDLE_ELIGIBILITY

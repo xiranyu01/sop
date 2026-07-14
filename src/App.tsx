@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import type { JsonValue } from '@bufbuild/protobuf';
 import type {
   AppViewModel,
   Customer,
@@ -8,6 +9,7 @@ import type {
   GlobalFieldGroup,
   GlobalFieldStatus,
   Material,
+  MaterialStateRule,
   OperationStep,
   Requirement,
   RequirementAttachment,
@@ -18,8 +20,57 @@ import type {
   SubsceneVersion,
   TextItem,
 } from './domain/viewModels';
-import { createEmptyAppViewModel, decodeAppViewModel } from './domain/viewModels';
-import type { AttachmentUploadInit, AttachmentUploadPart, ExportResult } from '../shared/transport/restDto';
+import { createEmptyAppViewModel } from './domain/viewModels';
+import type { ExportResult } from '../shared/transport/restDto';
+import type { ResourceDetail, ResourceKind, ResourceSummary } from '../shared/transport/resourceDto';
+import {
+  ApiClient,
+  ApiClientError,
+  type AttachmentMetadata,
+  type AttachmentOwnerResourceKind,
+  type AttachmentUploadSession,
+} from './api/client';
+import {
+  findPendingAttachmentCompletion,
+  pendingAttachmentCompletionMatchesFile,
+  removePendingAttachmentCompletion,
+  savePendingAttachmentCompletion,
+  type PendingAttachmentCompletion,
+} from './api/pendingAttachmentCompletion';
+import {
+  createCustomerResource,
+  createGlobalFieldResource,
+  createMaterialResource,
+  createRobotModelResource,
+  createSceneResource,
+  decodeCustomerForm,
+  decodeGlobalFieldForm,
+  decodeMaterialForm,
+  decodeRobotModelForm,
+  decodeSceneForm,
+  encodeCustomerForm,
+  encodeGlobalFieldForm,
+  encodeMaterialForm,
+  encodeRobotModelForm,
+  encodeSceneForm,
+} from './domain/protoFormMapping';
+import { createApiResourceSaveTransport } from './persistence/apiResourceSaveTransport';
+import { DependencyReviewFlow } from './persistence/dependencyReviewFlow';
+import { ResourceSaveQueueRegistry } from './persistence/resourceSaveQueueRegistry';
+import type { PdfDocumentModel } from './export/pdf';
+import {
+  createRequirementResource,
+  createTaskSopResource,
+  decodeRequirementId,
+  decodeRequirementVersions,
+  decodeTaskSopIdentity,
+  decodeTaskSopVersions,
+  encodeRequirementVersion,
+  encodeTaskSopVersion,
+  revisionExportEligible,
+  revisionIsCheckpoint,
+  revisionNameOf,
+} from './domain/versionedProtoFormMapping';
 
 type Page = 'requirements' | 'scenes' | 'globalFields' | 'customers' | 'materials' | 'robots';
 
@@ -228,240 +279,558 @@ const fallbackMaterialRandomOptions: Option[] = [
 ];
 const defaultAttachmentStorageStatus: AttachmentStorageStatus = { enabled: true, message: '' };
 
-type AppCollectionKey = Exclude<keyof AppViewModel, 'metadata'>;
+type AppCollectionKey = keyof AppViewModel;
 
-async function fetchCanonicalData(): Promise<AppViewModel> {
-  return decodeAppViewModel(await fetchJson<unknown>('/api/canonical-data'));
-}
-
-async function mutateAndReadCollection<K extends AppCollectionKey>(
-  key: K,
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<AppViewModel[K]> {
-  await fetchJson<unknown>(input, init);
-  return (await fetchCanonicalData())[key];
-}
-
-const api = {
-  async data(): Promise<AppViewModel> {
-    return fetchCanonicalData();
-  },
-  async storageStatus(): Promise<{ attachments: AttachmentStorageStatus }> {
-    return fetchJson<{ attachments: AttachmentStorageStatus }>('/api/storage-status');
-  },
-  async saveCustomer(customer: Customer): Promise<Customer[]> {
-    return mutateAndReadCollection('customers', '/api/customers', postJson(customer));
-  },
-  async saveMaterial(material: Material): Promise<Material[]> {
-    return mutateAndReadCollection('materials', '/api/materials', postJson(material));
-  },
-  async saveRobot(robot: RobotModel): Promise<RobotModel[]> {
-    return mutateAndReadCollection('robotModels', '/api/robot-models', postJson(robot));
-  },
-  async saveScene(scene: Scene): Promise<Scene[]> {
-    return mutateAndReadCollection('scenes', '/api/scenes', postJson(scene));
-  },
-  async saveGlobalField(field: GlobalField): Promise<GlobalField[]> {
-    return mutateAndReadCollection('globalFields', '/api/global-fields', postJson(field));
-  },
-  async saveRequirement(id: string, version: VersionPatch<RequirementVersion>): Promise<Requirement[]> {
-    return mutateAndReadCollection('requirements', `/api/requirements/${id}`, putJson(version));
-  },
-  async deleteRequirementVersion(id: string, version: string): Promise<Requirement[]> {
-    return mutateAndReadCollection('requirements', `/api/requirements/${id}/versions/${version}`, { method: 'DELETE' });
-  },
-  async createRequirement(version: Partial<RequirementVersion>): Promise<Requirement[]> {
-    return mutateAndReadCollection('requirements', '/api/requirements', postJson(version));
-  },
-  async confirmRequirement(id: string, version: string): Promise<Requirement[]> {
-    return mutateAndReadCollection('requirements', `/api/requirements/${id}/confirm`, postJson({ version }));
-  },
-  async saveSubscene(sceneId: string, code: string, version: VersionPatch<SubsceneVersion>): Promise<Scene[]> {
-    return mutateAndReadCollection('scenes', `/api/scenes/${sceneId}/subscenes/${code}/versions`, postJson(version));
-  },
-  async deleteSubsceneVersion(sceneId: string, code: string, version: string): Promise<Scene[]> {
-    return mutateAndReadCollection('scenes', `/api/scenes/${sceneId}/subscenes/${code}/versions/${version}`, { method: 'DELETE' });
-  },
-  async confirmSubscene(sceneId: string, code: string, version: string): Promise<Scene[]> {
-    return mutateAndReadCollection('scenes', `/api/scenes/${sceneId}/subscenes/${code}/confirm`, postJson({ version }));
-  },
-  async exportSubsceneYaml(sceneId: string, code: string, version: string): Promise<ExportResult> {
-    return fetchJson<ExportResult>(`/api/scenes/${sceneId}/subscenes/${code}/export-yaml`, postJson({ version }));
-  },
-  async exportYaml(id: string, version: string): Promise<ExportResult> {
-    return fetchJson<ExportResult>(`/api/requirements/${id}/export-yaml`, postJson({ version }));
-  },
-  async initAttachmentUpload(id: string, version: string, file: File): Promise<AttachmentUploadInit> {
-    return fetchJson<AttachmentUploadInit>(
-      `/api/requirements/${id}/versions/${version}/attachments/init`,
-      postJson({ fileName: file.name, size: file.size, contentType: file.type || 'application/octet-stream' }),
-    );
-  },
-  async uploadAttachmentPart(
-    id: string,
-    version: string,
-    uploadId: string,
-    storageKey: string,
-    partNumber: number,
-    chunk: Blob,
-  ): Promise<AttachmentUploadPart> {
-    return fetchBinaryJson<AttachmentUploadPart>(
-      `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(
-        uploadId,
-      )}/parts/${partNumber}?storageKey=${encodeURIComponent(storageKey)}`,
-      chunk,
-    );
-  },
-  async completeAttachmentUpload(
-    id: string,
-    version: string,
-    attachmentId: string,
-    uploadId: string,
-    storageKey: string,
-    parts: AttachmentUploadPart[],
-  ): Promise<RequirementAttachment & { url: string }> {
-    return fetchJson<RequirementAttachment & { url: string }>(
-      `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(attachmentId)}/complete`,
-      postJson({ uploadId, storageKey, parts }),
-    );
-  },
-  async abortAttachmentUpload(id: string, version: string, attachmentId: string, uploadId: string, storageKey: string): Promise<void> {
-    await fetchJson<{ ok: boolean }>(
-      `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(attachmentId)}/abort`,
-      postJson({ uploadId, storageKey }),
-    );
-  },
-  async deleteAttachment(id: string, version: string, attachmentId: string): Promise<Requirement[]> {
-    return mutateAndReadCollection(
-      'requirements',
-      `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(attachmentId)}`,
-      { method: 'DELETE' },
-    );
-  },
-  async initSubsceneAttachmentUpload(sceneId: string, code: string, version: string, file: File): Promise<AttachmentUploadInit> {
-    return fetchJson<AttachmentUploadInit>(
-      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(version)}/attachments/init`,
-      postJson({ fileName: file.name, size: file.size, contentType: file.type || 'application/octet-stream' }),
-    );
-  },
-  async uploadSubsceneAttachmentPart(
-    sceneId: string,
-    code: string,
-    version: string,
-    uploadId: string,
-    storageKey: string,
-    partNumber: number,
-    chunk: Blob,
-  ): Promise<AttachmentUploadPart> {
-    return fetchBinaryJson<AttachmentUploadPart>(
-      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
-        version,
-      )}/attachments/${encodeURIComponent(uploadId)}/parts/${partNumber}?storageKey=${encodeURIComponent(storageKey)}`,
-      chunk,
-    );
-  },
-  async completeSubsceneAttachmentUpload(
-    sceneId: string,
-    code: string,
-    version: string,
-    attachmentId: string,
-    uploadId: string,
-    storageKey: string,
-    parts: AttachmentUploadPart[],
-  ): Promise<RequirementAttachment & { url: string }> {
-    return fetchJson<RequirementAttachment & { url: string }>(
-      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
-        version,
-      )}/attachments/${encodeURIComponent(attachmentId)}/complete`,
-      postJson({ uploadId, storageKey, parts }),
-    );
-  },
-  async abortSubsceneAttachmentUpload(sceneId: string, code: string, version: string, attachmentId: string, uploadId: string, storageKey: string): Promise<void> {
-    await fetchJson<{ ok: boolean }>(
-      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
-        version,
-      )}/attachments/${encodeURIComponent(attachmentId)}/abort`,
-      postJson({ uploadId, storageKey }),
-    );
-  },
-  async deleteSubsceneAttachment(sceneId: string, code: string, version: string, attachmentId: string): Promise<Scene[]> {
-    return mutateAndReadCollection(
-      'scenes',
-      `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
-        version,
-      )}/attachments/${encodeURIComponent(attachmentId)}`,
-      { method: 'DELETE' },
-    );
-  },
-  async initMaterialImageUpload(materialId: string, file: File): Promise<AttachmentUploadInit> {
-    return fetchJson<AttachmentUploadInit>(
-      `/api/materials/${encodeURIComponent(materialId)}/images/init`,
-      postJson({ fileName: file.name, size: file.size, contentType: file.type || 'application/octet-stream' }),
-    );
-  },
-  async uploadMaterialImagePart(
-    materialId: string,
-    uploadId: string,
-    storageKey: string,
-    partNumber: number,
-    chunk: Blob,
-  ): Promise<AttachmentUploadPart> {
-    return fetchBinaryJson<AttachmentUploadPart>(
-      `/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(uploadId)}/parts/${partNumber}?storageKey=${encodeURIComponent(storageKey)}`,
-      chunk,
-    );
-  },
-  async completeMaterialImageUpload(
-    materialId: string,
-    attachmentId: string,
-    uploadId: string,
-    storageKey: string,
-    parts: AttachmentUploadPart[],
-  ): Promise<RequirementAttachment & { url: string }> {
-    return fetchJson<RequirementAttachment & { url: string }>(
-      `/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(attachmentId)}/complete`,
-      postJson({ uploadId, storageKey, parts }),
-    );
-  },
-  async abortMaterialImageUpload(materialId: string, attachmentId: string, uploadId: string, storageKey: string): Promise<void> {
-    await fetchJson<{ ok: boolean }>(
-      `/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(attachmentId)}/abort`,
-      postJson({ uploadId, storageKey }),
-    );
-  },
-  async deleteMaterialImage(materialId: string, attachmentId: string): Promise<Material[]> {
-    return mutateAndReadCollection(
-      'materials',
-      `/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(attachmentId)}`,
-      { method: 'DELETE' },
-    );
-  },
+type ResourceBound = {
+  __resourceName: string;
+  __resourceEtag: string;
+  __resourceLoaded: boolean;
+  __resourceDraftSyncToken?: number;
 };
 
-function postJson(body: unknown) {
+type Bound<T> = T & ResourceBound;
+
+type ResourcePageState = {
+  summaries: ResourceSummary[];
+  nextCursor?: string;
+  loadingMore?: boolean;
+  error?: string;
+};
+
+function ResourceLoadMoreButton({
+  state,
+  onLoadMore,
+  label,
+}: {
+  state?: ResourcePageState;
+  onLoadMore: () => void;
+  label: string;
+}) {
+  if (!state?.nextCursor && !state?.error) return null;
+  return (
+    <button className="ghost-button" disabled={state.loadingMore} onClick={onLoadMore}>
+      {state.loadingMore ? '正在加载…' : label}
+    </button>
+  );
+}
+
+function bindResource<T extends object>(value: T, summary: ResourceSummary, loaded: boolean): Bound<T> {
+  return Object.assign(value, {
+    __resourceName: summary.name,
+    __resourceEtag: summary.etag,
+    __resourceLoaded: loaded,
+  });
+}
+
+function resourceNameOf(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const name = (value as Partial<ResourceBound>).__resourceName;
+  return typeof name === 'string' && name ? name : undefined;
+}
+
+function resourceLoaded(value: unknown): boolean {
+  return Boolean(value && typeof value === 'object' && (value as Partial<ResourceBound>).__resourceLoaded);
+}
+
+function resourceDraftSyncToken(value: unknown): number | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const token = (value as Partial<ResourceBound>).__resourceDraftSyncToken;
+  return typeof token === 'number' ? token : undefined;
+}
+
+/**
+ * Reconciles an editor-local draft with an asynchronously updated summary list.
+ * Loaded local drafts win unless the matching item is the first loaded detail
+ * or carries an explicit queue-action token (reload/reapply/retry).
+ */
+export function reconcileMasterDraftFromItems<T extends { id: string }>(
+  current: T,
+  items: T[],
+  newDraft: boolean,
+  empty: T,
+): T {
+  if (newDraft) return current;
+  const currentName = resourceNameOf(current);
+  if (!currentName) return items[0] ?? empty;
+  const incoming = items.find((item) => resourceNameOf(item) === currentName);
+  if (!incoming) return current;
+  const incomingToken = resourceDraftSyncToken(incoming);
+  if (incomingToken !== undefined && incomingToken !== resourceDraftSyncToken(current)) return incoming;
+  if (!resourceLoaded(current) && resourceLoaded(incoming)) return incoming;
+  return current;
+}
+
+/** Replaces an already-listed resource without changing its row position. */
+export function replaceResourceInPlace<T>(items: T[], value: T): T[] {
+  const name = resourceNameOf(value);
+  if (!name) return items;
+  const index = items.findIndex((item) => resourceNameOf(item) === name);
+  if (index < 0) return [...items, value];
+  const next = [...items];
+  next[index] = value;
+  return next;
+}
+
+function markResourceDraftSync<T extends object>(value: T, token: number): T {
+  return Object.assign({}, value, { __resourceDraftSyncToken: token });
+}
+
+function resourceTail(name: string): string {
+  return name.split('/').at(-1) || name;
+}
+
+export function sourceLikeId(summary: ResourceSummary): string {
+  return summary.sourceId ?? resourceTail(summary.name);
+}
+
+/** Appends summary pages by canonical resource name while preserving first-seen order. */
+export function appendUniqueResourceSummaries(
+  current: ResourceSummary[],
+  incoming: ResourceSummary[],
+): ResourceSummary[] {
+  const seen = new Set<string>();
+  return [...current, ...incoming].filter((summary) => {
+    if (seen.has(summary.name)) return false;
+    seen.add(summary.name);
+    return true;
+  });
+}
+
+function materialStateRulePlaceholder(summary: ResourceSummary): Bound<MaterialStateRule> {
+  return bindResource({
+    id: sourceLikeId(summary),
+    materialType: summary.displayName,
+    primaryReferences: [],
+    primaryRelativePositions: [],
+    supportSurfaces: [],
+    regions: [],
+    secondaryReferences: [],
+    secondaryRelativePositions: [],
+    poses: [],
+    forms: [],
+    parameters: [],
+    updatedAt: new Date(0).toISOString(),
+  }, summary, false);
+}
+
+export function appendMaterialStateRuleSummaries(
+  current: MaterialStateRule[],
+  summaries: ResourceSummary[],
+): MaterialStateRule[] {
+  const names = new Set(current.flatMap((item) => resourceNameOf(item) ?? []));
+  const ids = new Set(current.map((item) => item.id));
+  const next = [...current];
+  for (const summary of summaries) {
+    const id = sourceLikeId(summary);
+    if (names.has(summary.name) || ids.has(id)) continue;
+    names.add(summary.name);
+    ids.add(id);
+    next.push(materialStateRulePlaceholder(summary));
+  }
+  return next;
+}
+
+const attachmentResourceNames = new Map<string, string>();
+const attachmentForms = new Map<string, RequirementAttachment>();
+
+export function attachmentReferenceNames(resources: JsonValue[]): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const visit = (value: JsonValue): void => {
+    if (typeof value === 'string') {
+      if (/^attachments\/[^/]+$/.test(value) && !seen.has(value)) {
+        seen.add(value);
+        names.push(value);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      Object.values(value).forEach(visit);
+    }
+  };
+  resources.forEach(visit);
+  return names;
+}
+
+async function mapWithConcurrency<T, Result>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<Result>,
+): Promise<Result[]> {
+  const results = new Array<Result>(items.length);
+  const workerCount = Math.max(1, Math.min(Math.floor(concurrency), items.length || 1));
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
+}
+
+export function loadReferencedAttachmentMetadata(
+  resources: JsonValue[],
+  getMetadata: (uid: string) => Promise<AttachmentMetadata>,
+  options: { concurrency?: number; shouldLoad?: (uid: string) => boolean } = {},
+): Promise<AttachmentMetadata[]> {
+  const uids = attachmentReferenceNames(resources)
+    .map(resourceTail)
+    .filter((uid) => options.shouldLoad?.(uid) ?? true);
+  return mapWithConcurrency(uids, options.concurrency ?? 4, async (uid) => {
+    try {
+      return await getMetadata(uid);
+    } catch (error) {
+      if (!(error instanceof ApiClientError && error.status === 404)) throw error;
+      return undefined;
+    }
+  }).then((results) => results.filter((item): item is AttachmentMetadata => item !== undefined));
+}
+
+export function attachmentFormFromMetadata(metadata: AttachmentMetadata): RequirementAttachment {
   return {
-    method: 'POST',
-    headers: apiHeaders(),
-    body: JSON.stringify(body),
+    id: metadata.uid,
+    name: metadata.filename,
+    size: metadata.sizeBytes,
+    contentType: metadata.mediaType,
+    storageKey: metadata.publicUrl || metadata.objectKey,
+    uploadedAt: new Date(0).toISOString(),
   };
 }
 
-function putJson(body: unknown) {
-  return {
-    method: 'PUT',
-    headers: apiHeaders(),
-    body: JSON.stringify(body),
+function attachmentFormFromName(name: string): RequirementAttachment {
+  const id = resourceTail(name);
+  attachmentResourceNames.set(id, name);
+  return attachmentForms.get(id) ?? {
+    id,
+    name: id,
+    size: 0,
+    contentType: 'application/octet-stream',
+    storageKey: '',
+    uploadedAt: new Date(0).toISOString(),
   };
 }
 
-function apiHeaders(headers: Record<string, string> = {}): Record<string, string> {
-  const password = storedPassword();
-  return {
-    'Content-Type': 'application/json',
-    ...(password ? { Authorization: `Bearer ${password}` } : {}),
-    ...headers,
-  };
+function rememberAttachment(metadata: AttachmentMetadata): RequirementAttachment {
+  const name = metadata.name || `attachments/${metadata.uid}`;
+  const attachment = attachmentFormFromMetadata(metadata);
+  attachmentResourceNames.set(metadata.uid, name);
+  attachmentForms.set(metadata.uid, attachment);
+  return attachment;
+}
+
+const resourceAttachmentResolver = {
+  byName: attachmentFormFromName,
+  nameById: (id: string) => attachmentResourceNames.get(id),
+};
+
+function statusFromLifecycle(lifecycle?: string): EntityStatus {
+  if (lifecycle?.endsWith('CONFIRMED')) return 'confirmed';
+  if (lifecycle?.endsWith('ARCHIVED')) return 'archived';
+  return 'draft';
+}
+
+function customerPlaceholder(summary: ResourceSummary): Bound<Customer> {
+  return bindResource({
+    id: sourceLikeId(summary), name: summary.displayName, contact: { name: '', phone: '', email: '' }, notes: '',
+  }, summary, false);
+}
+
+function materialPlaceholder(summary: ResourceSummary): Bound<Material> {
+  return bindResource({
+    id: sourceLikeId(summary), skuId: summary.sku || sourceLikeId(summary), type: summary.displayName,
+    color: '', material: '', packageType: '', images: [],
+  }, summary, false);
+}
+
+function robotPlaceholder(summary: ResourceSummary): Bound<RobotModel> {
+  return bindResource({
+    id: sourceLikeId(summary), brand: '', model: summary.displayName, terminal: '', topics: {}, extraTopicRequirements: {},
+  }, summary, false);
+}
+
+function scenePlaceholder(summary: ResourceSummary): Bound<Scene> {
+  return bindResource({ id: sourceLikeId(summary), name: summary.displayName, description: '', subscenes: [] }, summary, false);
+}
+
+function globalFieldPlaceholder(summary: ResourceSummary): Bound<GlobalField> {
+  const group = summary.fieldGroup?.replace('GLOBAL_FIELD_GROUP_', '').toLowerCase() as GlobalFieldGroup | undefined;
+  return bindResource({
+    id: sourceLikeId(summary), group: group && globalFieldGroups.includes(group) ? group : 'reference_object',
+    label: summary.displayName, value: summary.displayName,
+    description: '', status: summary.fieldStatus?.endsWith('INACTIVE') ? 'inactive' : 'active', updatedAt: new Date(0).toISOString(),
+  }, summary, false);
+}
+
+function requirementPlaceholder(summary: ResourceSummary): Bound<Requirement> {
+  const version = Object.assign(emptyRequirementVersion(summary.displayName, statusFromLifecycle(summary.lifecycle)), {
+    __revisionName: summary.currentRevision,
+    __revisionExportEligible: Boolean(summary.currentRevision && summary.lifecycle?.endsWith('CONFIRMED')),
+    __revisionCheckpoint: false,
+  });
+  return bindResource({
+    id: sourceLikeId(summary),
+    versions: [version],
+  }, summary, false);
+}
+
+function taskPlaceholder(summary: ResourceSummary): Bound<Subscene> {
+  const source = sourceLikeId(summary);
+  const version = Object.assign(
+    { ...emptySubsceneVersionDraft(summary.displayName), version: '1.0.0', status: statusFromLifecycle(summary.lifecycle) } as SubsceneVersion,
+    {
+      __revisionName: summary.currentRevision,
+      __revisionExportEligible: Boolean(summary.currentRevision && summary.lifecycle?.endsWith('CONFIRMED')),
+      __revisionCheckpoint: false,
+    },
+  );
+  return bindResource({
+    code: source,
+    name: summary.displayName,
+    versions: [version],
+  }, summary, false);
+}
+
+export function appendTaskSopSummariesToScenes(scenes: Scene[], summaries: ResourceSummary[]): Scene[] {
+  return scenes.map((scene) => {
+    const sceneName = resourceNameOf(scene);
+    if (!sceneName) return scene;
+    const existing = new Set(scene.subscenes.flatMap((item) => resourceNameOf(item) ?? []));
+    const additions: Subscene[] = [];
+    for (const summary of summaries) {
+      if (summary.sceneName !== sceneName || existing.has(summary.name)) continue;
+      existing.add(summary.name);
+      additions.push(taskPlaceholder(summary));
+    }
+    return additions.length ? { ...scene, subscenes: [...scene.subscenes, ...additions] } : scene;
+  });
+}
+
+type MasterResourceKind = 'customers' | 'materials' | 'robotModels' | 'scenes' | 'globalFields';
+type MasterResourceValue = Customer | Material | RobotModel | Scene | GlobalField;
+
+function decodeMasterValue(kind: MasterResourceKind, resource: JsonValue): MasterResourceValue {
+  if (kind === 'customers') return decodeCustomerForm(resource).value;
+  if (kind === 'materials') return decodeMaterialForm(resource, resourceAttachmentResolver).value;
+  if (kind === 'robotModels') return decodeRobotModelForm(resource).value;
+  if (kind === 'scenes') return decodeSceneForm(resource).value;
+  return decodeGlobalFieldForm(resource).value;
+}
+
+function encodeMasterValue(kind: MasterResourceKind, value: MasterResourceValue, current: JsonValue): JsonValue {
+  if (kind === 'customers') return encodeCustomerForm(value as Customer, decodeCustomerForm(current).message);
+  if (kind === 'materials') return encodeMaterialForm(
+    value as Material,
+    decodeMaterialForm(current, resourceAttachmentResolver).message,
+    resourceAttachmentResolver,
+  );
+  if (kind === 'robotModels') return encodeRobotModelForm(value as RobotModel, decodeRobotModelForm(current).message);
+  if (kind === 'scenes') return encodeSceneForm(value as Scene, decodeSceneForm(current).message);
+  return encodeGlobalFieldForm(value as GlobalField, decodeGlobalFieldForm(current).message);
+}
+
+function createMasterResource(kind: MasterResourceKind, value: MasterResourceValue): JsonValue {
+  if (kind === 'customers') return createCustomerResource(value as Customer);
+  if (kind === 'materials') return createMaterialResource(value as Material);
+  if (kind === 'robotModels') return createRobotModelResource(value as RobotModel);
+  if (kind === 'scenes') return createSceneResource(value as Scene);
+  return createGlobalFieldResource(value as GlobalField);
+}
+
+function masterPlaceholder(kind: MasterResourceKind, summary: ResourceSummary): MasterResourceValue {
+  if (kind === 'customers') return customerPlaceholder(summary);
+  if (kind === 'materials') return materialPlaceholder(summary);
+  if (kind === 'robotModels') return robotPlaceholder(summary);
+  if (kind === 'scenes') return scenePlaceholder(summary);
+  return globalFieldPlaceholder(summary);
+}
+
+const resourceClient = new ApiClient({ getPassword: () => storedPassword() });
+
+async function hydrateOwnerAttachmentReferences(
+  kind: AttachmentOwnerResourceKind,
+  ownerName: string,
+  resources: JsonValue[],
+): Promise<void> {
+  const metadata = await loadReferencedAttachmentMetadata(
+    resources,
+    (uid) => resourceClient.getAttachment(kind, ownerName, uid),
+    { concurrency: 4, shouldLoad: (uid) => !attachmentForms.has(uid) },
+  );
+  metadata.forEach(rememberAttachment);
+}
+
+const attachmentMaxSizeBytes = 100 * 1024 * 1024;
+const attachmentCompletionRetryDelays = [0, 250, 750] as const;
+
+const pendingAttachmentCompletions = new Map<string, PendingAttachmentCompletion>();
+
+function pendingAttachmentKey(kind: AttachmentOwnerResourceKind, ownerName: string): string {
+  return `${kind}:${ownerName}`;
+}
+
+function attachmentCompletionStorage(): Storage | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function retainedAttachmentCompletion(
+  kind: AttachmentOwnerResourceKind,
+  ownerName: string,
+): PendingAttachmentCompletion | undefined {
+  const pendingKey = pendingAttachmentKey(kind, ownerName);
+  const cached = pendingAttachmentCompletions.get(pendingKey);
+  if (cached) return cached;
+  const storage = attachmentCompletionStorage();
+  if (!storage) return undefined;
+  try {
+    const persisted = findPendingAttachmentCompletion(storage, kind, ownerName);
+    if (persisted) pendingAttachmentCompletions.set(pendingKey, persisted);
+    return persisted;
+  } catch {
+    return undefined;
+  }
+}
+
+function retainAttachmentCompletion(pending: PendingAttachmentCompletion): void {
+  pendingAttachmentCompletions.set(pendingAttachmentKey(pending.kind, pending.ownerName), pending);
+  const storage = attachmentCompletionStorage();
+  if (!storage) return;
+  try {
+    savePendingAttachmentCompletion(storage, pending);
+  } catch {
+    // The in-memory descriptor still keeps this completion retryable in the
+    // current page when localStorage is unavailable or full.
+  }
+}
+
+function clearAttachmentCompletion(pending: PendingAttachmentCompletion): void {
+  const pendingKey = pendingAttachmentKey(pending.kind, pending.ownerName);
+  if (pendingAttachmentCompletions.get(pendingKey)?.uid === pending.uid) {
+    pendingAttachmentCompletions.delete(pendingKey);
+  }
+  const storage = attachmentCompletionStorage();
+  if (!storage) return;
+  try {
+    removePendingAttachmentCompletion(storage, pending.kind, pending.ownerName, pending.uid);
+  } catch {
+    // A stale descriptor is harmless: the idempotent complete endpoint will
+    // return the existing metadata on the next same-file retry.
+  }
+}
+
+function retryableAttachmentCompletion(error: unknown): boolean {
+  if (error instanceof ApiClientError) {
+    return error.status >= 500 || error.body?.error.kind === 'STORAGE_UNAVAILABLE';
+  }
+  return error instanceof TypeError;
+}
+
+async function completeAttachmentWithRetry(
+  kind: AttachmentOwnerResourceKind,
+  ownerName: string,
+  uid: string,
+): Promise<AttachmentMetadata> {
+  let lastError: unknown;
+  for (const delay of attachmentCompletionRetryDelays) {
+    if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay));
+    try {
+      return await resourceClient.completeAttachment(kind, ownerName, uid);
+    } catch (error) {
+      lastError = error;
+      if (!retryableAttachmentCompletion(error)) throw error;
+    }
+  }
+  throw lastError;
+}
+
+function pendingCompletionError(pending: PendingAttachmentCompletion, error: unknown): Error {
+  const detail = error instanceof Error ? `：${error.message}` : '';
+  return new Error(
+    `附件内容已上传，但完成登记暂时失败${detail}。完成会话 ${pending.uid} 已保留；请再次选择同一文件“${pending.fileName}”重试，无需重新上传分片。`,
+  );
+}
+
+async function uploadOwnerAttachment(
+  kind: AttachmentOwnerResourceKind,
+  ownerName: string,
+  file: File,
+  onProgress: (progress: number) => void,
+): Promise<RequirementAttachment> {
+  const pending = retainedAttachmentCompletion(kind, ownerName);
+  if (pending) {
+    if (!pendingAttachmentCompletionMatchesFile(pending, file)) {
+      throw new Error(`附件“${pending.fileName}”仍待完成登记；请先重新选择该文件重试。`);
+    }
+    onProgress(100);
+    try {
+      const metadata = await completeAttachmentWithRetry(kind, ownerName, pending.uid);
+      const attachment = rememberAttachment(metadata);
+      clearAttachmentCompletion(pending);
+      return attachment;
+    } catch (error) {
+      throw pendingCompletionError(pending, error);
+    }
+  }
+
+  let session: AttachmentUploadSession | undefined;
+  let completion: PendingAttachmentCompletion | undefined;
+  let completionStarted = false;
+  try {
+    session = await resourceClient.initializeAttachment(kind, ownerName, {
+      filename: file.name,
+      mediaType: file.type || 'application/octet-stream',
+      sizeBytes: file.size,
+    });
+    for (let index = 0; index < session.partCount; index += 1) {
+      const start = index * session.partSizeBytes;
+      const end = Math.min(file.size, start + session.partSizeBytes);
+      await resourceClient.uploadAttachmentPart(
+        kind,
+        ownerName,
+        session.uid,
+        index + 1,
+        file.slice(start, end, file.type || 'application/octet-stream'),
+      );
+      onProgress(Math.round(((index + 1) / session.partCount) * 100));
+    }
+    completion = {
+      kind,
+      ownerName,
+      uid: session.uid,
+      fileName: file.name,
+      mediaType: file.type || 'application/octet-stream',
+      sizeBytes: file.size,
+      lastModified: file.lastModified,
+    };
+    completionStarted = true;
+    retainAttachmentCompletion(completion);
+    const metadata = await completeAttachmentWithRetry(kind, ownerName, session.uid);
+    const attachment = rememberAttachment(metadata);
+    clearAttachmentCompletion(completion);
+    return attachment;
+  } catch (error) {
+    if (session && !completionStarted) {
+      await resourceClient.abortAttachment(kind, ownerName, session.uid).catch(() => undefined);
+    }
+    if (completionStarted && completion) {
+      throw pendingCompletionError(completion, error);
+    }
+    if (error instanceof ApiClientError && error.body?.error.kind === 'STORAGE_UNAVAILABLE') {
+      throw new Error(`附件存储不可用：${error.message}`);
+    }
+    throw error;
+  }
 }
 
 function storedPassword(): string {
@@ -476,45 +845,6 @@ function clearStoredPassword() {
 
 function isAuthError(message: string): boolean {
   return message.includes('访问密码');
-}
-
-async function assertJson<T>(res: Response): Promise<T> {
-  const data = (await res.json()) as T | { message?: string };
-  if (!res.ok) {
-    const message =
-      typeof data === 'object' && data !== null && 'message' in data && typeof data.message === 'string'
-        ? data.message
-        : '请求失败';
-    throw new Error(message);
-  }
-  return data as T;
-}
-
-async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  try {
-    const res = await fetch(input, {
-      ...init,
-      headers: {
-        ...(init?.headers || {}),
-        ...apiHeaders(),
-      },
-    });
-    return assertJson<T>(res);
-  } catch (error) {
-    if (error instanceof TypeError && error.message === 'Failed to fetch') {
-      throw new Error('本地 API 服务未连接，请用 pnpm dev 同时启动前端和后端后再试');
-    }
-    throw error;
-  }
-}
-
-async function fetchBinaryJson<T>(input: RequestInfo | URL, body: Blob): Promise<T> {
-  const res = await fetch(input, {
-    method: 'PUT',
-    headers: apiHeaders({ 'Content-Type': body.type || 'application/octet-stream' }),
-    body,
-  });
-  return assertJson<T>(res);
 }
 
 const emptyData = createEmptyAppViewModel();
@@ -652,6 +982,22 @@ function exportReportAsPdf(report: PrintableReport) {
   iframeDocument.open();
   iframeDocument.write(renderPrintableReport(report));
   iframeDocument.close();
+}
+
+function exportPdfModel(model: PdfDocumentModel) {
+  const rows = (items: PdfDocumentModel['trace'] = []) => items.map((item) => `${item.label}：${item.value}`).join('\n');
+  exportReportAsPdf({
+    title: model.title,
+    subtitle: model.subtitle,
+    fileName: `${safeFileName(model.title)}.pdf`,
+    sections: [
+      { title: '追踪信息', content: rows(model.trace) },
+      ...model.sections.map((section) => ({
+        title: section.heading,
+        content: [rows(section.rows), ...(section.items ?? [])].filter(Boolean).join('\n'),
+      })),
+    ],
+  });
 }
 
 function renderPrintableReport(report: PrintableReport): string {
@@ -954,6 +1300,7 @@ function stepRandomizationReport(value?: { enabled: boolean; startOrder: number;
 }
 
 function publicAttachmentUrl(publicBaseUrl: string | undefined, storageKey: string): string {
+  if (/^https?:\/\//i.test(storageKey)) return storageKey;
   if (!publicBaseUrl) return '';
   const base = publicBaseUrl.replace(/\/+$/, '');
   const encodedKey = storageKey.split('/').map(encodeURIComponent).join('/');
@@ -970,25 +1317,17 @@ function printableAttachments(attachments: RequirementAttachment[] | undefined, 
   }));
 }
 
-function protectedAttachmentUrl(storageKey: string): string {
-  return `/api/attachments/${encodeURIComponent(storageKey)}`;
-}
-
 async function downloadStoredAttachment(attachment: RequirementAttachment) {
-  const res = await fetch(protectedAttachmentUrl(attachment.storageKey), { headers: apiHeaders() });
-  if (!res.ok) {
-    const error = (await res.json().catch(() => ({ message: '下载失败' }))) as { message?: string };
-    throw new Error(error.message || '下载失败');
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
+  const url = publicAttachmentUrl(undefined, attachment.storageKey);
+  if (!url) throw new Error('该附件没有公开访问链接，无法从浏览器下载');
   const link = document.createElement('a');
   link.href = url;
   link.download = attachment.name;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
 }
 
 function subsceneReportSections(scene: Scene, subscene: Subscene, version: SubsceneVersion, publicBaseUrl?: string): PrintableSection[] {
@@ -1072,124 +1411,6 @@ function subsceneReportSections(scene: Scene, subscene: Subscene, version: Subsc
   ];
 }
 
-function buildSubscenePdfReport(scene: Scene, subscene: Subscene, version: SubsceneVersion, publicBaseUrl?: string): PrintableReport {
-  return {
-    title: version.title || subscene.name,
-    subtitle: `${scene.name} · 任务 SOP 版本 v${version.version} · ${statusText(version.status)}`,
-    fileName: `${safeFileName(version.title || subscene.name)}-${version.version}.pdf`,
-    sections: subsceneReportSections(scene, subscene, version, publicBaseUrl),
-  };
-}
-
-function selectedSubscenesReport(
-  scenes: Scene[],
-  selectedSubscenes: RequirementVersion['selectedSubscenes'],
-  publicBaseUrl?: string,
-): PrintableSection[] {
-  if (!selectedSubscenes.length) {
-    return [{ title: '生产需求项', content: '-' }];
-  }
-  return selectedSubscenes.map((selected, index) => {
-    const target = findTaskSop(scenes, selected);
-    const selectedTaskSopName = taskSopLabel(selected);
-    const selectedVersion = taskSopVersion(selected);
-    const header = keyValueReport([
-      ['生产需求项名称', productionItemTitle(selected)],
-      ['生产需求项描述', selected.description],
-      ['需求项场景', productionItemSceneName(selected)],
-      ['选择的任务 SOP', selectedTaskSopName || '未选择'],
-      ['SOP 引用版本', selectedVersion || '-'],
-      ['引用版本状态', target?.version ? statusText(target.version.status) : '未找到'],
-      ['目标采集时长', `${selected.targetDurationHours || 0} h`],
-      ['目标采集数量', `${selected.targetCollectionCount || 0}`],
-    ]);
-    const detail =
-      selectedTaskSopName && target?.version && target.subscene
-        ? subsceneReportSections(target.scene, target.subscene, target.version, publicBaseUrl)
-            .map((section) => `【${section.title}】\n${section.content}`)
-            .join('\n\n')
-        : '未选择或未找到对应任务 SOP 版本，无法展开正文。';
-    return {
-      title: `生产需求项 ${index + 1}：${productionItemTitle(selected)}`,
-      content: `${header}\n\n${detail}`,
-      attachments: printableAttachments(target?.version?.attachments, publicBaseUrl),
-    };
-  });
-}
-
-function buildRequirementPdfReport(data: AppViewModel, requirement: Requirement, version: RequirementVersion, publicBaseUrl?: string): PrintableReport {
-  const customer = data.customers.find((item) => item.id === version.customerId);
-  const robot = data.robotModels.find((item) => item.id === version.robotModelId);
-  const selectedDurationTotal = version.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0);
-  return {
-    title: version.title,
-    subtitle: `需求版本 v${version.version} · ${statusText(version.status)}`,
-    fileName: `${safeFileName(version.title)}-${version.version}.pdf`,
-    sections: [
-      {
-        title: '基础信息',
-        content: keyValueReport([
-          ['需求名称', version.title],
-          ['客户', customer?.name],
-          ['联系人', customer?.contact.name],
-          ['项目名称', version.projectName],
-          ['截止日期', formatShortDate(version.deadline)],
-          ['需求状态', statusText(version.status)],
-          ['需求版本', version.version],
-          ['机器人型号', robot ? `${robot.brand} ${robot.model}` : '-'],
-          ['原始需求来源', version.sourceBaseUrl],
-          ['业务目标', version.businessGoal],
-          ['总目标时长', `${version.requiredDurationHours || 0} h`],
-          ['生产需求项目标时长合计', `${selectedDurationTotal} h`],
-        ]),
-      },
-      {
-        title: '基础信息附件',
-        content: version.attachments?.length ? '附件内容如下。' : '-',
-        attachments: printableAttachments(version.attachments, publicBaseUrl),
-      },
-      {
-        title: '全局要求',
-        content: [
-          keyValueReport([
-            ['客户额外 topic 要求', version.extraTopicRequirementsText],
-            ['全局随机性要求', version.globalRandomizationRequirements],
-            ['其他补充说明', version.additionalNotes],
-          ]),
-          '',
-          '采集操作要求：',
-          operationItemsReport(version.allowedOperations),
-          '',
-          '不完美但可接受的采集操作：',
-          operationItemsReport(version.acceptableOperations),
-          '',
-          '采集禁止操作：',
-          forbiddenRequirementReport(version.forbiddenOperations),
-          '',
-          '标注操作要求：',
-          operationItemsReport(version.annotation.allowedOperations),
-          '',
-          '标注禁止操作：',
-          operationItemsReport(version.annotation.forbiddenOperations),
-        ].join('\n'),
-      },
-      {
-        title: '交付 / 标注 / 质检',
-        content: keyValueReport([
-          ['交付方式', version.delivery.method],
-          ['交付格式', reportList(version.delivery.formats)],
-          ['交付语言', reportList(version.delivery.languages.map((item) => item.name || item.code))],
-          ['是否需要标注', version.annotation.required],
-          ['标注类型', reportList(version.annotation.types)],
-          ['是否需要质检', version.qualityInspection.required],
-          ['客户抽检策略', version.qualityInspection.samplingPolicy],
-        ]),
-      },
-      ...selectedSubscenesReport(data.scenes, version.selectedSubscenes, publicBaseUrl),
-    ],
-  };
-}
-
 function nextReadableId(values: string[], prefix: string): string {
   const pattern = new RegExp(`^${prefix}(\\d+)$`, 'i');
   const maxNumber = values.reduce((max, value) => {
@@ -1245,14 +1466,23 @@ function findSubscene(scenes: Scene[], code: string, version?: string): Subscene
   return undefined;
 }
 
-function findTaskSop(scenes: Scene[], selected: RequirementVersion['selectedSubscenes'][number]): SubsceneLookupResult | undefined {
+export function findTaskSop(scenes: Scene[], selected: RequirementVersion['selectedSubscenes'][number]): SubsceneLookupResult | undefined {
   const ref = selected.taskSop;
+  const sceneName = ref?.sceneName || selected.sceneName;
   if (selected.subsceneCode) {
-    const byCode = findSubscene(scenes, selected.subsceneCode, selected.version);
-    if (byCode) return byCode;
+    const versionName = ref?.version || selected.version;
+    for (const scene of scenes) {
+      if (sceneName && scene.name !== sceneName) continue;
+      const subscene = scene.subscenes.find((item) => item.code === selected.subsceneCode);
+      if (!subscene) continue;
+      return {
+        scene,
+        subscene,
+        version: versionName ? subscene.versions.find((item) => item.version === versionName) : undefined,
+      };
+    }
   }
   for (const scene of scenes) {
-    const sceneName = ref?.sceneName || selected.sceneName;
     if (scene.name !== sceneName) continue;
     const subscene = scene.subscenes.find((item) => {
       const selectedVersion = ref?.version || selected.version;
@@ -1328,9 +1558,11 @@ function stripSelectedTaskSopCode(selected: RequirementVersion['selectedSubscene
 
 export default function App() {
   const [data, setData] = useState<AppViewModel>(emptyData);
+  const [resourcePages, setResourcePages] = useState<Partial<Record<ResourceKind, ResourcePageState>>>({});
   const [page, setPageState] = useState<Page>(initialPage);
   const [loading, setLoading] = useState(true);
   const [locked, setLocked] = useState(false);
+  const [loadFailure, setLoadFailure] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [selectedRequirementId, setSelectedRequirementId] = useState<string>('');
@@ -1342,6 +1574,500 @@ export default function App() {
   const [sceneDetailOpen, setSceneDetailOpen] = useState(false);
   const [returnToRequirement, setReturnToRequirement] = useState<RequirementReturnTarget | null>(null);
   const [attachmentStorageStatus, setAttachmentStorageStatus] = useState<AttachmentStorageStatus>(defaultAttachmentStorageStatus);
+  const resourceDetails = useRef(new Map<string, ResourceDetail>());
+  const saveQueues = useRef(new ResourceSaveQueueRegistry());
+  const masterDraftSyncSequence = useRef(0);
+  const reviewFlows = useRef(new Map<string, DependencyReviewFlow>());
+  const dataRef = useRef(data);
+  const [, setSaveStateEpoch] = useState(0);
+
+  dataRef.current = data;
+
+  useEffect(() => saveQueues.current.subscribe(() => setSaveStateEpoch((value) => value + 1)), []);
+  useEffect(() => saveQueues.current.installNavigationWarning(window), []);
+
+  function replaceMasterValue(kind: MasterResourceKind, value: MasterResourceValue) {
+    const name = resourceNameOf(value);
+    if (!name) return;
+    setData((current) => {
+      if (kind === 'customers') {
+        return { ...current, customers: replaceResourceInPlace(current.customers, value as Customer) };
+      }
+      if (kind === 'materials') {
+        return { ...current, materials: replaceResourceInPlace(current.materials, value as Material) };
+      }
+      if (kind === 'robotModels') {
+        return { ...current, robotModels: replaceResourceInPlace(current.robotModels, value as RobotModel) };
+      }
+      if (kind === 'scenes') {
+        const existing = current.scenes.find((item) => resourceNameOf(item) === name);
+        const next = value as Scene;
+        if (existing?.subscenes.length && next.subscenes.length === 0) next.subscenes = existing.subscenes;
+        return { ...current, scenes: replaceResourceInPlace(current.scenes, next) };
+      }
+      return { ...current, globalFields: replaceResourceInPlace(current.globalFields, value as GlobalField) };
+    });
+  }
+
+  function bindMasterDetail(kind: MasterResourceKind, detail: ResourceDetail): MasterResourceValue {
+    resourceDetails.current.set(detail.name, detail);
+    const value = bindResource(decodeMasterValue(kind, detail.resource), detail, true);
+    replaceMasterValue(kind, value);
+    return value;
+  }
+
+  async function openMasterDetail<T extends MasterResourceValue>(kind: MasterResourceKind, value: T): Promise<T> {
+    if (resourceLoaded(value)) return value;
+    const name = resourceNameOf(value);
+    if (!name) return value;
+    const existing = resourceDetails.current.get(name);
+    const detail = existing ?? await resourceClient.get(kind, name);
+    if (kind === 'materials') await hydrateOwnerAttachmentReferences(kind, name, [detail.resource]);
+    return bindMasterDetail(kind, detail) as T;
+  }
+
+  async function saveMaster<T extends MasterResourceValue>(kind: MasterResourceKind, value: T): Promise<T | undefined> {
+    const name = resourceNameOf(value);
+    if (!name) {
+      const created = await resourceClient.create(kind, createMasterResource(kind, value));
+      const bound = bindMasterDetail(kind, created.resource) as T;
+      setResourcePages((current) => {
+        const state = current[kind] ?? { summaries: [] };
+        const { resource: _resource, ...summary } = created.resource;
+        return { ...current, [kind]: { ...state, summaries: [...state.summaries, summary] } };
+      });
+      return bound;
+    }
+    const detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
+    const initial = bindMasterDetail(kind, detail) as T;
+    let queue = saveQueues.current.get<T>(name);
+    if (!queue) {
+      queue = saveQueues.current.register(kind, {
+        resourceName: name,
+        initial: { value: initial, etag: detail.etag },
+        transport: createApiResourceSaveTransport<T>({
+          client: resourceClient,
+          kind,
+          encode: (next) => {
+            const authoritative = resourceDetails.current.get(name);
+            if (!authoritative) throw new Error(`资源详情未加载：${name}`);
+            return encodeMasterValue(kind, next, authoritative.resource);
+          },
+          decode: (resource) => {
+            const { resource: _resource, ...summary } = detail;
+            return bindResource(decodeMasterValue(kind, resource), summary, true) as unknown as T;
+          },
+          onDetail: (next) => bindMasterDetail(kind, next),
+        }),
+      });
+    }
+    const state = await queue.submit(value);
+    if (state.kind === 'paused-conflict' || state.kind === 'paused-retryable' || state.kind === 'paused-terminal') {
+      setError(state.message);
+      return undefined;
+    }
+    return queue.localValue;
+  }
+
+  async function loadRevisionDetails(
+    kind: 'taskSops' | 'requirements' | 'robotModels',
+    name: string,
+  ) {
+    const summaries = [];
+    for await (const page of resourceClient.revisionPages(kind, name)) summaries.push(...page.items);
+    return mapWithConcurrency(summaries, 4, (summary) => resourceClient.getRevision(summary.name));
+  }
+
+  function rememberResourceDetail(kind: ResourceKind, detail: ResourceDetail) {
+    resourceDetails.current.set(detail.name, detail);
+    const { resource: _resource, ...summary } = detail;
+    setResourcePages((current) => {
+      const page = current[kind] ?? { summaries: [] };
+      const index = page.summaries.findIndex((item) => item.name === detail.name);
+      const summaries = [...page.summaries];
+      if (index >= 0) summaries[index] = summary;
+      else summaries.push(summary);
+      return { ...current, [kind]: { ...page, summaries } };
+    });
+  }
+
+  function replaceRequirementResource(detail: ResourceDetail, revisions: Awaited<ReturnType<typeof loadRevisionDetails>>) {
+    rememberResourceDetail('requirements', detail);
+    const requirement = bindResource<Requirement>({
+      id: decodeRequirementId(detail.resource),
+      versions: decodeRequirementVersions(detail.resource, revisions, requirementContext()),
+    }, detail, true);
+    setData((current) => ({
+      ...current,
+      requirements: [...current.requirements.filter((item) => resourceNameOf(item) !== detail.name), requirement],
+    }));
+    return requirement;
+  }
+
+  function replaceTaskSopResource(detail: ResourceDetail, revisions: Awaited<ReturnType<typeof loadRevisionDetails>>) {
+    rememberResourceDetail('taskSops', detail);
+    const identity = decodeTaskSopIdentity(detail.resource);
+    const subscene = bindResource<Subscene>({
+      code: identity.code,
+      name: identity.displayName,
+      versions: decodeTaskSopVersions(detail.resource, revisions, taskSopContext()),
+    }, detail, true);
+    setData((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => {
+        if (resourceNameOf(scene) !== identity.sceneName) return scene;
+        return {
+          ...scene,
+          subscenes: [...scene.subscenes.filter((item) => resourceNameOf(item) !== detail.name), subscene],
+        };
+      }),
+    }));
+    return { identity, subscene };
+  }
+
+  async function openRequirementResource(requirement: Requirement, force = false): Promise<Requirement> {
+    if (!force && resourceLoaded(requirement)) return requirement;
+    const name = resourceNameOf(requirement);
+    if (!name) return requirement;
+    const [detail, revisions] = await Promise.all([
+      force ? resourceClient.get('requirements', name) : Promise.resolve(resourceDetails.current.get(name) ?? resourceClient.get('requirements', name)),
+      loadRevisionDetails('requirements', name),
+    ]);
+    await hydrateOwnerAttachmentReferences('requirements', name, [detail.resource, ...revisions.map((revision) => revision.resource)]);
+    return replaceRequirementResource(detail, revisions);
+  }
+
+  async function openTaskSopResource(sceneId: string, code: string, force = false): Promise<Subscene | undefined> {
+    const scene = dataRef.current.scenes.find((item) => item.id === sceneId);
+    const subscene = scene?.subscenes.find((item) => item.code === code);
+    if (!subscene || (!force && resourceLoaded(subscene))) return subscene;
+    const name = resourceNameOf(subscene);
+    if (!name) return subscene;
+    const [detail, revisions] = await Promise.all([
+      force ? resourceClient.get('taskSops', name) : Promise.resolve(resourceDetails.current.get(name) ?? resourceClient.get('taskSops', name)),
+      loadRevisionDetails('taskSops', name),
+    ]);
+    await hydrateOwnerAttachmentReferences('taskSops', name, [detail.resource, ...revisions.map((revision) => revision.resource)]);
+    const loaded = replaceTaskSopResource(detail, revisions);
+    setSelectedSubsceneCode(loaded.identity.code);
+    return loaded.subscene;
+  }
+
+  function taskSopContext() {
+    return {
+      materialNameById: new Map(dataRef.current.materials.flatMap((item) => {
+        const name = resourceNameOf(item);
+        return name ? [[item.id, name] as const] : [];
+      })),
+      materialStateRuleNameById: new Map(dataRef.current.materialStateRules.flatMap((item) => {
+        const name = resourceNameOf(item);
+        return name ? [[item.id, name] as const] : [];
+      })),
+      attachmentNameById: attachmentResourceNames,
+      attachmentByName: attachmentFormFromName,
+    };
+  }
+
+  function requirementContext() {
+    const robotRevisionNameById = new Map<string, string>();
+    for (const robot of dataRef.current.robotModels) {
+      const name = resourceNameOf(robot);
+      if (!name) continue;
+      const detail = resourceDetails.current.get(name);
+      const summary = resourcePages.robotModels?.summaries.find((item) => item.name === name);
+      const revision = detail?.currentRevision || summary?.currentRevision;
+      if (revision) robotRevisionNameById.set(robot.id, revision);
+    }
+    return {
+      customerNameById: new Map(dataRef.current.customers.flatMap((item) => {
+        const name = resourceNameOf(item);
+        return name ? [[item.id, name] as const] : [];
+      })),
+      robotRevisionNameById,
+      attachmentNameById: attachmentResourceNames,
+      attachmentByName: attachmentFormFromName,
+      taskRevisionName: (item: RequirementVersion['selectedSubscenes'][number]) =>
+        revisionNameOf(findTaskSop(dataRef.current.scenes, item)?.version),
+    };
+  }
+
+  function updateResourceEtag(kind: 'taskSops' | 'requirements', detail: ResourceDetail) {
+    rememberResourceDetail(kind, detail);
+    setData((current) => {
+      if (kind === 'requirements') {
+        return {
+          ...current,
+          requirements: current.requirements.map((item) => resourceNameOf(item) === detail.name
+            ? Object.assign(item, { __resourceEtag: detail.etag, __resourceLoaded: true })
+            : item),
+        };
+      }
+      return {
+        ...current,
+        scenes: current.scenes.map((scene) => ({
+          ...scene,
+          subscenes: scene.subscenes.map((item) => resourceNameOf(item) === detail.name
+            ? Object.assign(item, { __resourceEtag: detail.etag, __resourceLoaded: true })
+            : item),
+        })),
+      };
+    });
+  }
+
+  function replaceRequirementVersion(resourceName: string, next: RequirementVersion) {
+    setData((current) => ({
+      ...current,
+      requirements: current.requirements.map((requirement) => resourceNameOf(requirement) === resourceName
+        ? { ...requirement, versions: requirement.versions.map((version) => version.version === next.version ? next : version) }
+        : requirement),
+    }));
+  }
+
+  function replaceTaskSopVersion(resourceName: string, next: SubsceneVersion) {
+    setData((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => ({
+        ...scene,
+        subscenes: scene.subscenes.map((subscene) => resourceNameOf(subscene) === resourceName
+          ? { ...subscene, versions: subscene.versions.map((version) => version.version === next.version ? next : version) }
+          : subscene),
+      })),
+    }));
+  }
+
+  async function saveRequirementDraft(
+    requirement: Requirement,
+    selected: RequirementVersion,
+    patch: Partial<RequirementVersion>,
+  ): Promise<RequirementVersion | undefined> {
+    const name = resourceNameOf(requirement);
+    if (!name) throw new Error('客户需求资源尚未创建');
+    let detail = resourceDetails.current.get(name) ?? await resourceClient.get('requirements', name);
+    let base = selected;
+    if (selected.status === 'confirmed') {
+      const started = await resourceClient.startDraft('requirements', name, detail.etag);
+      saveQueues.current.remove(name);
+      const revisions = await loadRevisionDetails('requirements', name);
+      const loaded = replaceRequirementResource(started.resource, revisions);
+      detail = started.resource;
+      base = latest(loaded.versions);
+      setSelectedRequirementVersion(base.version);
+    }
+    const next = { ...base, ...patch, status: 'draft' as const };
+    let queue = saveQueues.current.get<RequirementVersion>(name);
+    if (!queue) {
+      queue = saveQueues.current.register('requirements', {
+        resourceName: name,
+        initial: { value: base, etag: detail.etag },
+        transport: createApiResourceSaveTransport<RequirementVersion>({
+          client: resourceClient,
+          kind: 'requirements',
+          encode: (value) => {
+            const authoritative = resourceDetails.current.get(name);
+            if (!authoritative) throw new Error(`资源详情未加载：${name}`);
+            return encodeRequirementVersion(value, authoritative.resource, requirementContext());
+          },
+          decode: (resource) => {
+            const versions = decodeRequirementVersions(resource, [], requirementContext());
+            if (!versions.length) throw new Error(`客户需求当前版本不可编辑：${name}`);
+            return latest(versions);
+          },
+          onDetail: (value) => updateResourceEtag('requirements', value),
+        }),
+      });
+    }
+    replaceRequirementVersion(name, next);
+    const state = await queue.submit(next);
+    if (state.kind === 'paused-conflict' || state.kind === 'paused-retryable' || state.kind === 'paused-terminal') {
+      setError(state.message);
+      return undefined;
+    }
+    const saved = queue.localValue;
+    replaceRequirementVersion(name, saved);
+    return saved;
+  }
+
+  async function saveTaskSopDraft(
+    subscene: Subscene,
+    selected: SubsceneVersion,
+    patch: Partial<SubsceneVersion>,
+  ): Promise<SubsceneVersion | undefined> {
+    const name = resourceNameOf(subscene);
+    if (!name) throw new Error('任务 SOP 资源尚未创建');
+    let detail = resourceDetails.current.get(name) ?? await resourceClient.get('taskSops', name);
+    let base = selected;
+    if (selected.status === 'confirmed') {
+      const started = await resourceClient.startDraft('taskSops', name, detail.etag);
+      saveQueues.current.remove(name);
+      const revisions = await loadRevisionDetails('taskSops', name);
+      const loaded = replaceTaskSopResource(started.resource, revisions).subscene;
+      detail = started.resource;
+      base = latest(loaded.versions);
+      setSelectedSubsceneVersion(base.version);
+    }
+    const next = { ...base, ...patch, status: 'draft' as const };
+    let queue = saveQueues.current.get<SubsceneVersion>(name);
+    if (!queue) {
+      queue = saveQueues.current.register('taskSops', {
+        resourceName: name,
+        initial: { value: base, etag: detail.etag },
+        transport: createApiResourceSaveTransport<SubsceneVersion>({
+          client: resourceClient,
+          kind: 'taskSops',
+          encode: (value) => {
+            const authoritative = resourceDetails.current.get(name);
+            if (!authoritative) throw new Error(`资源详情未加载：${name}`);
+            return encodeTaskSopVersion(value, authoritative.resource, taskSopContext());
+          },
+          decode: (resource) => {
+            const versions = decodeTaskSopVersions(resource, [], taskSopContext());
+            if (!versions.length) throw new Error(`任务 SOP 当前版本不可编辑：${name}`);
+            return latest(versions);
+          },
+          onDetail: (value) => updateResourceEtag('taskSops', value),
+        }),
+      });
+    }
+    replaceTaskSopVersion(name, next);
+    const state = await queue.submit(next);
+    if (state.kind === 'paused-conflict' || state.kind === 'paused-retryable' || state.kind === 'paused-terminal') {
+      setError(state.message);
+      return undefined;
+    }
+    const saved = queue.localValue;
+    replaceTaskSopVersion(name, saved);
+    return saved;
+  }
+
+  async function confirmRoot(kind: 'taskSops' | 'requirements', value: Subscene | Requirement) {
+    const name = resourceNameOf(value);
+    if (!name) throw new Error('资源尚未创建');
+    const pendingQueue = saveQueues.current.get(name);
+    if (pendingQueue) {
+      await pendingQueue.whenSettled();
+      if (pendingQueue.hasUnsavedChanges) throw new Error('仍有尚未成功保存的本地修改，处理保存冲突后才能确认版本');
+    }
+    const detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
+    let flow = reviewFlows.current.get(name);
+    if (!flow || flow.state.kind === 'confirmed') {
+      flow = new DependencyReviewFlow({ api: resourceClient, kind, resourceName: name, initialEtag: detail.etag });
+      reviewFlows.current.set(name, flow);
+    }
+    await flow.requestConfirmation();
+    if (flow.state.kind === 'review-required') {
+      const proposal = flow.state.proposal;
+      const count = proposal.added.length + proposal.changed.length + proposal.removed.length;
+      if (!window.confirm(`确认冻结当前直接依赖？本次审阅包含 ${count} 项变化。确认后请再次点击“确认”完成版本冻结。`)) {
+        flow.cancel();
+        return;
+      }
+      await flow.accept();
+      const acceptedState = flow.state as { kind: string };
+      if (acceptedState.kind === 'acknowledged') {
+        const next = await resourceClient.get(kind, name);
+        updateResourceEtag(kind, next);
+        setMessage('依赖审阅已确认，请再次点击确认版本');
+        return;
+      }
+    }
+    if (flow.state.kind === 'confirmed') {
+      const result = flow.state.result;
+      const revisions = await loadRevisionDetails(kind, name);
+      if (kind === 'requirements') {
+        const loaded = replaceRequirementResource(result.resource, revisions);
+        setSelectedRequirementVersion(latest(loaded.versions).version);
+      } else {
+        const loaded = replaceTaskSopResource(result.resource, revisions).subscene;
+        setSelectedSubsceneVersion(latest(loaded.versions).version);
+      }
+      reviewFlows.current.delete(name);
+      setMessage(kind === 'requirements' ? '客户需求版本已确认' : '任务 SOP 版本已确认');
+      return;
+    }
+    if (flow.state.kind === 'failed') throw new Error(flow.state.message);
+  }
+
+  async function exportYaml(version: RequirementVersion | SubsceneVersion): Promise<ExportResult> {
+    const name = revisionNameOf(version);
+    if (!name || !revisionExportEligible(version)) throw new Error('只有已确认且可导出的历史版本可以导出 YAML');
+    const response = await resourceClient.exportRevision(name, 'yaml');
+    return { yaml: await response.text(), path: `/api/revisions/${encodeURIComponent(name)}/export.yaml` };
+  }
+
+  async function exportPdf(version: RequirementVersion | SubsceneVersion): Promise<void> {
+    const name = revisionNameOf(version);
+    if (!name || !revisionExportEligible(version)) throw new Error('只有已确认且可导出的历史版本可以导出 PDF');
+    const response = await resourceClient.exportRevision(name, 'pdf');
+    exportPdfModel(await response.json() as PdfDocumentModel);
+  }
+
+  function applyQueueValue(kind: ResourceKind, name: string, value: unknown) {
+    if (kind === 'requirements') {
+      replaceRequirementVersion(name, value as RequirementVersion);
+      return;
+    }
+    if (kind === 'taskSops') {
+      replaceTaskSopVersion(name, value as SubsceneVersion);
+      return;
+    }
+    if (['customers', 'materials', 'robotModels', 'scenes', 'globalFields'].includes(kind)) {
+      replaceMasterValue(
+        kind as MasterResourceKind,
+        markResourceDraftSync(value as MasterResourceValue, ++masterDraftSyncSequence.current),
+      );
+    }
+  }
+
+  async function loadMoreResources(kind: ResourceKind): Promise<void> {
+    const currentPage = resourcePages[kind];
+    if (!currentPage?.nextCursor || currentPage.loadingMore) return;
+    setResourcePages((current) => ({
+      ...current,
+      [kind]: { ...currentPage, loadingMore: true, error: undefined },
+    }));
+    try {
+      const page = await resourceClient.list(kind, { cursor: currentPage.nextCursor });
+      setResourcePages((current) => ({
+        ...current,
+        [kind]: {
+          summaries: appendUniqueResourceSummaries(current[kind]?.summaries ?? [], page.items),
+          nextCursor: page.nextCursor,
+          loadingMore: false,
+        },
+      }));
+      if (['customers', 'materials', 'robotModels', 'scenes', 'globalFields'].includes(kind)) {
+        for (const summary of page.items) {
+          const value = bindResource(masterPlaceholder(kind as MasterResourceKind, summary), summary, false);
+          if (kind === 'scenes') {
+            (value as Scene).subscenes = (resourcePages.taskSops?.summaries ?? [])
+              .filter((task) => task.sceneName === summary.name)
+              .map(taskPlaceholder);
+          }
+          replaceMasterValue(kind as MasterResourceKind, value);
+        }
+      } else if (kind === 'requirements') {
+        setData((current) => ({ ...current, requirements: [...current.requirements, ...page.items.map(requirementPlaceholder)] }));
+      } else if (kind === 'materialStateRules') {
+        setData((current) => ({
+          ...current,
+          materialStateRules: appendMaterialStateRuleSummaries(current.materialStateRules, page.items),
+        }));
+      } else if (kind === 'taskSops') {
+        setData((current) => ({
+          ...current,
+          scenes: appendTaskSopSummariesToScenes(current.scenes, page.items),
+        }));
+      }
+    } catch (cause) {
+      setResourcePages((current) => ({
+        ...current,
+        [kind]: {
+          ...(current[kind] ?? { summaries: [] }), loadingMore: false,
+          error: cause instanceof Error ? cause.message : String(cause),
+        },
+      }));
+    }
+  }
 
   function setPage(pageName: Page, options: { keepDetail?: boolean } = {}) {
     setPageState(pageName);
@@ -1364,26 +2090,66 @@ export default function App() {
   }
 
   async function load() {
+    if (saveQueues.current.hasUnsavedChanges &&
+      !window.confirm('仍有尚未保存的本地修改，确定重新加载服务器数据吗？')) return;
     setLoading(true);
     setError('');
+    setLoadFailure('');
     try {
-      const next = await api.data();
-      const storage = await api.storageStatus().catch(() => ({ attachments: defaultAttachmentStorageStatus }));
+      const kinds = [
+        'customers', 'materials', 'robotModels', 'scenes', 'globalFields', 'materialStateRules', 'taskSops', 'requirements',
+      ] as const satisfies readonly ResourceKind[];
+      const results = await Promise.all(kinds.map(async (kind) => {
+        if (kind !== 'materialStateRules' && kind !== 'scenes') {
+          return [kind, await resourceClient.list(kind)] as const;
+        }
+        let summaries: ResourceSummary[] = [];
+        // Rules have no page of their own, and every Task SOP summary must have
+        // its parent scene available. Exhaust only these summary catalogs;
+        // detail Proto remains lazy.
+        for await (const page of resourceClient.listPages(kind, { pageSize: 200 })) {
+          summaries = appendUniqueResourceSummaries(summaries, page.items);
+        }
+        return [kind, { items: summaries, nextCursor: undefined }] as const;
+      }));
+      const pages = Object.fromEntries(results.map(([kind, result]) => [kind, {
+        summaries: result.items,
+        nextCursor: result.nextCursor,
+      }])) as Partial<Record<ResourceKind, ResourcePageState>>;
+      const next = createEmptyAppViewModel();
+      next.customers = (pages.customers?.summaries ?? []).map(customerPlaceholder);
+      next.materials = (pages.materials?.summaries ?? []).map(materialPlaceholder);
+      next.robotModels = (pages.robotModels?.summaries ?? []).map(robotPlaceholder);
+      next.scenes = (pages.scenes?.summaries ?? []).map(scenePlaceholder);
+      next.globalFields = (pages.globalFields?.summaries ?? []).map(globalFieldPlaceholder);
+      next.materialStateRules = appendMaterialStateRuleSummaries([], pages.materialStateRules?.summaries ?? []);
+      next.requirements = (pages.requirements?.summaries ?? []).map(requirementPlaceholder);
+
+      next.scenes = appendTaskSopSummariesToScenes(next.scenes, pages.taskSops?.summaries ?? []);
+
+      resourceDetails.current.clear();
+      attachmentResourceNames.clear();
+      attachmentForms.clear();
+      saveQueues.current.clear(true);
+      reviewFlows.current.clear();
+      setResourcePages(pages);
       setData(next);
-      setAttachmentStorageStatus(storage.attachments);
+      setAttachmentStorageStatus({ enabled: true, message: '附件使用资源级存储，单个文件最大 100 MiB。' });
       setLocked(false);
       setSelectedRequirementId((current) => current || next.requirements[0]?.id || '');
       setSelectedSceneId((current) => current || next.scenes[0]?.id || '');
       setSelectedSubsceneCode((current) => current || next.scenes[0]?.subscenes[0]?.code || '');
     } catch (err) {
       const message = err instanceof Error ? err.message : '加载失败';
-      if (isAuthError(message)) {
+      if ((err instanceof ApiClientError && err.body?.error.kind === 'UNAUTHORIZED') || isAuthError(message)) {
         const hadPassword = Boolean(storedPassword());
         clearStoredPassword();
         setLocked(true);
         setError(hadPassword ? message : '');
       } else {
-        setError(message);
+        // An authoritative-load failure must never fall through to empty,
+        // editable forms. Keep it durable until an explicit retry succeeds.
+        setLoadFailure(message);
       }
     } finally {
       setLoading(false);
@@ -1436,12 +2202,18 @@ export default function App() {
     }
   }
 
+  const saveNotices = saveQueues.current.states.filter(({ state }) => state.kind.startsWith('paused-') || state.warning);
+
   if (loading) {
     return <div className="loading">正在加载 SOP 需求管理...</div>;
   }
 
   if (locked) {
     return <PasswordGate error={error} onUnlock={() => void load()} />;
+  }
+
+  if (loadFailure) {
+    return <BlockingLoadFailure message={loadFailure} onRetry={() => void load()} />;
   }
 
   return (
@@ -1483,6 +2255,38 @@ export default function App() {
             {error && <div className="notice error">{error}</div>}
           </div>
         )}
+        {saveNotices.length > 0 && (
+          <div className="toast-stack save-state-stack" aria-live="polite">
+            {saveNotices.map(({ kind, resourceName, state }) => {
+              const queue = saveQueues.current.get<unknown>(resourceName);
+              if (!queue) return null;
+              return (
+                <div className={`notice ${state.kind === 'paused-conflict' ? 'warning' : state.kind.startsWith('paused-') ? 'error' : 'warning'}`} key={resourceName}>
+                  <strong>{resourceName}</strong>
+                  <span>{state.kind === 'paused-conflict' || state.kind === 'paused-retryable' || state.kind === 'paused-terminal'
+                    ? state.message
+                    : `资源行已达到 ${state.warning?.measuredBytes ?? 0} bytes`}</span>
+                  <span className="button-row">
+                    {state.kind === 'paused-conflict' && (
+                      <>
+                        <button className="text-button" onClick={() => void copyTextToClipboard(JSON.stringify(queue.localValue, null, 2))}>复制本地修改</button>
+                        <button className="text-button" onClick={() => {
+                          if (!window.confirm('确定丢弃本地修改并重新加载服务器版本吗？')) return;
+                          queue.reloadServer(true);
+                          applyQueueValue(kind, resourceName, queue.localValue);
+                        }}>加载服务器版本</button>
+                      </>
+                    )}
+                    {(state.kind === 'paused-retryable' || state.kind === 'paused-terminal') && (
+                      <button className="text-button" onClick={() => void queue.retry().then(() => applyQueueValue(kind, resourceName, queue.localValue))}>重试</button>
+                    )}
+                    {state.warning && <button className="text-button" onClick={() => queue.dismissWarning()}>知道了</button>}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {page === 'requirements' && (
           <RequirementPage
@@ -1492,83 +2296,100 @@ export default function App() {
             selectedVersion={requirementVersion}
             detailOpen={requirementDetailOpen}
             onDetailOpenChange={setRequirementDetailOpen}
-            onSelectRequirement={(id) => {
+            onSelectRequirement={async (id) => {
               const target = data.requirements.find((item) => item.id === id);
               setSelectedRequirementId(id);
-              setSelectedRequirementVersion(target ? latest(target.versions).version : '');
+              if (!target) {
+                setSelectedRequirementVersion('');
+                return;
+              }
+              const loaded = await openRequirementResource(target);
+              setSelectedRequirementId(loaded.id);
+              setSelectedRequirementVersion(latest(loaded.versions).version);
             }}
             onSelectVersion={setSelectedRequirementVersion}
             onCreate={async () => {
+              const draft = {
+                ...emptyRequirementVersion('新的客户需求'),
+                customerId: data.customers[0]?.id || '',
+                robotModelId: data.robotModels[0]?.id || '',
+              };
               const result = await run(
-                () =>
-                  api.createRequirement({
-                    title: '新的客户需求',
-                    projectName: '',
-                    priority: 'P2',
-                    deadline: today(),
-                    customerId: data.customers[0]?.id || '',
-                    robotModelId: data.robotModels[0]?.id || '',
-                    requestedScenes: [],
-                    selectedSubscenes: [],
-                  }),
+                () => resourceClient.create('requirements', createRequirementResource(draft, requirementContext())),
                 '已新建客户需求',
               );
               if (result) {
-                setData((current) => ({ ...current, requirements: result }));
-                const created = result[result.length - 1];
+                const created = replaceRequirementResource(result.resource, []);
                 setSelectedRequirementId(created.id);
                 setSelectedRequirementVersion(latest(created.versions).version);
               }
             }}
             onSave={async (patch) => {
-              if (!selectedRequirement || !requirementVersion) return;
+              if (!selectedRequirement || !requirementVersion) return false;
               const result = await run(
-                () => api.saveRequirement(selectedRequirement.id, { ...patch, baseVersion: requirementVersion.version }),
+                () => saveRequirementDraft(selectedRequirement, requirementVersion, patch),
                 requirementVersion.status === 'confirmed' ? '已创建草稿版本' : '已保存客户需求',
               );
-              if (result) {
-                setData((current) => ({ ...current, requirements: result }));
-                const updated = result.find((item) => item.id === selectedRequirement.id);
-                if (updated) setSelectedRequirementVersion(latest(updated.versions).version);
-              }
+              return Boolean(result);
             }}
             onDeleteVersion={async () => {
               if (!selectedRequirement || !requirementVersion) return;
+              const name = resourceNameOf(selectedRequirement);
+              const detail = name ? resourceDetails.current.get(name) : undefined;
+              if (!name || !detail) return;
               const result = await run(
-                () => api.deleteRequirementVersion(selectedRequirement.id, requirementVersion.version),
+                () => resourceClient.discardDraft('requirements', name, detail.etag),
                 '草稿版本已删除',
               );
               if (result) {
-                setData((current) => ({ ...current, requirements: result }));
-                const updated = result.find((item) => item.id === selectedRequirement.id);
-                setSelectedRequirementVersion(updated ? latest(updated.versions).version : '');
+                saveQueues.current.remove(name);
+                if (result.resource.archived || result.resource.lifecycle?.endsWith('ARCHIVED')) {
+                  setData((current) => ({ ...current, requirements: current.requirements.filter((item) => resourceNameOf(item) !== name) }));
+                  setRequirementDetailOpen(false);
+                  setSelectedRequirementId('');
+                  setSelectedRequirementVersion('');
+                } else {
+                  const revisions = await loadRevisionDetails('requirements', name);
+                  const updated = replaceRequirementResource(result.resource, revisions);
+                  setSelectedRequirementVersion(latest(updated.versions).version);
+                }
               }
             }}
             onConfirm={async () => {
               if (!selectedRequirement || !requirementVersion) return;
-              const result = await run(
-                () => api.confirmRequirement(selectedRequirement.id, requirementVersion.version),
-                '客户需求版本已确认',
-              );
-              if (result) setData((current) => ({ ...current, requirements: result }));
+              await run(() => confirmRoot('requirements', selectedRequirement), '客户需求版本已确认');
             }}
             onExport={async () => {
               if (!selectedRequirement || !requirementVersion) return undefined;
-              return run(() => api.exportYaml(selectedRequirement.id, requirementVersion.version), 'YAML 已导出');
+              return run(() => exportYaml(requirementVersion), 'YAML 已导出');
+            }}
+            onExportPdf={async () => {
+              if (!requirementVersion) return;
+              await run(() => exportPdf(requirementVersion), 'PDF 已生成');
             }}
             onRun={run}
             attachmentStorageStatus={attachmentStorageStatus}
-            onRequirementsChange={(requirements) => setData((current) => ({ ...current, requirements }))}
-            onOpenSubscene={(code, version) => {
-              const target = findSubscene(data.scenes, code, version);
-              if (!target || !selectedRequirement || !requirementVersion) return;
+            onOpenSubscene={(sceneId, code, version) => {
+              const targetScene = data.scenes.find((item) => item.id === sceneId);
+              const targetSubscene = targetScene?.subscenes.find((item) => item.code === code);
+              if (!targetScene || !targetSubscene || !selectedRequirement || !requirementVersion) return;
               setReturnToRequirement({ requirementId: selectedRequirement.id, version: requirementVersion.version });
-              setSelectedSceneId(target.scene.id);
-              setSelectedSubsceneCode(target.subscene.code);
+              setSelectedSceneId(targetScene.id);
+              setSelectedSubsceneCode(targetSubscene.code);
               setSelectedSubsceneVersion(version);
               setSceneDetailOpen(true);
               setPage('scenes', { keepDetail: true });
             }}
+            pageState={resourcePages.requirements}
+            onLoadMore={() => void loadMoreResources('requirements')}
+            customerPageState={resourcePages.customers}
+            onLoadMoreCustomers={() => void loadMoreResources('customers')}
+            robotPageState={resourcePages.robotModels}
+            onLoadMoreRobots={() => void loadMoreResources('robotModels')}
+            globalFieldPageState={resourcePages.globalFields}
+            onLoadMoreGlobalFields={() => void loadMoreResources('globalFields')}
+            taskSopPageState={resourcePages.taskSops}
+            onLoadMoreTaskSops={() => void loadMoreResources('taskSops')}
           />
         )}
 
@@ -1586,15 +2407,20 @@ export default function App() {
               setSelectedSceneId(id);
               setSelectedSubsceneCode(target?.subscenes[0]?.code || '');
               setSelectedSubsceneVersion('');
+              if (target) void openMasterDetail('scenes', target).catch((cause) => {
+                setError(cause instanceof Error ? cause.message : String(cause));
+              });
             }}
-            onSelectSubscene={setSelectedSubsceneCode}
+            onSelectSubscene={async (code) => {
+              setSelectedSubsceneCode(code);
+              const loaded = await openTaskSopResource(selectedSceneId, code);
+              if (loaded) setSelectedSubsceneVersion(latest(loaded.versions).version);
+            }}
             onSelectVersion={setSelectedSubsceneVersion}
             onDetailOpenChange={setSceneDetailOpen}
             onSaveScene={async (scene) => {
-              const result = await run(() => api.saveScene(scene), '场景已保存');
-              if (result) {
-                setData((current) => ({ ...current, scenes: result }));
-                const savedScene = result.find((item) => item.id === scene.id) || result[result.length - 1];
+              const savedScene = await run(() => saveMaster('scenes', scene), '场景已保存');
+              if (savedScene) {
                 setSelectedSceneId(savedScene?.id || '');
                 const preservedSubscene = savedScene?.subscenes.some((item) => item.code === selectedSubsceneCode)
                   ? selectedSubsceneCode
@@ -1603,39 +2429,98 @@ export default function App() {
               }
             }}
             onSaveSubscene={async (sceneId, code, patch) => {
-              const target = data.scenes
-                .find((item) => item.id === sceneId)
-                ?.subscenes.find((item) => item.code === code)
-                ?.versions.find((item) => item.version === patch.baseVersion);
-              const result = await run(
-                () => api.saveSubscene(sceneId, code, patch),
-                target?.status === 'confirmed' ? '已创建草稿版本' : '已保存任务 SOP 版本',
+              const scene = dataRef.current.scenes.find((item) => item.id === sceneId);
+              const subscene = scene?.subscenes.find((item) => item.code === code);
+              const target = subscene?.versions.find((item) => item.version === patch.baseVersion) ||
+                (subscene ? latest(subscene.versions) : undefined);
+              if (!scene) return false;
+              if (!subscene || !target) {
+                const sceneName = resourceNameOf(scene);
+                if (!sceneName) throw new Error('请先保存场景，再创建任务 SOP');
+                const draft = {
+                  ...emptySubsceneVersionDraft(patch.title || '新的任务 SOP'),
+                  ...patch,
+                  version: '1.0.0',
+                  status: 'draft',
+                  sceneName: scene.name,
+                  subsceneName: patch.title || '新的任务 SOP',
+                  updatedAt: new Date().toISOString(),
+                } as SubsceneVersion;
+                const created = await run(
+                  () => resourceClient.create('taskSops', createTaskSopResource(draft, sceneName, code, taskSopContext())),
+                  '已新建任务 SOP',
+                );
+                if (created) {
+                  const loaded = replaceTaskSopResource(created.resource, []);
+                  setSelectedSubsceneCode(loaded.identity.code);
+                  setSelectedSubsceneVersion(latest(loaded.subscene.versions).version);
+                }
+                return Boolean(created);
+              }
+              const saved = await run(
+                () => saveTaskSopDraft(subscene, target, patch),
+                target.status === 'confirmed' ? '已创建草稿版本' : '已保存任务 SOP 版本',
               );
-              if (result) setData((current) => ({ ...current, scenes: result }));
+              return Boolean(saved);
             }}
             onDeleteSubsceneVersion={async (sceneId, code, version) => {
-              const result = await run(() => api.deleteSubsceneVersion(sceneId, code, version), '草稿版本已删除');
-              if (result) setData((current) => ({ ...current, scenes: result }));
+              const subscene = dataRef.current.scenes.find((item) => item.id === sceneId)?.subscenes.find((item) => item.code === code);
+              const name = resourceNameOf(subscene);
+              const detail = name ? resourceDetails.current.get(name) : undefined;
+              if (!subscene || !name || !detail) return;
+              const result = await run(() => resourceClient.discardDraft('taskSops', name, detail.etag), '草稿版本已删除');
+              if (!result) return;
+              saveQueues.current.remove(name);
+              if (result.resource.archived || result.resource.lifecycle?.endsWith('ARCHIVED')) {
+                setData((current) => ({
+                  ...current,
+                  scenes: current.scenes.map((item) => ({
+                    ...item,
+                    subscenes: item.subscenes.filter((candidate) => resourceNameOf(candidate) !== name),
+                  })),
+                }));
+                setSceneDetailOpen(false);
+                setSelectedSubsceneCode('');
+                setSelectedSubsceneVersion('');
+              } else {
+                const revisions = await loadRevisionDetails('taskSops', name);
+                const loaded = replaceTaskSopResource(result.resource, revisions).subscene;
+                setSelectedSubsceneVersion(latest(loaded.versions).version);
+              }
             }}
             onConfirmSubscene={async (sceneId, code, version) => {
-              const result = await run(() => api.confirmSubscene(sceneId, code, version), '任务 SOP 版本已确认');
-              if (result) setData((current) => ({ ...current, scenes: result }));
+              const subscene = dataRef.current.scenes.find((item) => item.id === sceneId)?.subscenes.find((item) => item.code === code);
+              if (!subscene) return;
+              await run(() => confirmRoot('taskSops', subscene), '任务 SOP 版本已确认');
+            }}
+            onExportSubscene={async (version) => run(() => exportYaml(version), '任务 SOP YAML 已生成')}
+            onExportSubscenePdf={async (version) => {
+              await run(() => exportPdf(version), 'PDF 已生成');
             }}
             onRun={run}
             attachmentStorageStatus={attachmentStorageStatus}
-            onScenesChange={(scenes) => setData((current) => ({ ...current, scenes }))}
             returnToRequirement={returnToRequirement}
             onReturnToRequirement={openRequirementFromSubscene}
             onClearReturnToRequirement={() => setReturnToRequirement(null)}
+            pageState={resourcePages.scenes}
+            onLoadMoreScenes={() => void loadMoreResources('scenes')}
+            taskPageState={resourcePages.taskSops}
+            onLoadMoreTaskSops={() => void loadMoreResources('taskSops')}
+            materialPageState={resourcePages.materials}
+            onLoadMoreMaterials={() => void loadMoreResources('materials')}
+            globalFieldPageState={resourcePages.globalFields}
+            onLoadMoreGlobalFields={() => void loadMoreResources('globalFields')}
           />
         )}
 
         {page === 'globalFields' && (
           <GlobalFieldPage
             globalFields={data.globalFields}
+            onOpenField={(field) => openMasterDetail('globalFields', field) as Promise<GlobalField>}
+            pageState={resourcePages.globalFields}
+            onLoadMore={() => void loadMoreResources('globalFields')}
             onSaveField={async (field) => {
-              const result = await run(() => api.saveGlobalField(field), '全局字段已保存');
-              if (result) setData((current) => ({ ...current, globalFields: result }));
+              await run(() => saveMaster('globalFields', field), '全局字段已保存');
             }}
           />
         )}
@@ -1643,9 +2528,11 @@ export default function App() {
         {page === 'customers' && (
           <CustomerPage
             customers={data.customers}
+            onOpen={(customer) => openMasterDetail('customers', customer) as Promise<Customer>}
+            pageState={resourcePages.customers}
+            onLoadMore={() => void loadMoreResources('customers')}
             onSave={async (customer) => {
-              const result = await run(() => api.saveCustomer(customer), '客户信息已保存');
-              if (result) setData((current) => ({ ...current, customers: result }));
+              return run(() => saveMaster('customers', customer), '客户信息已保存');
             }}
           />
         )}
@@ -1653,12 +2540,16 @@ export default function App() {
           <MaterialPage
             materials={data.materials}
             storageStatus={attachmentStorageStatus}
-            onMaterialsChange={(materials) => setData((current) => ({ ...current, materials }))}
+            onOpen={(material) => openMasterDetail('materials', material) as Promise<Material>}
+            pageState={resourcePages.materials}
+            onLoadMore={() => void loadMoreResources('materials')}
             onSave={async (material) => {
               const existing = data.materials.find((item) => item.id === material.id);
-              const result = await run(() => api.saveMaterial({ ...material, images: material.images || existing?.images || [] }), '保存成功');
+              const result = await run(
+                () => saveMaster('materials', { ...material, images: material.images || existing?.images || [] }),
+                '保存成功',
+              );
               if (result) {
-                setData((current) => ({ ...current, materials: result }));
                 return true;
               }
               return false;
@@ -1668,14 +2559,34 @@ export default function App() {
         {page === 'robots' && (
           <RobotPage
             robots={data.robotModels}
+            onOpen={(robot) => openMasterDetail('robotModels', robot) as Promise<RobotModel>}
+            pageState={resourcePages.robotModels}
+            onLoadMore={() => void loadMoreResources('robotModels')}
             onSave={async (robot) => {
-              const result = await run(() => api.saveRobot(robot), '机器型号已保存');
-              if (result) setData((current) => ({ ...current, robotModels: result }));
+              return run(() => saveMaster('robotModels', robot), '机器型号已保存');
             }}
           />
         )}
       </main>
     </div>
+  );
+}
+
+function BlockingLoadFailure({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <main className="auth-screen" aria-live="assertive">
+      <section className="auth-panel" role="alert">
+        <div className="brand-mark">SOP</div>
+        <div>
+          <h1>暂时无法加载业务数据</h1>
+          <p>系统尚未初始化或存储暂时不可用。为避免覆盖现有数据，编辑功能已停用。</p>
+        </div>
+        <div className="notice error">{message}</div>
+        <button type="button" className="primary-button" onClick={onRetry}>
+          重新加载
+        </button>
+      </section>
+    </main>
   );
 }
 
@@ -2277,10 +3188,20 @@ function RequirementPage({
   onDeleteVersion,
   onConfirm,
   onExport,
+  onExportPdf,
   onRun,
   attachmentStorageStatus,
-  onRequirementsChange,
   onOpenSubscene,
+  pageState,
+  onLoadMore,
+  customerPageState,
+  onLoadMoreCustomers,
+  robotPageState,
+  onLoadMoreRobots,
+  globalFieldPageState,
+  onLoadMoreGlobalFields,
+  taskSopPageState,
+  onLoadMoreTaskSops,
 }: {
   data: AppViewModel;
   globalFields: GlobalField[];
@@ -2288,17 +3209,27 @@ function RequirementPage({
   selectedVersion?: RequirementVersion;
   detailOpen: boolean;
   onDetailOpenChange: (open: boolean) => void;
-  onSelectRequirement: (id: string) => void;
+  onSelectRequirement: (id: string) => Promise<void>;
   onSelectVersion: (version: string) => void;
   onCreate: () => Promise<void>;
-  onSave: (patch: Partial<RequirementVersion>) => Promise<void>;
+  onSave: (patch: Partial<RequirementVersion>) => Promise<boolean>;
   onDeleteVersion: () => Promise<void>;
   onConfirm: () => Promise<void>;
   onExport: () => Promise<ExportResult | undefined>;
+  onExportPdf: () => Promise<void>;
   onRun: <T>(action: () => Promise<T>, success: string) => Promise<T | undefined>;
   attachmentStorageStatus: AttachmentStorageStatus;
-  onRequirementsChange: (requirements: Requirement[]) => void;
-  onOpenSubscene: (code: string, version: string) => void;
+  onOpenSubscene: (sceneId: string, code: string, version: string) => void;
+  pageState?: ResourcePageState;
+  onLoadMore: () => void;
+  customerPageState?: ResourcePageState;
+  onLoadMoreCustomers: () => void;
+  robotPageState?: ResourcePageState;
+  onLoadMoreRobots: () => void;
+  globalFieldPageState?: ResourcePageState;
+  onLoadMoreGlobalFields: () => void;
+  taskSopPageState?: ResourcePageState;
+  onLoadMoreTaskSops: () => void;
 }) {
   const [yamlPreview, setYamlPreview] = useState('');
   const [exportPath, setExportPath] = useState('');
@@ -2568,7 +3499,7 @@ function RequirementPage({
             onClick={() => {
               const target = findTaskSop(data.scenes, item);
               const version = taskSopVersion(item);
-              if (target && version) onOpenSubscene(target.subscene.code, version);
+              if (target && version) onOpenSubscene(target.scene.id, target.subscene.code, version);
             }}
           >
             查看
@@ -2625,8 +3556,8 @@ function RequirementPage({
     },
   ];
 
-  function openRequirementDetail(id: string) {
-    onSelectRequirement(id);
+  async function openRequirementDetail(id: string) {
+    await onSelectRequirement(id);
     setYamlPreview('');
     setExportPath('');
     onDetailOpenChange(true);
@@ -2657,9 +3588,16 @@ function RequirementPage({
             count={filteredRequirements.length}
             onQueryChange={setRequirementQuery}
             actions={
-              <button className="primary-button" onClick={() => void createRequirementAndOpen()}>
-                新建需求
-              </button>
+              <>
+                {(pageState?.nextCursor || pageState?.error) && (
+                  <button className="ghost-button" disabled={pageState.loadingMore} onClick={onLoadMore}>
+                    {pageState.loadingMore ? '正在加载…' : '加载更多'}
+                  </button>
+                )}
+                <button className="primary-button" onClick={() => void createRequirementAndOpen()}>
+                  新建需求
+                </button>
+              </>
             }
           />
           <DataTable
@@ -2674,7 +3612,8 @@ function RequirementPage({
     );
   }
 
-  const readonly = selectedVersion.status === 'confirmed';
+  const checkpoint = revisionIsCheckpoint(selectedVersion);
+  const readonly = selectedVersion.status === 'confirmed' || checkpoint;
   const selectedAllowedOperations = selectedVersion.allowedOperations.map((item) => item.operation);
   const selectedAcceptableOperations = (selectedVersion.acceptableOperations || []).map((item) => item.operation);
   const selectedForbiddenOperations = selectedVersion.forbiddenOperations.flatMap((group) =>
@@ -2760,53 +3699,24 @@ function RequirementPage({
 
   async function uploadRequirementAttachment(file: File) {
     if (!selectedRequirement || !selectedVersion || readonly) return;
-    if (file.size > 1024 * 1024 * 1024) {
-      window.alert('单个附件不能超过 1G');
+    const ownerName = resourceNameOf(selectedRequirement);
+    if (!ownerName) throw new Error('客户需求资源尚未创建');
+    if (file.size > attachmentMaxSizeBytes) {
+      window.alert('单个附件不能超过 100 MiB');
       return;
     }
-    let uploadInit: AttachmentUploadInit | undefined;
     try {
       setAttachmentUpload({ fileName: file.name, progress: 0 });
-      uploadInit = await api.initAttachmentUpload(selectedRequirement.id, selectedVersion.version, file);
-      const parts: AttachmentUploadPart[] = [];
-      const totalParts = Math.ceil(file.size / uploadInit.partSize);
-      for (let index = 0; index < totalParts; index += 1) {
-        const start = index * uploadInit.partSize;
-        const end = Math.min(file.size, start + uploadInit.partSize);
-        const part = await api.uploadAttachmentPart(
-          selectedRequirement.id,
-          selectedVersion.version,
-          uploadInit.uploadId,
-          uploadInit.storageKey,
-          index + 1,
-          file.slice(start, end, file.type || 'application/octet-stream'),
-        );
-        parts.push({ partNumber: index + 1, etag: part.etag });
-        setAttachmentUpload({ fileName: file.name, progress: Math.round(((index + 1) / totalParts) * 100) });
-      }
-      await api.completeAttachmentUpload(
-        selectedRequirement.id,
-        selectedVersion.version,
-        uploadInit.attachmentId,
-        uploadInit.uploadId,
-        uploadInit.storageKey,
-        parts,
+      const attachment = await uploadOwnerAttachment(
+        'requirements',
+        ownerName,
+        file,
+        (progress) => setAttachmentUpload({ fileName: file.name, progress }),
       );
-      const nextData = await api.data();
-      onRequirementsChange(nextData.requirements);
+      const linked = await onSave({ attachments: [...(selectedVersion.attachments ?? []), attachment] });
+      if (!linked) throw new Error('附件已上传，但客户需求引用尚未保存；请先处理保存冲突');
       setYamlPreview('');
       setExportPath('');
-    } catch (error) {
-      if (uploadInit) {
-        await api.abortAttachmentUpload(
-          selectedRequirement.id,
-          selectedVersion.version,
-          uploadInit.attachmentId,
-          uploadInit.uploadId,
-          uploadInit.storageKey,
-        ).catch(() => undefined);
-      }
-      throw error;
     } finally {
       setAttachmentUpload(null);
     }
@@ -2873,6 +3783,13 @@ function RequirementPage({
         placeholder="搜索洗漱台整理或场景名称"
         count={candidateSubscenes.length}
         onQueryChange={setSubsceneQuery}
+        actions={(
+          <ResourceLoadMoreButton
+            state={taskSopPageState}
+            onLoadMore={onLoadMoreTaskSops}
+            label="加载更多任务 SOP"
+          />
+        )}
       />
       <DataTable
         rows={candidateSubscenes}
@@ -2888,9 +3805,14 @@ function RequirementPage({
     <>
       <div className="detail-page">
         <div className="detail-page-toolbar">
-          <button className="ghost-button" onClick={closeRequirementDetail}>
-            返回需求列表
-          </button>
+          <div className="button-row">
+            <button className="ghost-button" onClick={closeRequirementDetail}>
+              返回需求列表
+            </button>
+            <ResourceLoadMoreButton state={customerPageState} onLoadMore={onLoadMoreCustomers} label="加载更多客户" />
+            <ResourceLoadMoreButton state={robotPageState} onLoadMore={onLoadMoreRobots} label="加载更多机器人" />
+            <ResourceLoadMoreButton state={globalFieldPageState} onLoadMore={onLoadMoreGlobalFields} label="加载更多全局字段" />
+          </div>
           <span>客户需求 / v{selectedVersion.version}</span>
         </div>
         <section className="panel detail-panel">
@@ -2916,13 +3838,16 @@ function RequirementPage({
               items={[
                 {
                   label: '导出 PDF',
-                  onSelect: () =>
-                    exportReportAsPdf(buildRequirementPdfReport(data, selectedRequirement, selectedVersion, attachmentStorageStatus.publicBaseUrl)),
+                  disabled: !revisionExportEligible(selectedVersion),
+                  title: !revisionExportEligible(selectedVersion) ? '只有已确认且可导出的历史版本可以导出' : undefined,
+                  onSelect: onExportPdf,
                 },
                 {
                   label: '导出 YAML',
-                  disabled: missingSelectedSubscenes.length > 0,
-                  title: missingSelectedSubscenes.length > 0 ? '有生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到' : undefined,
+                  disabled: missingSelectedSubscenes.length > 0 || !revisionExportEligible(selectedVersion),
+                  title: !revisionExportEligible(selectedVersion)
+                    ? '只有已确认且可导出的历史版本可以导出'
+                    : missingSelectedSubscenes.length > 0 ? '有生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到' : undefined,
                   onSelect: downloadYaml,
                 },
               ]}
@@ -2931,6 +3856,8 @@ function RequirementPage({
               <button className="primary-button" onClick={createDraftFromCurrentVersion}>
                 编辑为草稿
               </button>
+            ) : checkpoint ? (
+              <span className="muted-text">导入草稿检查点（只读）</span>
             ) : (
               <>
                 <button className="ghost-button danger" onClick={() => void onDeleteVersion()}>
@@ -2949,7 +3876,9 @@ function RequirementPage({
           </div>
           </div>
 
-          {readonly && <div className="notice info">当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
+          {checkpoint
+            ? <div className="notice info">这是迁移保留的旧草稿检查点，仅供追踪，不能编辑、确认或导出。</div>
+            : selectedVersion.status === 'confirmed' && <div className="notice info">当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
           {!readonly && unconfirmedSelectedSubscenes.length > 0 && (
             <div className="notice warning">
               有 {unconfirmedSelectedSubscenes.length} 个生产需求项未选择任务 SOP，或选择的任务 SOP 还没有确认，不能确认需求：
@@ -3024,7 +3953,7 @@ function RequirementPage({
                 />
                 <AttachmentField
                   title="客户附件"
-                  hint="单个附件不超过 1G，支持分片上传"
+                  hint="单个附件不超过 100 MiB，支持分片上传"
                   attachments={selectedVersion.attachments || []}
                   disabled={readonly}
                   storageStatus={attachmentStorageStatus}
@@ -3033,11 +3962,19 @@ function RequirementPage({
                   onDownload={(attachment) => onRun(() => downloadRequirementAttachment(attachment), '附件已下载').then(() => undefined)}
                   onDelete={async (attachmentId) => {
                     if (!selectedRequirement) return;
-                    const result = await onRun(
-                      () => api.deleteAttachment(selectedRequirement.id, selectedVersion.version, attachmentId),
+                    const ownerName = resourceNameOf(selectedRequirement);
+                    if (!ownerName) throw new Error('客户需求资源尚未创建');
+                    const nextAttachments = (selectedVersion.attachments ?? [])
+                      .filter((attachment) => attachment.id !== attachmentId);
+                    await onRun(
+                      async () => {
+                        if (!await onSave({ attachments: nextAttachments })) {
+                          throw new Error('客户需求引用尚未保存，附件未解除关联');
+                        }
+                        await resourceClient.unlinkAttachment('requirements', ownerName, attachmentId);
+                      },
                       '附件已删除',
                     );
-                    if (result) onRequirementsChange(result);
                   }}
                 />
               </div>
@@ -3292,12 +4229,21 @@ function ScenePage({
   onSaveSubscene,
   onDeleteSubsceneVersion,
   onConfirmSubscene,
+  onExportSubscene,
+  onExportSubscenePdf,
   onRun,
   attachmentStorageStatus,
-  onScenesChange,
   returnToRequirement,
   onReturnToRequirement,
   onClearReturnToRequirement,
+  pageState,
+  onLoadMoreScenes,
+  taskPageState,
+  onLoadMoreTaskSops,
+  materialPageState,
+  onLoadMoreMaterials,
+  globalFieldPageState,
+  onLoadMoreGlobalFields,
 }: {
   globalFields: GlobalField[];
   materials: Material[];
@@ -3307,19 +4253,28 @@ function ScenePage({
   selectedVersion: string;
   detailOpen: boolean;
   onSelectScene: (id: string) => void;
-  onSelectSubscene: (code: string) => void;
+  onSelectSubscene: (code: string) => Promise<void>;
   onSelectVersion: (version: string) => void;
   onDetailOpenChange: (open: boolean) => void;
   onSaveScene: (scene: Scene) => Promise<void>;
-  onSaveSubscene: (sceneId: string, code: string, version: VersionPatch<SubsceneVersion>) => Promise<void>;
+  onSaveSubscene: (sceneId: string, code: string, version: VersionPatch<SubsceneVersion>) => Promise<boolean>;
   onDeleteSubsceneVersion: (sceneId: string, code: string, version: string) => Promise<void>;
   onConfirmSubscene: (sceneId: string, code: string, version: string) => Promise<void>;
+  onExportSubscene: (version: SubsceneVersion) => Promise<ExportResult | undefined>;
+  onExportSubscenePdf: (version: SubsceneVersion) => Promise<void>;
   onRun: <T>(action: () => Promise<T>, success: string) => Promise<T | undefined>;
   attachmentStorageStatus: AttachmentStorageStatus;
-  onScenesChange: (scenes: Scene[]) => void;
   returnToRequirement: RequirementReturnTarget | null;
   onReturnToRequirement: () => void;
   onClearReturnToRequirement: () => void;
+  pageState?: ResourcePageState;
+  onLoadMoreScenes: () => void;
+  taskPageState?: ResourcePageState;
+  onLoadMoreTaskSops: () => void;
+  materialPageState?: ResourcePageState;
+  onLoadMoreMaterials: () => void;
+  globalFieldPageState?: ResourcePageState;
+  onLoadMoreGlobalFields: () => void;
 }) {
   const [sceneQuery, setSceneQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
@@ -3333,8 +4288,9 @@ function ScenePage({
   const version = subscene
     ? subscene.versions.find((item) => item.version === selectedVersion) || latest(subscene.versions)
     : undefined;
-  const canEditVersion = version?.status === 'draft';
-  const canEditSubsceneTitle = Boolean(version && canEditVersion && version.version === '0.0.1' && version.status === 'draft');
+  const checkpoint = revisionIsCheckpoint(version);
+  const canEditVersion = version?.status === 'draft' && !checkpoint;
+  const canEditSubsceneTitle = Boolean(version && canEditVersion && (version.version === '0.0.1' || subscene?.versions.length === 1));
   const canEditDescription = Boolean(version && canEditVersion && version.status === 'draft');
 
   useEffect(() => {
@@ -3552,9 +4508,10 @@ function ScenePage({
   }
 
   async function saveCurrentSubscene(patch: Partial<SubsceneVersion>) {
-    if (!subscene || !version) return;
-    await onSaveSubscene(scene.id, subscene.code, { ...patch, baseVersion: version.version });
-    onSelectVersion('');
+    if (!subscene || !version) return false;
+    const saved = await onSaveSubscene(scene.id, subscene.code, { ...patch, baseVersion: version.version });
+    if (saved) onSelectVersion('');
+    return saved;
   }
 
   async function createDraftFromCurrentSubsceneVersion() {
@@ -3569,10 +4526,7 @@ function ScenePage({
 
   async function downloadCurrentSubsceneYaml() {
     if (!scene || !subscene || !version) return;
-    const result = await onRun(
-      () => api.exportSubsceneYaml(scene.id, subscene.code, version.version),
-      '任务 SOP YAML 已生成',
-    );
+    const result = await onExportSubscene(version);
     if (!result) return;
     downloadTextFile(
       result.yaml,
@@ -3584,7 +4538,6 @@ function ScenePage({
   async function createSubscene() {
     const code = nextSubsceneCode(scenes);
     await onSaveSubscene(scene.id, code, emptySubsceneVersionDraft('新的任务 SOP'));
-    onSelectSubscene(code);
     onSelectVersion('');
     onDetailOpenChange(true);
   }
@@ -3596,8 +4549,8 @@ function ScenePage({
     setMaterialPickerOpen(false);
   }
 
-  function openSubsceneDetail(code: string) {
-    onSelectSubscene(code);
+  async function openSubsceneDetail(code: string) {
+    await onSelectSubscene(code);
     onSelectVersion('');
     onClearReturnToRequirement();
     onDetailOpenChange(true);
@@ -3628,55 +4581,23 @@ function ScenePage({
 
   async function uploadSubsceneAttachment(file: File): Promise<RequirementAttachment | undefined> {
     if (!scene || !subscene || !version || !canEditVersion) return undefined;
-    if (file.size > 1024 * 1024 * 1024) {
-      window.alert('单个附件不能超过 1G');
+    const ownerName = resourceNameOf(subscene);
+    if (!ownerName) throw new Error('任务 SOP 资源尚未创建');
+    if (file.size > attachmentMaxSizeBytes) {
+      window.alert('单个附件不能超过 100 MiB');
       return undefined;
     }
-    let uploadInit: AttachmentUploadInit | undefined;
     try {
       setAttachmentUpload({ fileName: file.name, progress: 0 });
-      uploadInit = await api.initSubsceneAttachmentUpload(scene.id, subscene.code, version.version, file);
-      const parts: AttachmentUploadPart[] = [];
-      const totalParts = Math.ceil(file.size / uploadInit.partSize);
-      for (let index = 0; index < totalParts; index += 1) {
-        const start = index * uploadInit.partSize;
-        const end = Math.min(file.size, start + uploadInit.partSize);
-        const part = await api.uploadSubsceneAttachmentPart(
-          scene.id,
-          subscene.code,
-          version.version,
-          uploadInit.uploadId,
-          uploadInit.storageKey,
-          index + 1,
-          file.slice(start, end, file.type || 'application/octet-stream'),
-        );
-        parts.push({ partNumber: index + 1, etag: part.etag });
-        setAttachmentUpload({ fileName: file.name, progress: Math.round(((index + 1) / totalParts) * 100) });
-      }
-      const attachment = await api.completeSubsceneAttachmentUpload(
-        scene.id,
-        subscene.code,
-        version.version,
-        uploadInit.attachmentId,
-        uploadInit.uploadId,
-        uploadInit.storageKey,
-        parts,
+      const attachment = await uploadOwnerAttachment(
+        'taskSops',
+        ownerName,
+        file,
+        (progress) => setAttachmentUpload({ fileName: file.name, progress }),
       );
-      const nextData = await api.data();
-      onScenesChange(nextData.scenes);
+      const linked = await saveCurrentSubscene({ attachments: [...(version.attachments ?? []), attachment] });
+      if (!linked) throw new Error('附件已上传，但任务 SOP 引用尚未保存；请先处理保存冲突');
       return attachment;
-    } catch (error) {
-      if (uploadInit) {
-        await api.abortSubsceneAttachmentUpload(
-          scene.id,
-          subscene.code,
-          version.version,
-          uploadInit.attachmentId,
-          uploadInit.uploadId,
-          uploadInit.storageKey,
-        ).catch(() => undefined);
-      }
-      throw error;
     } finally {
       setAttachmentUpload(null);
     }
@@ -3793,6 +4714,13 @@ function ScenePage({
         placeholder="搜索 SKU、物料类型、颜色、材质"
         count={filteredMaterials.length}
         onQueryChange={setMaterialQuery}
+        actions={(
+          <ResourceLoadMoreButton
+            state={materialPageState}
+            onLoadMore={onLoadMoreMaterials}
+            label="加载更多物料"
+          />
+        )}
       />
       <DataTable
         rows={filteredMaterials}
@@ -3818,6 +4746,11 @@ function ScenePage({
               <button className="ghost-button" onClick={closeSubsceneDetail}>
                 返回任务 SOP 列表
               </button>
+              <ResourceLoadMoreButton
+                state={globalFieldPageState}
+                onLoadMore={onLoadMoreGlobalFields}
+                label="加载更多全局字段"
+              />
             </div>
             <span>{scene.name} / v{version.version}</span>
           </div>
@@ -3844,10 +4777,14 @@ function ScenePage({
                   items={[
                     {
                       label: '导出 PDF',
-                      onSelect: () => exportReportAsPdf(buildSubscenePdfReport(scene, subscene, version, attachmentStorageStatus.publicBaseUrl)),
+                      disabled: !revisionExportEligible(version),
+                      title: !revisionExportEligible(version) ? '只有已确认且可导出的历史版本可以导出' : undefined,
+                      onSelect: () => onExportSubscenePdf(version),
                     },
                     {
                       label: '导出 YAML',
+                      disabled: !revisionExportEligible(version),
+                      title: !revisionExportEligible(version) ? '只有已确认且可导出的历史版本可以导出' : undefined,
                       onSelect: downloadCurrentSubsceneYaml,
                     },
                   ]}
@@ -3856,6 +4793,8 @@ function ScenePage({
                   <button className="primary-button" onClick={() => void createDraftFromCurrentSubsceneVersion()}>
                     编辑为草稿
                   </button>
+                ) : checkpoint ? (
+                  <span className="muted-text">导入草稿检查点（只读）</span>
                 ) : (
                   <>
                     <button className="ghost-button danger" onClick={() => void deleteCurrentSubsceneDraft()}>
@@ -3868,7 +4807,9 @@ function ScenePage({
                 )}
               </div>
             </div>
-            {version.status === 'confirmed' && <div className="notice info">当前任务 SOP 已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
+            {checkpoint
+              ? <div className="notice info">这是迁移保留的旧草稿检查点，仅供追踪，不能编辑、确认或导出。</div>
+              : version.status === 'confirmed' && <div className="notice info">当前任务 SOP 已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
             <CollapsibleSection title="基础信息" description="0.0.1 草稿可编辑名称；草稿版本可编辑描述">
               <div className="form-grid compact-fields">
                 <Field
@@ -3886,7 +4827,7 @@ function ScenePage({
               />
               <AttachmentField
                 title="任务 SOP 附件"
-                hint="支持上传图片或视频，单个附件不超过 1G"
+                hint="支持上传图片或视频，单个附件不超过 100 MiB"
                 accept="image/*,video/*"
                 attachments={version.attachments || []}
                 disabled={!canEditVersion}
@@ -3896,11 +4837,19 @@ function ScenePage({
                 onDownload={(attachment) => onRun(() => downloadStoredAttachment(attachment), '附件已下载').then(() => undefined)}
                 onDelete={async (attachmentId) => {
                   if (!scene || !subscene || !version) return;
-                  const result = await onRun(
-                    () => api.deleteSubsceneAttachment(scene.id, subscene.code, version.version, attachmentId),
+                  const ownerName = resourceNameOf(subscene);
+                  if (!ownerName) throw new Error('任务 SOP 资源尚未创建');
+                  const nextAttachments = (version.attachments ?? [])
+                    .filter((attachment) => attachment.id !== attachmentId);
+                  await onRun(
+                    async () => {
+                      if (!await saveCurrentSubscene({ attachments: nextAttachments })) {
+                        throw new Error('任务 SOP 引用尚未保存，附件未解除关联');
+                      }
+                      await resourceClient.unlinkAttachment('taskSops', ownerName, attachmentId);
+                    },
                     '任务 SOP 附件已删除',
                   );
-                  if (result) onScenesChange(result);
                 }}
               />
             </CollapsibleSection>
@@ -4068,9 +5017,21 @@ function ScenePage({
           count={filteredScenes.length}
           onQueryChange={setSceneQuery}
           actions={
-            <button className="primary-button" onClick={openSceneEditor}>
-              新建场景
-            </button>
+            <>
+              {(pageState?.nextCursor || pageState?.error) && (
+                <button className="ghost-button" disabled={pageState.loadingMore} onClick={onLoadMoreScenes}>
+                  {pageState.loadingMore ? '正在加载…' : '加载更多'}
+                </button>
+              )}
+              {(taskPageState?.nextCursor || taskPageState?.error) && (
+                <button className="ghost-button" disabled={taskPageState.loadingMore} onClick={onLoadMoreTaskSops}>
+                  {taskPageState.loadingMore ? '正在加载 SOP…' : '加载更多 SOP'}
+                </button>
+              )}
+              <button className="primary-button" onClick={openSceneEditor}>
+                新建场景
+              </button>
+            </>
           }
         />
         <div className="directory-list">
@@ -4168,9 +5129,15 @@ function ScenePage({
 function GlobalFieldPage({
   globalFields,
   onSaveField,
+  onOpenField,
+  pageState,
+  onLoadMore,
 }: {
   globalFields: GlobalField[];
   onSaveField: (field: GlobalField) => Promise<void>;
+  onOpenField: (field: GlobalField) => Promise<GlobalField>;
+  pageState?: ResourcePageState;
+  onLoadMore: () => void;
 }) {
   const [fieldQuery, setFieldQuery] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<GlobalFieldGroup>('reference_object');
@@ -4250,9 +5217,16 @@ function GlobalFieldPage({
     setEditorOpen(false);
   }
 
-  function openFieldEditor(field: GlobalField) {
+  async function openFieldEditor(field: GlobalField) {
     setFieldDraft(field);
     setEditorOpen(true);
+    try {
+      const resolved = await onOpenField(field);
+      setFieldDraft(resolved);
+      setSelectedGroup(resolved.group);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    }
   }
 
   function openNewFieldEditor() {
@@ -4339,6 +5313,11 @@ function GlobalFieldPage({
               <button className="primary-button" onClick={openNewFieldEditor}>
                 新建字段
               </button>
+              {(pageState?.nextCursor || pageState?.error) && (
+                <button className="ghost-button" disabled={pageState.loadingMore} onClick={onLoadMore}>
+                  {pageState.loadingMore ? '正在加载…' : '加载更多'}
+                </button>
+              )}
             </>
           }
         />
@@ -4348,7 +5327,7 @@ function GlobalFieldPage({
           rowKey={(item) => item.id}
           selectedKey={fieldDraft.id}
           emptyText="当前分组没有匹配字段"
-          onRowClick={openFieldEditor}
+          onRowClick={(field) => void openFieldEditor(field)}
         />
       </section>
       {editorOpen && (
@@ -5001,10 +5980,17 @@ function LocalTextItemEditor({
   );
 }
 
-function CustomerPage({ customers, onSave }: { customers: Customer[]; onSave: (customer: Customer) => Promise<void> }) {
+function CustomerPage({ customers, onSave, onOpen, pageState, onLoadMore }: {
+  customers: Customer[];
+  onSave: (customer: Customer) => Promise<Customer | undefined>;
+  onOpen: (customer: Customer) => Promise<Customer>;
+  pageState?: ResourcePageState;
+  onLoadMore: () => void;
+}) {
   const [draft, setDraft] = useState<Customer>(customers[0] || emptyCustomer());
+  const newDraft = useRef(false);
   useEffect(() => {
-    setDraft(customers[0] || emptyCustomer());
+    setDraft((current) => reconcileMasterDraftFromItems(current, customers, newDraft.current, emptyCustomer()));
   }, [customers]);
   const columns: Array<DataTableColumn<Customer>> = [
     {
@@ -5027,15 +6013,30 @@ function CustomerPage({ customers, onSave }: { customers: Customer[]; onSave: (c
       getTitle={(item) => item.name}
       getSearchText={(item) => `${item.name} ${item.contact.name} ${item.contact.phone} ${item.contact.email} ${item.notes || ''}`}
       selectedId={draft.id}
-      onSelect={(item) => setDraft(item)}
-      onNew={() => setDraft(emptyCustomer())}
+      onSelect={(item) => {
+        newDraft.current = false;
+        setDraft(item);
+      }}
+      onResolve={onOpen}
+      onNew={() => {
+        newDraft.current = true;
+        setDraft(emptyCustomer());
+      }}
+      hasMore={Boolean(pageState?.nextCursor)}
+      loadingMore={pageState?.loadingMore}
+      loadMoreError={pageState?.error}
+      onLoadMore={onLoadMore}
     >
       <Field label="客户名称" value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
       <Field label="联系人" value={draft.contact.name} onChange={(name) => setDraft({ ...draft, contact: { ...draft.contact, name } })} />
       <Field label="电话" value={draft.contact.phone} onChange={(phone) => setDraft({ ...draft, contact: { ...draft.contact, phone } })} />
       <Field label="邮箱" value={draft.contact.email} onChange={(email) => setDraft({ ...draft, contact: { ...draft.contact, email } })} />
       <TextArea label="备注" value={draft.notes || ''} onChange={(notes) => setDraft({ ...draft, notes })} />
-      <button className="primary-button" onClick={() => void onSave(draft)}>
+      <button className="primary-button" onClick={() => void onSave(draft).then((saved) => {
+        if (!saved) return;
+        newDraft.current = false;
+        setDraft(saved);
+      })}>
         保存客户
       </button>
     </MasterDataPage>
@@ -5614,22 +6615,27 @@ function SubsceneStateEditor({
 function MaterialPage({
   materials,
   storageStatus,
-  onMaterialsChange,
   onSave,
+  onOpen,
+  pageState,
+  onLoadMore,
 }: {
   materials: Material[];
   storageStatus: AttachmentStorageStatus;
-  onMaterialsChange: (materials: Material[]) => void;
   onSave: (material: Material) => Promise<boolean>;
+  onOpen: (material: Material) => Promise<Material>;
+  pageState?: ResourcePageState;
+  onLoadMore: () => void;
 }) {
   const nextSkuId = nextReadableId(
     materials.map((material) => material.skuId),
     'SKU',
   );
   const [draft, setDraft] = useState<Material>(materials[0] || emptyMaterial(nextSkuId));
+  const newDraft = useRef(false);
   const [imageUpload, setImageUpload] = useState<{ fileName: string; progress: number } | null>(null);
   useEffect(() => {
-    setDraft(materials[0] || emptyMaterial(nextSkuId));
+    setDraft((current) => reconcileMasterDraftFromItems(current, materials, newDraft.current, emptyMaterial(nextSkuId)));
   }, [materials, nextSkuId]);
 
   async function uploadMaterialImage(file: File) {
@@ -5637,43 +6643,27 @@ function MaterialPage({
       window.alert('请先保存物料，再上传图片');
       return;
     }
+    const ownerName = resourceNameOf(draft);
+    if (!ownerName) throw new Error('请先保存物料，再上传图片');
     if (!file.type.startsWith('image/')) {
       window.alert('只能上传图片文件');
       return;
     }
-    if (file.size > 1024 * 1024 * 1024) {
-      window.alert('单张图片不能超过 1G');
+    if (file.size > attachmentMaxSizeBytes) {
+      window.alert('单张图片不能超过 100 MiB');
       return;
     }
-    let uploadInit: AttachmentUploadInit | undefined;
     try {
       setImageUpload({ fileName: file.name, progress: 0 });
-      uploadInit = await api.initMaterialImageUpload(draft.id, file);
-      const parts: AttachmentUploadPart[] = [];
-      const totalParts = Math.ceil(file.size / uploadInit.partSize);
-      for (let index = 0; index < totalParts; index += 1) {
-        const start = index * uploadInit.partSize;
-        const end = Math.min(file.size, start + uploadInit.partSize);
-        const part = await api.uploadMaterialImagePart(
-          draft.id,
-          uploadInit.uploadId,
-          uploadInit.storageKey,
-          index + 1,
-          file.slice(start, end, file.type || 'application/octet-stream'),
-        );
-        parts.push({ partNumber: index + 1, etag: part.etag });
-        setImageUpload({ fileName: file.name, progress: Math.round(((index + 1) / totalParts) * 100) });
-      }
-      await api.completeMaterialImageUpload(draft.id, uploadInit.attachmentId, uploadInit.uploadId, uploadInit.storageKey, parts);
-      const nextData = await api.data();
-      onMaterialsChange(nextData.materials);
-      const nextDraft = nextData.materials.find((item) => item.id === draft.id);
-      if (nextDraft) setDraft(nextDraft);
-    } catch (error) {
-      if (uploadInit) {
-        await api.abortMaterialImageUpload(draft.id, uploadInit.attachmentId, uploadInit.uploadId, uploadInit.storageKey).catch(() => undefined);
-      }
-      throw error;
+      const image = await uploadOwnerAttachment(
+        'materials',
+        ownerName,
+        file,
+        (progress) => setImageUpload({ fileName: file.name, progress }),
+      );
+      const nextDraft = { ...draft, images: [...(draft.images ?? []), image] };
+      if (!await onSave(nextDraft)) throw new Error('图片已上传，但物料引用尚未保存；请先处理保存冲突');
+      setDraft(nextDraft);
     } finally {
       setImageUpload(null);
     }
@@ -5681,10 +6671,12 @@ function MaterialPage({
 
   async function deleteMaterialImage(attachmentId: string) {
     if (!draft.id) return;
-    const materials = await api.deleteMaterialImage(draft.id, attachmentId);
-    onMaterialsChange(materials);
-    const nextDraft = materials.find((item) => item.id === draft.id);
-    if (nextDraft) setDraft(nextDraft);
+    const ownerName = resourceNameOf(draft);
+    if (!ownerName) throw new Error('物料资源尚未创建');
+    const nextDraft = { ...draft, images: (draft.images ?? []).filter((item) => item.id !== attachmentId) };
+    if (!await onSave(nextDraft)) throw new Error('物料引用尚未保存，图片未解除关联');
+    await resourceClient.unlinkAttachment('materials', ownerName, attachmentId);
+    setDraft(nextDraft);
   }
 
   const columns: Array<DataTableColumn<Material>> = [
@@ -5718,8 +6710,19 @@ function MaterialPage({
         `${item.skuId} ${item.type} ${item.color} ${item.material} ${item.packageType} ${item.size || ''} ${item.weight || ''}`
       }
       selectedId={draft.id}
-      onSelect={(item) => setDraft(item)}
-      onNew={() => setDraft(emptyMaterial(nextSkuId))}
+      onSelect={(item) => {
+        newDraft.current = false;
+        setDraft(item);
+      }}
+      onResolve={onOpen}
+      onNew={() => {
+        newDraft.current = true;
+        setDraft(emptyMaterial(nextSkuId));
+      }}
+      hasMore={Boolean(pageState?.nextCursor)}
+      loadingMore={pageState?.loadingMore}
+      loadMoreError={pageState?.error}
+      onLoadMore={onLoadMore}
     >
       {(closeEditor) => (
         <>
@@ -5727,7 +6730,7 @@ function MaterialPage({
           {!draft.id && <p className="field-note">SKU 由系统自动生成，保存时会按最新数据确认最终编号。</p>}
           <AttachmentField
             title="物料图片"
-            hint="支持上传图片，单张不超过 1G"
+            hint="支持上传图片，单张不超过 100 MiB"
             uploadLabel="上传图片"
             emptyText="暂无图片"
             accept="image/*"
@@ -5764,10 +6767,17 @@ function MaterialPage({
   );
 }
 
-function RobotPage({ robots, onSave }: { robots: RobotModel[]; onSave: (robot: RobotModel) => Promise<void> }) {
+function RobotPage({ robots, onSave, onOpen, pageState, onLoadMore }: {
+  robots: RobotModel[];
+  onSave: (robot: RobotModel) => Promise<RobotModel | undefined>;
+  onOpen: (robot: RobotModel) => Promise<RobotModel>;
+  pageState?: ResourcePageState;
+  onLoadMore: () => void;
+}) {
   const [draft, setDraft] = useState<RobotModel>(robots[0] || emptyRobot());
+  const newDraft = useRef(false);
   useEffect(() => {
-    setDraft(robots[0] || emptyRobot());
+    setDraft((current) => reconcileMasterDraftFromItems(current, robots, newDraft.current, emptyRobot()));
   }, [robots]);
   const columns: Array<DataTableColumn<RobotModel>> = [
     {
@@ -5796,8 +6806,19 @@ function RobotPage({ robots, onSave }: { robots: RobotModel[]; onSave: (robot: R
         `${item.brand} ${item.model} ${item.terminal} ${Object.keys(item.topics).join(' ')}`
       }
       selectedId={draft.id}
-      onSelect={(item) => setDraft(item)}
-      onNew={() => setDraft(emptyRobot())}
+      onSelect={(item) => {
+        newDraft.current = false;
+        setDraft(item);
+      }}
+      onResolve={onOpen}
+      onNew={() => {
+        newDraft.current = true;
+        setDraft(emptyRobot());
+      }}
+      hasMore={Boolean(pageState?.nextCursor)}
+      loadingMore={pageState?.loadingMore}
+      loadMoreError={pageState?.error}
+      onLoadMore={onLoadMore}
     >
       <Field label="品牌" value={draft.brand} onChange={(brand) => setDraft({ ...draft, brand })} />
       <Field label="型号" value={draft.model} onChange={(model) => setDraft({ ...draft, model })} />
@@ -5809,7 +6830,11 @@ function RobotPage({ robots, onSave }: { robots: RobotModel[]; onSave: (robot: R
           .join('\n')}
         onChange={(value) => setDraft({ ...draft, topics: keyValueLines(value) })}
       />
-      <button className="primary-button" onClick={() => void onSave(draft)}>
+      <button className="primary-button" onClick={() => void onSave(draft).then((saved) => {
+        if (!saved) return;
+        newDraft.current = false;
+        setDraft(saved);
+      })}>
         保存型号
       </button>
     </MasterDataPage>
@@ -5825,7 +6850,12 @@ function MasterDataPage<T extends { id: string }>({
   getSearchText,
   selectedId,
   onSelect,
+  onResolve,
   onNew,
+  hasMore = false,
+  loadingMore = false,
+  loadMoreError,
+  onLoadMore,
   children,
 }: {
   title: string;
@@ -5836,16 +6866,33 @@ function MasterDataPage<T extends { id: string }>({
   getSearchText: (item: T) => string;
   selectedId: string;
   onSelect: (item: T) => void;
+  onResolve?: (item: T) => Promise<T>;
   onNew: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  loadMoreError?: string;
+  onLoadMore?: () => void;
   children: ReactNode | ((closeEditor: () => void) => ReactNode);
 }) {
   const [query, setQuery] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detailError, setDetailError] = useState('');
   const filteredItems = items.filter((item) => matchesQuery(query, [item.id, getTitle(item), getSearchText(item)]));
 
-  function openItemEditor(item: T) {
-    onSelect(item);
+  async function openItemEditor(item: T) {
     setEditorOpen(true);
+    setDetailError('');
+    onSelect(item);
+    if (!onResolve) return;
+    setLoadingDetail(true);
+    try {
+      onSelect(await onResolve(item));
+    } catch (error) {
+      setDetailError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoadingDetail(false);
+    }
   }
 
   function openNewItemEditor() {
@@ -5875,13 +6922,23 @@ function MasterDataPage<T extends { id: string }>({
           rowKey={(item) => item.id || getTitle(item)}
           selectedKey={selectedId}
           emptyText={`没有匹配的${title}`}
-          onRowClick={openItemEditor}
+          onRowClick={(item) => void openItemEditor(item)}
         />
+        {(hasMore || loadMoreError) && (
+          <div className="form-actions">
+            <button className="ghost-button" disabled={loadingMore} onClick={onLoadMore}>
+              {loadingMore ? '正在加载…' : '加载更多'}
+            </button>
+            {loadMoreError && <span className="notice error">{loadMoreError}</span>}
+          </div>
+        )}
       </section>
       {editorOpen && (
         <Modal title={`${title}详情`} onClose={() => setEditorOpen(false)}>
           <div className="form-stack modal-form-stack">
-            {typeof children === 'function' ? children(() => setEditorOpen(false)) : children}
+            {loadingDetail && <div className="loading">正在加载资源详情…</div>}
+            {detailError && <div className="notice error">{detailError}</div>}
+            {!loadingDetail && !detailError && (typeof children === 'function' ? children(() => setEditorOpen(false)) : children)}
           </div>
         </Modal>
       )}
@@ -6181,7 +7238,7 @@ function TextArea({
 
 function AttachmentField({
   title = '客户附件',
-  hint = '单个附件不超过 1G，支持分片上传',
+  hint = '单个附件不超过 100 MiB，支持分片上传',
   uploadLabel = '上传附件',
   emptyText = '暂无附件',
   accept,
@@ -6299,38 +7356,18 @@ function AttachmentPreviewThumb({
   onPreview: () => void;
   compact?: boolean;
 }) {
-  const [url, setUrl] = useState('');
   const isImage = attachment.contentType.startsWith('image/');
   const isVideo = attachment.contentType.startsWith('video/');
-  const publicUrl = isImage ? publicAttachmentUrl(publicBaseUrl, attachment.storageKey) : '';
-
-  useEffect(() => {
-    if (!isImage) {
-      setUrl('');
-      return undefined;
-    }
-    if (publicUrl) {
-      setUrl(publicUrl);
-      return undefined;
-    }
-    let active = true;
-    let objectUrl = '';
-    fetch(protectedAttachmentUrl(attachment.storageKey), { headers: apiHeaders() })
-      .then((res) => (res.ok ? res.blob() : undefined))
-      .then((blob) => {
-        if (!blob || !active) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [attachment.storageKey, isImage, publicUrl]);
+  const url = isImage ? publicAttachmentUrl(publicBaseUrl, attachment.storageKey) : '';
 
   return (
-    <button type="button" className={`attachment-preview-thumb ${compact ? 'compact' : ''}`} onClick={onPreview} title="点击预览">
+    <button
+      type="button"
+      className={`attachment-preview-thumb ${compact ? 'compact' : ''}`}
+      aria-label={`预览附件 ${attachment.name}`}
+      onClick={onPreview}
+      title="点击预览"
+    >
       {isImage && url ? <img src={url} alt={attachment.name} /> : <span>{isVideo ? '视频' : isImage ? '图片' : '文件'}</span>}
     </button>
   );
@@ -6347,46 +7384,22 @@ function AttachmentPreviewModal({
   onClose: () => void;
   onDownload: () => Promise<void>;
 }) {
-  const [objectUrl, setObjectUrl] = useState('');
   const [loadFailed, setLoadFailed] = useState(false);
   const isImage = attachment.contentType.startsWith('image/');
   const isVideo = attachment.contentType.startsWith('video/');
   const publicUrl = publicAttachmentUrl(publicBaseUrl, attachment.storageKey);
-  const previewUrl = publicUrl || objectUrl;
 
   useEffect(() => {
     setLoadFailed(false);
-    setObjectUrl('');
-    if (publicUrl || (!isImage && !isVideo)) {
-      return undefined;
-    }
-    let active = true;
-    let localObjectUrl = '';
-    fetch(protectedAttachmentUrl(attachment.storageKey), { headers: apiHeaders() })
-      .then((res) => (res.ok ? res.blob() : undefined))
-      .then((blob) => {
-        if (!active) return;
-        if (!blob) {
-          setLoadFailed(true);
-          return;
-        }
-        localObjectUrl = URL.createObjectURL(blob);
-        setObjectUrl(localObjectUrl);
-      })
-      .catch(() => setLoadFailed(true));
-    return () => {
-      active = false;
-      if (localObjectUrl) URL.revokeObjectURL(localObjectUrl);
-    };
-  }, [attachment.storageKey, isImage, isVideo, publicUrl]);
+  }, [attachment.id, publicUrl]);
 
   return (
     <Modal title={`预览：${attachment.name}`} panelClassName="attachment-preview-panel" onClose={onClose}>
       <div className="attachment-preview-modal">
         <div className="attachment-preview-stage">
-          {isImage && previewUrl && <img src={previewUrl} alt={attachment.name} />}
-          {isVideo && previewUrl && <video src={previewUrl} controls />}
-          {(isImage || isVideo) && !previewUrl && !loadFailed && <div className="attachment-preview-fallback">正在加载预览...</div>}
+          {isImage && publicUrl && <img src={publicUrl} alt={attachment.name} onError={() => setLoadFailed(true)} />}
+          {isVideo && publicUrl && <video src={publicUrl} controls onError={() => setLoadFailed(true)} />}
+          {(isImage || isVideo) && !publicUrl && <div className="attachment-preview-fallback">附件未配置公开访问链接，无法在线预览。</div>}
           {(!isImage && !isVideo) && <div className="attachment-preview-fallback">当前文件类型不支持在线预览，可以下载后查看。</div>}
           {loadFailed && <div className="attachment-preview-fallback">预览加载失败，可以下载后查看。</div>}
         </div>
@@ -6740,6 +7753,31 @@ function emptySubsceneVersionDraft(title = '新的任务 SOP'): Partial<Subscene
       stepRandomization: { enabled: false, startOrder: 1, endOrder: 1 },
     },
     references: { recordUrls: [], attachments: [] },
+  };
+}
+
+function emptyRequirementVersion(title = '新的客户需求', status: EntityStatus = 'draft'): RequirementVersion {
+  return {
+    version: '1.0.0',
+    status,
+    title,
+    projectName: '',
+    priority: 'P2',
+    deadline: today(),
+    customerId: '',
+    robotModelId: '',
+    businessGoal: '',
+    requestedScenes: [],
+    requiredDurationHours: 0,
+    allowedOperations: [],
+    acceptableOperations: [],
+    forbiddenOperations: [],
+    annotation: { required: false, types: [], allowedOperations: [], forbiddenOperations: [] },
+    qualityInspection: { required: false, samplingPolicy: '' },
+    delivery: { formats: [], method: '', languages: [], dataStructureUrl: '' },
+    selectedSubscenes: [],
+    attachments: [],
+    updatedAt: new Date(0).toISOString(),
   };
 }
 

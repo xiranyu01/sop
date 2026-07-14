@@ -42,4 +42,62 @@ describe('resource API boundaries', () => {
     expect(init.headers.get('authorization')).toBe('Bearer secret');
     expect(JSON.parse(init.body)).toMatchObject({ expectedEtag: 'e1' });
   });
+
+  it('calls browser-style fetch with the global receiver', async () => {
+    const requestFetch = vi.fn(function (this: unknown) {
+      expect(this).toBe(globalThis);
+      return Promise.resolve(new Response(JSON.stringify({ items: [] }), {
+        headers: { 'content-type': 'application/json' },
+      }));
+    }) as unknown as typeof fetch;
+    const client = new ApiClient({ fetch: requestFetch });
+
+    await expect(client.list('materials')).resolves.toEqual({ items: [] });
+  });
+
+  it('keeps attachment upload state owner-scoped and uploads binary parts directly', async () => {
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+    const requestFetch = vi.fn()
+      .mockResolvedValueOnce(json({
+        uid: 'attachment-1', uploadId: 'upload-1', objectKey: 'server/allocated',
+        partSizeBytes: 10, partCount: 1, maxSizeBytes: 100,
+      }, 201))
+      .mockResolvedValueOnce(json({ partNumber: 1, etag: 'part-etag', sizeBytes: 4 }))
+      .mockResolvedValueOnce(json({
+        owner: { scope: 'material', uid: 'material-uid' }, uid: 'attachment-1', objectKey: 'server/allocated',
+        filename: 'photo.png', mediaType: 'image/png', sizeBytes: 4, metadata: {}, name: 'attachments/attachment-1',
+      }))
+      .mockResolvedValueOnce(json({
+        owner: { scope: 'material', uid: 'material-uid' }, uid: 'attachment-1', objectKey: 'server/allocated',
+        filename: 'photo.png', mediaType: 'image/png', sizeBytes: 4, metadata: {}, name: 'attachments/attachment-1',
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = new ApiClient({ baseUrl: 'https://sop.test', getPassword: () => 'secret', fetch: requestFetch });
+
+    const initialized = await client.initializeAttachment('materials', 'materials/cup', {
+      filename: 'photo.png', mediaType: 'image/png', sizeBytes: 4,
+    });
+    const chunk = new Blob(['test'], { type: 'image/png' });
+    await client.uploadAttachmentPart('materials', 'materials/cup', initialized.uid, 1, chunk);
+    await client.completeAttachment('materials', 'materials/cup', initialized.uid);
+    await client.getAttachment('materials', 'materials/cup', initialized.uid);
+    await client.unlinkAttachment('materials', 'materials/cup', initialized.uid);
+
+    expect(requestFetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://sop.test/api/resources/materials/materials%2Fcup/attachments',
+      'https://sop.test/api/resources/materials/materials%2Fcup/attachments/attachment-1/parts/1',
+      'https://sop.test/api/resources/materials/materials%2Fcup/attachments/attachment-1/complete',
+      'https://sop.test/api/resources/materials/materials%2Fcup/attachments/attachment-1',
+      'https://sop.test/api/resources/materials/materials%2Fcup/attachments/attachment-1',
+    ]);
+    expect(JSON.parse(requestFetch.mock.calls[0][1].body)).toEqual({
+      filename: 'photo.png', mediaType: 'image/png', sizeBytes: 4,
+    });
+    expect(requestFetch.mock.calls[1][1].body).toBe(chunk);
+    expect(requestFetch.mock.calls[1][1].headers.get('content-type')).toBe('application/octet-stream');
+    expect(requestFetch.mock.calls[1][1].headers.get('authorization')).toBe('Bearer secret');
+  });
 });

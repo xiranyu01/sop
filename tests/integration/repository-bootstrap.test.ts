@@ -14,7 +14,7 @@ import { bootstrapRepository } from '../../server/bootstrap/repository';
 import { prepareRepositoryData } from '../../server/bootstrap/repositoryData';
 import { repositoryReleaseManifest } from '../../server/bootstrap/releaseManifest';
 import { repositoryBootstrapMetaKey, repositoryReadiness } from '../../server/bootstrap/status';
-import type { ResourceRepository } from '../../server/domain/repository';
+import { RepositoryNotReadyError, type ResourceRepository } from '../../server/domain/repository';
 import { createD1ResourceRepository } from '../../server/repositories/d1ResourceRepository';
 import { SqliteD1 } from '../helpers/sqliteD1';
 
@@ -142,6 +142,59 @@ describe('explicit repository bootstrap', () => {
     await expect(bootstrapRepository(repository, oversized)).rejects.toThrow('limit is 1800000');
     expect((await repository.getMeta(repositoryBootstrapMetaKey))?.value).toContain('IN_PROGRESS');
     expect(await repositoryReadiness(repository, oversized)).toEqual({ ready: false, reason: 'bootstrap is incomplete' });
+    db.close();
+  });
+
+  it('blocks readiness when a confirmed current pointer loses its sealed bundle', async () => {
+    const { db, repository, data } = await harness();
+    await bootstrapRepository(repository, data);
+    const storedCurrents = await Promise.all(data.currents.map((item) => repository.getCurrent(item.name)));
+    const draft = storedCurrents.find((item) => item?.lifecycle === 'DRAFT' && item.currentRevisionName);
+    expect(draft?.currentRevisionName).toBeTruthy();
+    const proto = JSON.parse(draft!.protoJson) as Record<string, unknown>;
+    proto.lifecycle = 'LIFECYCLE_CONFIRMED';
+    delete proto.candidateVersionSequence;
+    delete proto.candidateVersionLabel;
+    delete proto.candidateSourceVersionId;
+    const current = await repository.updateCurrent(draft!.name, draft!.etag, {
+      protoSchema: draft!.protoSchema,
+      protoJson: JSON.stringify(proto),
+    });
+    await expect(repository.auditProjectionParity()).resolves.toBeUndefined();
+
+    db.exec('DROP TRIGGER SOP_EXPORT_BUNDLES_IMMUTABLE_DELETE');
+    db.database.prepare('DELETE FROM SOP_EXPORT_BUNDLES WHERE root_revision_name = ?')
+      .run(current.currentRevisionName!);
+
+    await expect(repository.auditProjectionParity()).rejects.toBeInstanceOf(RepositoryNotReadyError);
+    expect(await repositoryReadiness(repository, data)).toEqual({
+      ready: false,
+      reason: 'repository integrity audit failed',
+    });
+    db.close();
+  });
+
+  it('blocks readiness when sealed bundle content no longer matches its stored hash', async () => {
+    const { db, repository, data } = await harness();
+    await bootstrapRepository(repository, data);
+    const row = db.database.prepare(`SELECT root_revision_name, bundle_proto_json
+      FROM SOP_EXPORT_BUNDLES LIMIT 1`).get() as {
+        root_revision_name: string;
+        bundle_proto_json: string;
+      } | undefined;
+    expect(row).toBeDefined();
+    const bundle = JSON.parse(row!.bundle_proto_json) as { content: { rootName: string } };
+    bundle.content.rootName = 'taskSops/tampered-after-seal';
+
+    db.exec('DROP TRIGGER SOP_EXPORT_BUNDLES_IMMUTABLE_UPDATE');
+    db.database.prepare('UPDATE SOP_EXPORT_BUNDLES SET bundle_proto_json = ? WHERE root_revision_name = ?')
+      .run(JSON.stringify(bundle), row!.root_revision_name);
+
+    await expect(repository.auditProjectionParity()).rejects.toBeInstanceOf(RepositoryNotReadyError);
+    expect(await repositoryReadiness(repository, data)).toEqual({
+      ready: false,
+      reason: 'repository integrity audit failed',
+    });
     db.close();
   });
 });

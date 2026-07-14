@@ -39,7 +39,14 @@ export type AttachmentMetadata = Omit<AttachmentUploadSession, 'uploadId' | 'par
 export interface AttachmentStateStore {
   getUpload(uid: string): Promise<AttachmentUploadSession | undefined>;
   createUpload(value: AttachmentUploadSession): Promise<void>;
-  replaceUpload(value: AttachmentUploadSession): Promise<void>;
+  reservePart(uid: string, uploadId: string, partNumber: number, reservationToken: string): Promise<boolean>;
+  recordPart(
+    uid: string,
+    uploadId: string,
+    reservationToken: string,
+    receipt: AttachmentPartReceipt,
+  ): Promise<void>;
+  releasePart(uid: string, uploadId: string, partNumber: number, reservationToken: string): Promise<void>;
   completeUpload(uid: string, uploadId: string, value: AttachmentMetadata): Promise<void>;
   removeUpload(uid: string, uploadId: string): Promise<void>;
   getAttachment(uid: string): Promise<AttachmentMetadata | undefined>;
@@ -174,6 +181,24 @@ export function attachmentObjectKey(owner: AttachmentOwner, uid: string): string
   return `attachments/${owner.scope}/${owner.uid}/${uid}`;
 }
 
+export function attachmentResourceName(uid: string): string {
+  assertSafeSegment(uid, 'attachment uid');
+  return `attachments/${uid}`;
+}
+
+function publicObjectUrl(baseUrl: string | undefined, objectKey: string): string | undefined {
+  if (!baseUrl) return undefined;
+  const validated = validatePublicUrl(baseUrl);
+  if (!validated) return undefined;
+  const base = new URL(validated);
+  if (base.search || base.hash) throw boundaryError('public URL base cannot contain a query or fragment');
+  base.pathname = `${base.pathname.replace(/\/+$/u, '')}/${objectKey
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')}`;
+  return validatePublicUrl(base.toString());
+}
+
 function expectedPartCount(sizeBytes: number): number {
   return Math.ceil(sizeBytes / ATTACHMENT_PART_BYTES);
 }
@@ -202,10 +227,83 @@ async function requireUpload(
   return upload;
 }
 
+async function completedAttachment(
+  state: AttachmentStateStore,
+  input: AttachmentIdentityInput,
+): Promise<AttachmentMetadata | undefined> {
+  validateOwner(input.owner);
+  assertSafeSegment(input.uid, 'attachment uid');
+  const attachment = await state.getAttachment(input.uid);
+  if (!attachment) return undefined;
+  requireOwner(attachment.owner, input.owner);
+  if (attachment.objectKey !== attachmentObjectKey(input.owner, input.uid)) {
+    throw boundaryError('stored attachment object key is invalid');
+  }
+  return attachment;
+}
+
+function partReceiptsMatch(left: AttachmentPartReceipt, right: AttachmentPartReceipt): boolean {
+  return left.partNumber === right.partNumber && left.etag === right.etag && left.sizeBytes === right.sizeBytes;
+}
+
+async function releasePartReservation(
+  state: AttachmentStateStore,
+  upload: AttachmentUploadSession,
+  reservationToken: string,
+  partNumber: number,
+  cause: unknown,
+): Promise<never> {
+  try {
+    await state.releasePart(upload.uid, upload.uploadId, partNumber, reservationToken);
+  } catch (releaseError) {
+    throw new AggregateError([cause, releaseError], 'Attachment part persistence and reservation release both failed');
+  }
+  throw cause;
+}
+
+async function persistPartReceipt(
+  state: AttachmentStateStore,
+  upload: AttachmentUploadSession,
+  reservationToken: string,
+  receipt: AttachmentPartReceipt,
+): Promise<void> {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await state.recordPart(upload.uid, upload.uploadId, reservationToken, receipt);
+      return;
+    } catch (error) {
+      failure = error;
+      let current: AttachmentUploadSession | undefined;
+      try {
+        current = await state.getUpload(upload.uid);
+      } catch {
+        // A bounded second write attempt can recover a transient D1 failure
+        // while this request still owns the durable reservation.
+      }
+      if (current?.uploadId === upload.uploadId) {
+        const committed = current.parts.find((part) => part.partNumber === receipt.partNumber);
+        if (committed) {
+          if (partReceiptsMatch(committed, receipt)) return;
+          return releasePartReservation(
+            state,
+            upload,
+            reservationToken,
+            receipt.partNumber,
+            boundaryError(`stored receipt for part ${receipt.partNumber} does not match the provider result`),
+          );
+        }
+      }
+    }
+  }
+  return releasePartReservation(state, upload, reservationToken, receipt.partNumber, failure);
+}
+
 export function createAttachmentService(options: {
   provider: AttachmentByteProvider;
   state: AttachmentStateStore;
   createUid?: () => string;
+  publicBaseUrl?: string;
 }) {
   const createUid = options.createUid ?? (() => crypto.randomUUID());
 
@@ -217,11 +315,12 @@ export function createAttachmentService(options: {
       validateFilename(input.filename);
       validateMediaType(input.mediaType);
       validateSize(input.sizeBytes);
-      const publicUrl = validatePublicUrl(input.publicUrl);
+      const requestedPublicUrl = validatePublicUrl(input.publicUrl);
       const metadata = normalizeMetadata(input.metadata);
       const uid = createUid();
       assertSafeSegment(uid, 'server-generated attachment uid');
       const objectKey = attachmentObjectKey(input.owner, uid);
+      const publicUrl = requestedPublicUrl ?? publicObjectUrl(options.publicBaseUrl, objectKey);
       if (await options.state.getUpload(uid) || await options.state.getAttachment(uid)) {
         throw boundaryError('server-generated attachment uid already exists');
       }
@@ -281,23 +380,43 @@ export function createAttachmentService(options: {
         throw boundaryError(`part ${input.partNumber} was already uploaded; overwrite is forbidden`);
       }
 
-      const result = await options.provider.uploadAttachmentPart({
-        storageKey: upload.objectKey,
-        uploadId: upload.uploadId,
-        partNumber: input.partNumber,
-        body: input.body,
-      });
-      if (!result.etag) throw boundaryError('provider returned an empty part ETag');
+      // Claim the part in durable state before touching R2. This prevents two
+      // Pages isolates from both overwriting the same multipart part while
+      // only one receipt wins the D1 compare-and-set.
+      const reservationToken = crypto.randomUUID();
+      if (!await options.state.reservePart(upload.uid, upload.uploadId, input.partNumber, reservationToken)) {
+        throw boundaryError(`part ${input.partNumber} is already uploaded or in progress`);
+      }
+      let result;
+      try {
+        result = await options.provider.uploadAttachmentPart({
+          storageKey: upload.objectKey,
+          uploadId: upload.uploadId,
+          partNumber: input.partNumber,
+          body: input.body,
+        });
+      } catch (error) {
+        await options.state.releasePart(upload.uid, upload.uploadId, input.partNumber, reservationToken);
+        throw error;
+      }
+      if (!result.etag) {
+        return releasePartReservation(
+          options.state,
+          upload,
+          reservationToken,
+          input.partNumber,
+          boundaryError('provider returned an empty part ETag'),
+        );
+      }
       const receipt = { partNumber: input.partNumber, etag: result.etag, sizeBytes: input.body.byteLength };
-      await options.state.replaceUpload({
-        ...upload,
-        parts: [...upload.parts, receipt].sort((left, right) => left.partNumber - right.partNumber),
-      });
+      await persistPartReceipt(options.state, upload, reservationToken, receipt);
       return receipt;
     },
 
     async complete(input: AttachmentIdentityInput): Promise<AttachmentMetadata> {
       assertNoClientObjectKey(input);
+      const existing = await completedAttachment(options.state, input);
+      if (existing) return existing;
       const upload = await requireUpload(options.state, input);
       const count = expectedPartCount(upload.sizeBytes);
       if (upload.parts.length !== count || upload.parts.some((part, index) =>
@@ -311,13 +430,25 @@ export function createAttachmentService(options: {
         expectedSizeBytes: upload.sizeBytes,
       });
       const { uploadId: _uploadId, parts: _parts, ...metadata } = upload;
-      await options.state.completeUpload(upload.uid, upload.uploadId, metadata);
+      try {
+        await options.state.completeUpload(upload.uid, upload.uploadId, metadata);
+      } catch (error) {
+        // The D1 write may have committed even when the response was lost, or a
+        // concurrent completion may have won. Return that durable result when
+        // present; otherwise preserve the upload receipts for a later retry.
+        const completed = await completedAttachment(options.state, input);
+        if (completed) return completed;
+        throw error;
+      }
       return metadata;
     },
 
     async abort(input: AttachmentIdentityInput): Promise<void> {
       assertNoClientObjectKey(input);
       const upload = await requireUpload(options.state, input);
+      if (await options.provider.headAttachment(upload.objectKey)) {
+        throw boundaryError('attachment bytes are already completed; retry completion instead of aborting');
+      }
       await options.provider.abortAttachmentUpload({ storageKey: upload.objectKey, uploadId: upload.uploadId });
       await options.state.removeUpload(upload.uid, upload.uploadId);
     },

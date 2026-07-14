@@ -25,7 +25,7 @@ import { buildExportBundle } from '../export/bundle';
 import { resolveExportClosure } from '../export/closure';
 import { toDomainJson } from '../../shared/domain/codec';
 import type { AppData } from '../../shared/transport/restDto';
-import { convertLegacyToV1alpha1 } from '../migrations/legacyToV1alpha1';
+import { convertLegacyToV1alpha1 } from './legacyToV1alpha1';
 
 // Compatibility export for callers created while the bootstrap work was in
 // flight. Runtime code should import the marker helper from `./status` so it
@@ -94,17 +94,17 @@ export function prepareRepositoryData(data: AppData): PreparedRepositoryData {
   if (!conversion.report.ok) {
     throw new TypeError(`Repository fixture conversion failed: ${conversion.report.issues.map((issue) => `${issue.code}:${issue.owner}`).join(', ')}`);
   }
-  const snapshot = conversion.snapshot;
+  const resources = conversion.resources;
   const catalogs: PreparedResourceWrite[] = [];
   const addCatalogs = <Desc extends DescMessage>(schema: Desc, values: MessageShape<Desc>[]) => {
     for (const value of values) catalogs.push({ name: (value as unknown as { name: string }).name, protoSchema: schema.typeName, protoJson: protoJson(schema, value) });
   };
-  addCatalogs(CustomerSchema, snapshot.customers);
-  addCatalogs(MaterialSchema, snapshot.materials);
-  addCatalogs(SceneSchema, snapshot.scenes);
-  addCatalogs(GlobalFieldSchema, snapshot.globalFields);
-  addCatalogs(MaterialStateRuleSchema, snapshot.materialStateRules);
-  addCatalogs(AttachmentSchema, snapshot.attachments);
+  addCatalogs(CustomerSchema, resources.customers);
+  addCatalogs(MaterialSchema, resources.materials);
+  addCatalogs(SceneSchema, resources.scenes);
+  addCatalogs(GlobalFieldSchema, resources.globalFields);
+  addCatalogs(MaterialStateRuleSchema, resources.materialStateRules);
+  addCatalogs(AttachmentSchema, resources.attachments);
 
   const currents: PreparedResourceWrite<CurrentResourceWriteInput>[] = [];
   const revisions: PreparedRevisionWrite[] = [];
@@ -143,14 +143,14 @@ export function prepareRepositoryData(data: AppData): PreparedRepositoryData {
     });
   };
 
-  for (const robot of snapshot.robotModels) {
+  for (const robot of resources.robotModels) {
     currents.push({ name: robot.name, protoSchema: RobotModelSchema.typeName, protoJson: protoJson(RobotModelSchema, robot) });
-    const history = snapshot.robotModelRevisions.filter((item) => item.snapshot?.name === robot.name).sort(compareHistory);
+    const history = resources.robotModelRevisions.filter((item) => item.snapshot?.name === robot.name).sort(compareHistory);
     for (const revision of history) addRevision(RobotModelRevisionSchema, revision, revisionSequence(history, revision.name));
   }
 
-  for (const taskName of new Set(snapshot.taskSopRevisions.map((item) => item.snapshot?.name).filter((name): name is string => Boolean(name)))) {
-    const history = snapshot.taskSopRevisions.filter((item) => item.snapshot?.name === taskName).sort(compareHistory);
+  for (const taskName of new Set(resources.taskSopRevisions.map((item) => item.snapshot?.name).filter((name): name is string => Boolean(name)))) {
+    const history = resources.taskSopRevisions.filter((item) => item.snapshot?.name === taskName).sort(compareHistory);
     const drafts = history.filter((item) => item.origin === RevisionOrigin.IMPORTED_DRAFT_CHECKPOINT);
     const editableDraft = drafts.at(-1);
     const confirmed = history.filter((item) => item.origin === RevisionOrigin.IMPORTED_CONFIRMED);
@@ -185,8 +185,8 @@ export function prepareRepositoryData(data: AppData): PreparedRepositoryData {
     }
   }
 
-  for (const requirementName of new Set(snapshot.requirementRevisions.map((item) => item.snapshot?.name).filter((name): name is string => Boolean(name)))) {
-    const history = snapshot.requirementRevisions.filter((item) => item.snapshot?.name === requirementName).sort(compareHistory);
+  for (const requirementName of new Set(resources.requirementRevisions.map((item) => item.snapshot?.name).filter((name): name is string => Boolean(name)))) {
+    const history = resources.requirementRevisions.filter((item) => item.snapshot?.name === requirementName).sort(compareHistory);
     const drafts = history.filter((item) => item.origin === RevisionOrigin.IMPORTED_DRAFT_CHECKPOINT);
     if (drafts.length > 1) throw new TypeError(`Multiple legacy Requirement drafts are unsupported: ${requirementName}`);
     const editableDraft = drafts.at(-1);
@@ -214,13 +214,13 @@ export function prepareRepositoryData(data: AppData): PreparedRepositoryData {
   }
 
   for (const revision of [
-    ...snapshot.taskSopRevisions.filter((item) => item.origin === RevisionOrigin.IMPORTED_CONFIRMED),
-    ...snapshot.requirementRevisions.filter((item) => item.origin === RevisionOrigin.IMPORTED_CONFIRMED),
+    ...resources.taskSopRevisions.filter((item) => item.origin === RevisionOrigin.IMPORTED_CONFIRMED),
+    ...resources.requirementRevisions.filter((item) => item.origin === RevisionOrigin.IMPORTED_CONFIRMED),
   ]) {
     const root = revision.$typeName.endsWith('TaskSopRevision')
       ? { kind: 'task_sop' as const, sourceId: revision.snapshot!.sourceId ?? revision.snapshot!.name.split('/').at(-1)!, versionLabel: revision.versionLabel }
       : { kind: 'requirement' as const, sourceId: revision.snapshot!.sourceId ?? revision.snapshot!.name.split('/').at(-1)!, versionLabel: revision.versionLabel };
-    const bundle = buildExportBundle(resolveExportClosure(snapshot, root));
+    const bundle = buildExportBundle(resolveExportClosure(resources, root));
     bundles.push({
       protoSchema: bundle.$typeName,
       bundleProtoJson: encodeExportBundle(bundle),

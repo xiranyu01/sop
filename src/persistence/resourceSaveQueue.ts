@@ -40,8 +40,10 @@ export class ResourceSaveQueue<T> {
   private local: T;
   private pending?: T;
   private inFlight?: T;
+  private unknownOutcomeRecovery?: { sentValue: T; sentEtag: string };
   private warning?: SaveWarning;
   private current: ResourceSaveState<T>;
+  private readonly settleWaiters: Array<(state: ResourceSaveState<T>) => void> = [];
 
   constructor(options: ResourceSaveQueueOptions<T>) {
     this.resourceName = options.resourceName;
@@ -70,35 +72,66 @@ export class ResourceSaveQueue<T> {
     this.setState({ ...this.current, warning: undefined });
   }
 
-  submit(value: T): void {
+  submit(value: T): Promise<ResourceSaveState<T>> {
     this.local = structuredClone(value);
     this.pending = structuredClone(value);
-    if (this.isPaused()) return;
+    if (this.isPaused()) {
+      // The visible state name is unchanged, but subscribers still need to
+      // learn that the retained local value (and navigation risk) changed.
+      this.setState({ ...this.current });
+      return Promise.resolve(this.current);
+    }
     void this.pump();
+    return this.whenSettled();
+  }
+
+  whenSettled(): Promise<ResourceSaveState<T>> {
+    if (this.isSettled()) return Promise.resolve(this.current);
+    return new Promise((resolve) => this.settleWaiters.push(resolve));
   }
 
   async retry(): Promise<void> {
     if (this.current.kind !== 'paused-retryable' && this.current.kind !== 'paused-terminal') return;
     if (this.current.kind === 'paused-retryable' && this.current.unknownOutcome) {
+      const recovery = this.unknownOutcomeRecovery;
       const server = await this.transport.read(this.resourceName);
+      this.unknownOutcomeRecovery = undefined;
+      if (recovery && this.equals(server.value, recovery.sentValue)) {
+        this.acknowledged = structuredClone(server);
+        if (this.equals(server.value, this.local)) {
+          this.pending = undefined;
+          this.setState({ kind: 'ready', etag: server.etag, warning: this.warning });
+          return;
+        }
+        this.pending = structuredClone(this.local);
+        this.setState({ kind: 'ready', etag: server.etag, warning: this.warning });
+        await this.pump();
+        return;
+      }
       if (this.equals(server.value, this.local)) {
         this.acknowledged = structuredClone(server);
         this.pending = undefined;
         this.setState({ kind: 'ready', etag: server.etag, warning: this.warning });
         return;
       }
-      if (server.etag !== this.acknowledged.etag) {
-        this.setState({
-          kind: 'paused-conflict',
-          etag: this.acknowledged.etag,
-          message: '服务器内容已在结果未知期间发生变化',
-          serverValue: structuredClone(server.value),
-          serverEtag: server.etag,
-          warning: this.warning,
-        });
+      if (server.etag === (recovery?.sentEtag ?? this.acknowledged.etag)) {
+        this.acknowledged = structuredClone(server);
+        this.pending = structuredClone(this.local);
+        this.setState({ kind: 'ready', etag: server.etag, warning: this.warning });
+        await this.pump();
         return;
       }
+      this.setState({
+        kind: 'paused-conflict',
+        etag: this.acknowledged.etag,
+        message: '服务器内容已在结果未知期间发生变化',
+        serverValue: structuredClone(server.value),
+        serverEtag: server.etag,
+        warning: this.warning,
+      });
+      return;
     }
+    this.unknownOutcomeRecovery = undefined;
     this.pending = structuredClone(this.local);
     this.setState({ kind: 'ready', etag: this.acknowledged.etag, warning: this.warning });
     await this.pump();
@@ -110,6 +143,7 @@ export class ResourceSaveQueue<T> {
     this.local = structuredClone(this.current.serverValue);
     this.acknowledged = { value: structuredClone(this.current.serverValue), etag: this.current.serverEtag };
     this.pending = undefined;
+    this.unknownOutcomeRecovery = undefined;
     this.setState({ kind: 'ready', etag: this.current.serverEtag, warning: this.warning });
   }
 
@@ -119,6 +153,7 @@ export class ResourceSaveQueue<T> {
     const server = await this.transport.read(this.resourceName);
     this.acknowledged = structuredClone(server);
     this.pending = structuredClone(this.local);
+    this.unknownOutcomeRecovery = undefined;
     this.setState({ kind: 'ready', etag: server.etag, warning: this.warning });
     await this.pump();
   }
@@ -130,6 +165,14 @@ export class ResourceSaveQueue<T> {
   private setState(state: ResourceSaveState<T>): void {
     this.current = state;
     this.onStateChange?.(state);
+    if (this.isSettled()) {
+      const waiters = this.settleWaiters.splice(0);
+      for (const resolve of waiters) resolve(this.current);
+    }
+  }
+
+  private isSettled(): boolean {
+    return this.isPaused() || (this.current.kind !== 'saving' && this.inFlight === undefined && this.pending === undefined);
   }
 
   private async pump(): Promise<void> {
@@ -143,6 +186,7 @@ export class ResourceSaveQueue<T> {
       const result = await this.transport.save(this.resourceName, structuredClone(value), sentEtag);
       this.warning = result.warning ?? this.warning;
       this.acknowledged = { value: structuredClone(value), etag: result.etag };
+      this.unknownOutcomeRecovery = undefined;
       this.inFlight = undefined;
       if (this.pending === undefined && this.equals(this.local, value)) {
         this.setState({ kind: 'ready', etag: result.etag, warning: this.warning });
@@ -154,6 +198,7 @@ export class ResourceSaveQueue<T> {
     } catch (error) {
       this.inFlight = undefined;
       if (!isQueueFailure<T>(error)) {
+        this.unknownOutcomeRecovery = { sentValue: structuredClone(value), sentEtag };
         this.setState({
           kind: 'paused-retryable', etag: sentEtag,
           message: error instanceof Error ? error.message : String(error),
@@ -161,6 +206,9 @@ export class ResourceSaveQueue<T> {
         });
         return;
       }
+      this.unknownOutcomeRecovery = error.kind === 'retryable' && error.unknownOutcome
+        ? { sentValue: structuredClone(value), sentEtag }
+        : undefined;
       if (error.kind === 'conflict') {
         this.setState({
           kind: 'paused-conflict', etag: sentEtag, message: error.message,
@@ -177,4 +225,3 @@ export class ResourceSaveQueue<T> {
     }
   }
 }
-

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type {
   AttachmentCompleteInput,
@@ -12,9 +13,18 @@ import {
   ATTACHMENT_TOTAL_MAX_BYTES,
   createAttachmentService,
   type AttachmentMetadata,
+  type AttachmentPartReceipt,
   type AttachmentStateStore,
   type AttachmentUploadSession,
 } from '../../server/domain/services/attachment';
+import { repositoryBootstrapMarkerValue, repositoryBootstrapMetaKey } from '../../server/bootstrap/status';
+import { handleResourceApiRequest } from '../../server/http/resourceApi';
+import { onRequest as handlePagesRequest } from '../../functions/api/[[path]]';
+import { createD1AttachmentStateStore } from '../../server/repositories/d1AttachmentStateStore';
+import { createD1ResourceRepository } from '../../server/repositories/d1ResourceRepository';
+import { SqliteD1 } from '../helpers/sqliteD1';
+
+const migrationSql = readFileSync(new URL('../../migrations/0001_resource_storage.sql', import.meta.url), 'utf8');
 
 const owner = { scope: 'requirement' as const, uid: 'owner-a' };
 const otherOwner = { scope: 'requirement' as const, uid: 'owner-b' };
@@ -26,6 +36,11 @@ function clone<T>(value: T): T {
 class MemoryAttachmentState implements AttachmentStateStore {
   readonly uploads = new Map<string, AttachmentUploadSession>();
   readonly attachments = new Map<string, AttachmentMetadata>();
+  readonly partReservations = new Map<string, string>();
+  failCompleteCount = 0;
+  failRecordPartBeforeCommitCount = 0;
+  failRecordPartAfterCommitCount = 0;
+  transformRecordPartReceipt?: (receipt: AttachmentPartReceipt) => AttachmentPartReceipt;
 
   async getUpload(uid: string) {
     const value = this.uploads.get(uid);
@@ -37,16 +52,56 @@ class MemoryAttachmentState implements AttachmentStateStore {
     this.uploads.set(value.uid, clone(value));
   }
 
-  async replaceUpload(value: AttachmentUploadSession) {
-    const current = this.uploads.get(value.uid);
-    if (!current || current.uploadId !== value.uploadId) throw new Error('attachment upload changed');
-    this.uploads.set(value.uid, clone(value));
+  async reservePart(uid: string, uploadId: string, partNumber: number, reservationToken: string) {
+    const current = this.uploads.get(uid);
+    const key = `${uid}:${partNumber}`;
+    if (!current || current.uploadId !== uploadId || this.partReservations.has(key) ||
+      current.parts.some((part) => part.partNumber === partNumber)) return false;
+    this.partReservations.set(key, reservationToken);
+    return true;
+  }
+
+  async recordPart(uid: string, uploadId: string, reservationToken: string, receipt: AttachmentPartReceipt) {
+    if (this.failRecordPartBeforeCommitCount > 0) {
+      this.failRecordPartBeforeCommitCount -= 1;
+      throw new Error('state record part failed before commit');
+    }
+    const current = this.uploads.get(uid);
+    const key = `${uid}:${receipt.partNumber}`;
+    if (!current || current.uploadId !== uploadId || this.partReservations.get(key) !== reservationToken) {
+      throw new Error('attachment part reservation changed');
+    }
+    current.parts.push(clone(this.transformRecordPartReceipt?.(receipt) ?? receipt));
+    current.parts.sort((left, right) => left.partNumber - right.partNumber);
+    this.partReservations.delete(key);
+    if (this.failRecordPartAfterCommitCount > 0) {
+      this.failRecordPartAfterCommitCount -= 1;
+      throw new Error('state record part response was lost after commit');
+    }
+  }
+
+  async releasePart(uid: string, uploadId: string, partNumber: number, reservationToken: string) {
+    const current = this.uploads.get(uid);
+    const key = `${uid}:${partNumber}`;
+    if (current?.uploadId === uploadId && this.partReservations.get(key) === reservationToken) {
+      this.partReservations.delete(key);
+    }
   }
 
   async completeUpload(uid: string, uploadId: string, value: AttachmentMetadata) {
+    if (this.failCompleteCount > 0) {
+      this.failCompleteCount -= 1;
+      throw new Error('state complete failed');
+    }
     const current = this.uploads.get(uid);
-    if (!current || current.uploadId !== uploadId || this.attachments.has(uid)) throw new Error('attachment upload changed');
+    const completed = this.attachments.get(uid);
+    if (completed) {
+      if (JSON.stringify(completed) !== JSON.stringify(value)) throw new Error('attachment upload changed');
+      return;
+    }
+    if (!current || current.uploadId !== uploadId) throw new Error('attachment upload changed');
     this.uploads.delete(uid);
+    for (const key of this.partReservations.keys()) if (key.startsWith(`${uid}:`)) this.partReservations.delete(key);
     this.attachments.set(uid, clone(value));
   }
 
@@ -54,6 +109,7 @@ class MemoryAttachmentState implements AttachmentStateStore {
     const current = this.uploads.get(uid);
     if (!current || current.uploadId !== uploadId) throw new Error('attachment upload changed');
     this.uploads.delete(uid);
+    for (const key of this.partReservations.keys()) if (key.startsWith(`${uid}:`)) this.partReservations.delete(key);
   }
 
   async getAttachment(uid: string) {
@@ -101,7 +157,11 @@ class FakeAttachmentProvider implements Pick<AttachmentObjectStore,
   async completeAttachmentUpload(input: AttachmentCompleteInput) {
     this.completeCalls += 1;
     if (this.failComplete) throw new Error('provider complete failed');
-    if (this.objects.has(input.storageKey)) throw new Error('provider object overwrite');
+    const existingSize = this.objects.get(input.storageKey);
+    if (existingSize !== undefined) {
+      if (existingSize !== input.expectedSizeBytes) throw new Error('provider object size mismatch');
+      return;
+    }
     const upload = this.uploads.get(input.uploadId);
     if (!upload || upload.key !== input.storageKey) throw new Error('provider upload mismatch');
     let size = 0;
@@ -118,7 +178,8 @@ class FakeAttachmentProvider implements Pick<AttachmentObjectStore,
     this.abortCalls += 1;
     if (this.failAbort) throw new Error('provider abort failed');
     const upload = this.uploads.get(input.uploadId);
-    if (!upload || upload.key !== input.storageKey) throw new Error('provider upload mismatch');
+    if (!upload) return;
+    if (upload.key !== input.storageKey) throw new Error('provider upload mismatch');
     this.uploads.delete(input.uploadId);
   }
 
@@ -230,7 +291,7 @@ describe('lightweight attachment upload boundary', () => {
     })).resolves.toMatchObject({ partCount: 10 });
   });
 
-  it('propagates provider failures without completed metadata and rejects repeated completion without provider reuse', async () => {
+  it('propagates provider failures without completed metadata and returns completed metadata on response-loss retry', async () => {
     const { service, state, provider } = fixture();
     provider.failCreate = true;
     await expect(service.initialize({ owner, filename: 'fail.bin', mediaType: 'application/octet-stream', sizeBytes: 4 }))
@@ -252,10 +313,119 @@ describe('lightweight attachment upload boundary', () => {
     expect(await state.getUpload(initialized.uid)).toBeDefined();
 
     provider.failComplete = false;
-    await expect(service.complete({ owner, uid: initialized.uid })).resolves.toMatchObject({ uid: initialized.uid });
+    const completed = await service.complete({ owner, uid: initialized.uid });
+    expect(completed).toMatchObject({ uid: initialized.uid });
     const calls = provider.completeCalls;
-    await expect(service.complete({ owner, uid: initialized.uid })).rejects.toThrow('already completed');
+    await expect(service.complete({ owner, uid: initialized.uid })).resolves.toEqual(completed);
     expect(provider.completeCalls).toBe(calls);
+  });
+
+  it('recovers receipt persistence before commit without uploading the R2 part twice', async () => {
+    const { service, state, provider } = fixture('attachment-part-pre-commit');
+    const initialized = await service.initialize({
+      owner,
+      filename: 'part-pre-commit.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+    });
+    state.failRecordPartBeforeCommitCount = 1;
+
+    await expect(service.uploadPart({
+      owner,
+      uid: initialized.uid,
+      partNumber: 1,
+      body: new ArrayBuffer(4),
+    })).resolves.toMatchObject({ partNumber: 1, sizeBytes: 4 });
+
+    expect(provider.partCalls).toBe(1);
+    await expect(state.getUpload(initialized.uid)).resolves.toMatchObject({
+      parts: [{ partNumber: 1, etag: 'etag-1-4', sizeBytes: 4 }],
+    });
+    expect(state.partReservations.size).toBe(0);
+  });
+
+  it('reconciles a matching receipt after commit response loss and rejects a mismatched durable receipt', async () => {
+    const committed = fixture('attachment-part-committed');
+    const initialized = await committed.service.initialize({
+      owner,
+      filename: 'part-committed.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+    });
+    committed.state.failRecordPartAfterCommitCount = 1;
+
+    await expect(committed.service.uploadPart({
+      owner,
+      uid: initialized.uid,
+      partNumber: 1,
+      body: new ArrayBuffer(4),
+    })).resolves.toMatchObject({ etag: 'etag-1-4' });
+    expect(committed.provider.partCalls).toBe(1);
+    expect(committed.state.partReservations.size).toBe(0);
+
+    const mismatched = fixture('attachment-part-mismatched');
+    const mismatchedUpload = await mismatched.service.initialize({
+      owner,
+      filename: 'part-mismatched.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+    });
+    mismatched.state.transformRecordPartReceipt = (receipt) => ({ ...receipt, etag: 'different-etag' });
+    mismatched.state.failRecordPartAfterCommitCount = 1;
+
+    await expect(mismatched.service.uploadPart({
+      owner,
+      uid: mismatchedUpload.uid,
+      partNumber: 1,
+      body: new ArrayBuffer(4),
+    })).rejects.toThrow('does not match the provider result');
+    expect(mismatched.provider.partCalls).toBe(1);
+    expect(mismatched.state.partReservations.size).toBe(0);
+  });
+
+  it('releases its exact reservation after persistent receipt persistence failure', async () => {
+    const { service, state, provider } = fixture('attachment-part-persistent');
+    const initialized = await service.initialize({
+      owner,
+      filename: 'part-persistent.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+    });
+    state.failRecordPartBeforeCommitCount = 2;
+
+    await expect(service.uploadPart({
+      owner,
+      uid: initialized.uid,
+      partNumber: 1,
+      body: new ArrayBuffer(4),
+    })).rejects.toThrow('state record part failed before commit');
+    expect(provider.partCalls).toBe(1);
+    expect(state.partReservations.size).toBe(0);
+  });
+
+  it('keeps a completed object recoverable when durable completion fails and rejects destructive abort', async () => {
+    const { service, state, provider } = fixture('attachment-retry');
+    const initialized = await service.initialize({
+      owner,
+      filename: 'retry.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+    });
+    await service.uploadPart({ owner, uid: initialized.uid, partNumber: 1, body: new ArrayBuffer(4) });
+    state.failCompleteCount = 1;
+
+    await expect(service.complete({ owner, uid: initialized.uid })).rejects.toThrow('state complete failed');
+    expect(provider.objects.get(initialized.objectKey)).toBe(4);
+    await expect(state.getUpload(initialized.uid)).resolves.toMatchObject({
+      parts: [{ partNumber: 1, sizeBytes: 4 }],
+    });
+
+    await expect(service.abort({ owner, uid: initialized.uid })).rejects.toThrow('retry completion');
+    await expect(state.getUpload(initialized.uid)).resolves.toBeDefined();
+
+    await expect(service.complete({ owner, uid: initialized.uid })).resolves.toMatchObject({ uid: initialized.uid });
+    await expect(state.getUpload(initialized.uid)).resolves.toBeUndefined();
+    await expect(state.getAttachment(initialized.uid)).resolves.toMatchObject({ uid: initialized.uid });
   });
 
   it('unlinks metadata only and never exposes a provider delete operation', async () => {
@@ -286,5 +456,359 @@ describe('lightweight attachment upload boundary', () => {
     await expect(service.abort({ owner, uid: initialized.uid })).resolves.toBeUndefined();
     expect(await state.getUpload(initialized.uid)).toBeUndefined();
     expect(provider.objects.size).toBe(0);
+  });
+});
+
+describe('D1 attachment state', () => {
+  it('reserves a multipart part in D1 before provider upload so concurrent requests cannot overwrite it', async () => {
+    const db = new SqliteD1(migrationSql);
+    const provider = new FakeAttachmentProvider();
+    const state = createD1AttachmentStateStore(db, { clock: () => '2026-07-14T10:00:00.000Z' });
+    const service = createAttachmentService({
+      provider,
+      state,
+      createUid: () => '00000000-0000-4000-8000-000000000100',
+    });
+    const initialized = await service.initialize({
+      owner,
+      filename: 'concurrent.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+    });
+
+    const results = await Promise.allSettled([
+      service.uploadPart({ owner, uid: initialized.uid, partNumber: 1, body: new ArrayBuffer(4) }),
+      service.uploadPart({ owner, uid: initialized.uid, partNumber: 1, body: new ArrayBuffer(4) }),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(provider.partCalls).toBe(1);
+    await expect(state.getUpload(initialized.uid)).resolves.toMatchObject({
+      parts: [{ partNumber: 1, sizeBytes: 4 }],
+    });
+    expect(db.database.prepare('SELECT count(*) AS count FROM SOP_ATTACHMENT_PART_RESERVATIONS').get())
+      .toEqual({ count: 0 });
+    db.close();
+  });
+
+  it('persists an upload across state adapter recreation and atomically promotes it to completed metadata', async () => {
+    const db = new SqliteD1(migrationSql);
+    const provider = new FakeAttachmentProvider();
+    const state = createD1AttachmentStateStore(db, { clock: () => '2026-07-14T10:00:00.000Z' });
+    const service = createAttachmentService({
+      provider,
+      state,
+      createUid: () => '00000000-0000-4000-8000-000000000101',
+    });
+
+    const initialized = await service.initialize({
+      owner,
+      filename: 'persisted.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+      publicUrl: 'https://assets.example.test/persisted.bin',
+      metadata: { purpose: 'restart-test' },
+    });
+    await service.uploadPart({ owner, uid: initialized.uid, partNumber: 1, body: new ArrayBuffer(4) });
+
+    const restartedState = createD1AttachmentStateStore(db, { clock: () => '2026-07-14T10:01:00.000Z' });
+    const restarted = createAttachmentService({ provider, state: restartedState });
+    const completed = await restarted.complete({ owner, uid: initialized.uid });
+    expect(completed).toMatchObject({
+      uid: initialized.uid,
+      objectKey: initialized.objectKey,
+      publicUrl: 'https://assets.example.test/persisted.bin',
+      metadata: { purpose: 'restart-test' },
+    });
+    await expect(restartedState.completeUpload(initialized.uid, initialized.uploadId, completed))
+      .resolves.toBeUndefined();
+    await expect(restartedState.completeUpload(initialized.uid, initialized.uploadId, {
+      ...completed,
+      filename: 'changed.bin',
+    })).rejects.toThrow('Attachment upload changed');
+    await expect(restartedState.getUpload(initialized.uid)).resolves.toBeUndefined();
+    await expect(restartedState.getAttachment(initialized.uid)).resolves.toMatchObject({
+      owner,
+      uid: initialized.uid,
+      sizeBytes: 4,
+    });
+    expect(db.database.prepare('SELECT count(*) AS count FROM SOP_ATTACHMENT_UPLOADS').get()).toEqual({ count: 0 });
+    expect(db.database.prepare('SELECT count(*) AS count FROM SOP_ATTACHMENT_METADATA').get()).toEqual({ count: 1 });
+    expect(db.database.prepare(`SELECT kind, uid FROM SOP_CATALOG_RESOURCES
+      WHERE name = ?`).get(`attachments/${initialized.uid}`)).toEqual({ kind: 'ATTACHMENT', uid: initialized.uid });
+    db.close();
+  });
+
+  it('removes only D1 metadata on unlink and leaves completed provider bytes untouched', async () => {
+    const db = new SqliteD1(migrationSql);
+    const provider = new FakeAttachmentProvider();
+    const state = createD1AttachmentStateStore(db);
+    const service = createAttachmentService({
+      provider,
+      state,
+      createUid: () => '00000000-0000-4000-8000-000000000102',
+      publicBaseUrl: 'https://assets.example.test/public/',
+    });
+    const initialized = await service.initialize({
+      owner,
+      filename: 'orphaned.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+    });
+    expect(initialized.publicUrl).toBe(
+      `https://assets.example.test/public/attachments/requirement/${owner.uid}/${initialized.uid}`,
+    );
+    await service.uploadPart({ owner, uid: initialized.uid, partNumber: 1, body: new ArrayBuffer(4) });
+    await service.complete({ owner, uid: initialized.uid });
+
+    await expect(service.unlink({ owner, uid: initialized.uid })).resolves.toBe(true);
+    await expect(state.getAttachment(initialized.uid)).resolves.toBeUndefined();
+    expect(provider.objects.get(initialized.objectKey)).toBe(4);
+    db.close();
+  });
+
+  it('keeps owner/key identity immutable and rejects direct malformed rows at the SQL boundary', async () => {
+    const db = new SqliteD1(migrationSql);
+    expect(() => db.database.prepare(`INSERT INTO SOP_ATTACHMENT_UPLOADS (
+      uid, owner_scope, owner_uid, object_key, upload_id, filename, media_type,
+      size_bytes, public_url, metadata_json, parts_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      'attachment-invalid',
+      'requirement',
+      'owner-a',
+      'client/substituted/key',
+      'upload-invalid',
+      'invalid.bin',
+      'application/octet-stream',
+      4,
+      null,
+      '{}',
+      '[]',
+      '2026-07-14T10:00:00.000Z',
+      '2026-07-14T10:00:00.000Z',
+    )).toThrow();
+    db.close();
+  });
+});
+
+describe('owner-scoped attachment resource API', () => {
+  it('derives the owner uid from D1 and supports initialize, part, complete, metadata, and metadata-only unlink', async () => {
+    const db = new SqliteD1(migrationSql);
+    let etag = 0;
+    const repository = createD1ResourceRepository(db, {
+      clock: () => '2026-07-14T10:00:00.000Z',
+      createEtag: () => `attachment-api-etag-${++etag}`,
+    });
+    const root = await repository.createCatalog({
+      protoSchema: 'coscene.sop.v1alpha1.Material',
+      protoJson: JSON.stringify({
+        name: 'materials/attachment-owner',
+        uid: 'attachment-owner-uid',
+        displayName: 'Attachment owner',
+      }),
+    });
+    const manifest = {
+      schemaVersion: 'attachment-test-v1',
+      bootstrapVersion: 'attachment-test-v1',
+      datasetDigest: '0'.repeat(64),
+      expectedCounts: { catalogs: 1, currents: 0, revisions: 0, bundles: 0 },
+    };
+    const expectedBootstrapMarker = repositoryBootstrapMarkerValue('COMPLETE', manifest);
+    await repository.compareAndSetMeta({
+      key: repositoryBootstrapMetaKey,
+      nextValue: expectedBootstrapMarker,
+    });
+    const provider = new FakeAttachmentProvider();
+    let attachmentUid = 0;
+    const attachmentService = createAttachmentService({
+      provider,
+      state: createD1AttachmentStateStore(db),
+      createUid: () => `00000000-0000-4000-8000-${String(++attachmentUid).padStart(12, '0')}`,
+    });
+    const path = `/api/resources/materials/${encodeURIComponent(root.name)}/attachments`;
+    const apiOptions = {
+      expectedBootstrapMarker,
+      attachmentService,
+      requestId: 'attachment-request',
+    };
+    const request = (suffix: string, init?: RequestInit) => handleResourceApiRequest(
+      new Request(`https://sop.test${path}${suffix}`, init),
+      repository,
+      apiOptions,
+    );
+
+    const substituted = await request('', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        filename: 'trace.bin', mediaType: 'application/octet-stream', sizeBytes: 4,
+        objectKey: 'client/substitution',
+      }),
+    });
+    expect(substituted.status).toBe(400);
+    expect(provider.createCalls).toBe(0);
+
+    const initializedResponse = await request('', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        filename: 'trace.bin',
+        mediaType: 'application/octet-stream',
+        sizeBytes: 4,
+        publicUrl: 'https://assets.example.test/trace.bin',
+        metadata: { label: 'trace' },
+      }),
+    });
+    expect(initializedResponse.status).toBe(201);
+    const initialized = await initializedResponse.json() as { uid: string; objectKey: string };
+    expect(initialized).toMatchObject({
+      uid: '00000000-0000-4000-8000-000000000001',
+      objectKey: `attachments/material/${root.uid}/00000000-0000-4000-8000-000000000001`,
+    });
+
+    let streamedChunks = 0;
+    const oversizedRequest = new Request(
+      `https://sop.test${path}/${initialized.uid}/parts/1`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: new ReadableStream<Uint8Array>({
+          pull(controller) {
+            streamedChunks += 1;
+            if (streamedChunks === 1) {
+              controller.enqueue(new Uint8Array(ATTACHMENT_PART_BYTES));
+              return;
+            }
+            controller.enqueue(new Uint8Array(1));
+            controller.close();
+          },
+        }),
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' },
+    );
+    expect(oversizedRequest.headers.get('content-length')).toBeNull();
+    const oversizedPart = await handleResourceApiRequest(oversizedRequest, repository, apiOptions);
+    expect(oversizedPart.status).toBe(400);
+    await expect(oversizedPart.json()).resolves.toMatchObject({ error: { kind: 'VALIDATION' } });
+    expect(provider.partCalls).toBe(0);
+
+    const part = await request(`/${initialized.uid}/parts/1`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: new Uint8Array(4),
+    });
+    expect(part.status).toBe(200);
+    await expect(part.json()).resolves.toMatchObject({ partNumber: 1, sizeBytes: 4 });
+
+    const completed = await request(`/${initialized.uid}/complete`, { method: 'POST' });
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({
+      owner: { scope: 'material', uid: root.uid },
+      uid: initialized.uid,
+      name: `attachments/${initialized.uid}`,
+      publicUrl: 'https://assets.example.test/trace.bin',
+    });
+    await expect(repository.getCatalog(`attachments/${initialized.uid}`)).resolves.toMatchObject({
+      kind: 'ATTACHMENT',
+      uid: initialized.uid,
+      protoJson: expect.stringContaining('https://assets.example.test/trace.bin'),
+    });
+
+    const completedRetry = await request(`/${initialized.uid}/complete`, { method: 'POST' });
+    expect(completedRetry.status).toBe(200);
+    await expect(completedRetry.json()).resolves.toMatchObject({
+      owner: { scope: 'material', uid: root.uid },
+      uid: initialized.uid,
+      name: `attachments/${initialized.uid}`,
+    });
+    expect(provider.completeCalls).toBe(1);
+
+    const metadata = await request(`/${initialized.uid}`);
+    expect(metadata.status).toBe(200);
+    await expect(metadata.json()).resolves.toMatchObject({ uid: initialized.uid, metadata: { label: 'trace' } });
+
+    const unlinked = await request(`/${initialized.uid}`, { method: 'DELETE' });
+    expect(unlinked.status).toBe(204);
+    expect(provider.objects.get(initialized.objectKey)).toBe(4);
+    expect((await request(`/${initialized.uid}`)).status).toBe(404);
+
+    const abortInit = await request('', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: 'abort.bin', mediaType: 'application/octet-stream', sizeBytes: 4 }),
+    });
+    const aborting = await abortInit.json() as { uid: string };
+    expect(abortInit.status).toBe(201);
+    expect((await request(`/${aborting.uid}/abort`, { method: 'POST' })).status).toBe(204);
+    expect((await request(`/${aborting.uid}`)).status).toBe(404);
+
+    provider.failCreate = true;
+    const providerFailure = await request('', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: 'failed.bin', mediaType: 'application/octet-stream', sizeBytes: 4 }),
+    });
+    expect(providerFailure.status).toBe(500);
+    await expect(providerFailure.json()).resolves.toMatchObject({ error: { kind: 'STORAGE_UNAVAILABLE' } });
+    db.close();
+  });
+
+  it('checks readiness before parsing a body or constructing an attachment provider', async () => {
+    const db = new SqliteD1(migrationSql);
+    const repository = createD1ResourceRepository(db);
+    let providerConstructions = 0;
+    const response = await handleResourceApiRequest(
+      new Request('https://sop.test/api/resources/requirements/requirements%2Fmissing/attachments', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{not-json',
+      }),
+      repository,
+      {
+        expectedBootstrapMarker: 'not-ready',
+        createAttachmentService() {
+          providerConstructions += 1;
+          return createAttachmentService({ provider: new FakeAttachmentProvider(), state: new MemoryAttachmentState() });
+        },
+      },
+    );
+    expect(response.status).toBe(503);
+    expect(providerConstructions).toBe(0);
+    db.close();
+  });
+
+  it('keeps the Pages attachment binding lazy until after auth and readiness', async () => {
+    const db = new SqliteD1(migrationSql);
+    let r2Reads = 0;
+    const env = {
+      DB: db,
+      APP_PASSWORD: 'secret',
+      get ATTACHMENTS(): never {
+        r2Reads += 1;
+        throw new Error('R2 binding was accessed before readiness');
+      },
+    };
+    const unauthorized = await handlePagesRequest({
+      request: new Request('https://sop.test/api/resources/materials/materials%2Fowner/attachments', {
+        method: 'POST',
+        headers: { authorization: 'Bearer wrong', 'content-type': 'application/json' },
+        body: '{not-json',
+      }),
+      env,
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(r2Reads).toBe(0);
+
+    const unready = await handlePagesRequest({
+      request: new Request('https://sop.test/api/resources/materials/materials%2Fowner/attachments', {
+        method: 'POST',
+        headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+        body: '{not-json',
+      }),
+      env,
+    });
+    expect(unready.status).toBe(503);
+    expect(r2Reads).toBe(0);
+    db.close();
   });
 });

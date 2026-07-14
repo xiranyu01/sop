@@ -40,6 +40,8 @@ function matchesRevision(actual: RevisionRecord, expected: PreparedRepositoryDat
     actual.protoSchema === expected.protoSchema && actual.revisionProtoJson === expected.revisionProtoJson &&
     actual.versionSequence === expected.versionSequence && actual.revisionOrigin === expected.revisionOrigin &&
     actual.lifecycle === expected.lifecycle && actual.exportEligible === expected.exportEligible &&
+    actual.confirmationCommandId === expected.confirmationCommandId &&
+    actual.confirmedFromEtag === expected.confirmedFromEtag &&
     actual.frozenDependenciesProtoJson === expected.frozenDependenciesProtoJson;
 }
 

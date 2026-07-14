@@ -11,7 +11,7 @@ import type {
 import type { RequirementRevision } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
 import type { TaskSopRevision } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import { CanonicalDataError } from '../domain/errors';
-import { compareStable, stableHash, stableJson } from '../migrations/identity';
+import { compareStable, stableHash, stableJson } from '../domain/identity';
 
 export type ExportRoot =
   | { kind: 'requirement'; sourceId: string; versionLabel: string }

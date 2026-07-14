@@ -22,10 +22,17 @@ export type ResourceSummary = {
   kind: ResourceKind;
   name: string;
   uid: string;
+  sourceId?: string;
   displayName: string;
   etag: string;
   lifecycle?: string;
   currentRevision?: string;
+  sku?: string;
+  fieldGroup?: string;
+  fieldStatus?: string;
+  sceneName?: string;
+  customerName?: string;
+  robotModelRevisionName?: string;
   archived: boolean;
 };
 
@@ -49,4 +56,37 @@ export type RevisionSummary = {
   lifecycle: string;
   exportEligible: boolean;
   sourceVersionId?: string;
+};
+
+export type RevisionDetail = RevisionSummary & {
+  ownerName: string;
+  kind: 'ROBOT_MODEL_REVISION' | 'TASK_SOP_REVISION' | 'REQUIREMENT_REVISION';
+  previousRevisionName?: string;
+  resource: JsonValue;
+};
+
+export type DependencyChange = {
+  kind: number;
+  resourceName: string;
+  beforeToken?: string;
+  afterToken?: string;
+};
+
+export type DependencyReviewResult = {
+  proposalDigest: string;
+  rootName: string;
+  rootEtag: string;
+  dependencies: Array<{ kind: number; resourceName: string; token: string }>;
+  added: DependencyChange[];
+  removed: DependencyChange[];
+  changed: DependencyChange[];
+  empty: boolean;
+};
+
+export type ConfirmationResult = {
+  resource: ResourceDetail;
+  revision: RevisionDetail;
+  idempotent: boolean;
+  exportPath: string;
+  warning?: SaveWarning;
 };

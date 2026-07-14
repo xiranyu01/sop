@@ -1,0 +1,105 @@
+import { expect, test, type Request, type Response } from '@playwright/test';
+import type { ResourcePage } from '../../shared/transport/resourceDto';
+import { listResourceSummaries, openAuthenticated, resourcePath } from './helpers/app';
+
+const capacityGlobalFieldCount = 1_200;
+const capacityGlobalFieldPrefix = 'zzzz-e2e-capacity';
+const globalFieldListPath = '/api/resources/globalFields';
+const globalFieldDetailPrefix = `${globalFieldListPath}/`;
+
+function capacityGlobalFieldName(index: number): string {
+  return `globalFields/${capacityGlobalFieldPrefix}-${String(index).padStart(4, '0')}`;
+}
+
+function anchoredRowName(value: string): RegExp {
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}(?:\\s|$)`);
+}
+
+function isGlobalFieldList(response: Response): boolean {
+  return response.request().method() === 'GET' && new URL(response.url()).pathname === globalFieldListPath;
+}
+
+function globalFieldDetailName(request: Request): string | undefined {
+  if (request.method() !== 'GET') return undefined;
+  const pathname = new URL(request.url()).pathname;
+  if (!pathname.startsWith(globalFieldDetailPrefix)) return undefined;
+  return decodeURIComponent(pathname.slice(globalFieldDetailPrefix.length));
+}
+
+async function resourcePage(response: Response): Promise<ResourcePage> {
+  expect(response.status()).toBe(200);
+  return response.json() as Promise<ResourcePage>;
+}
+
+test('GlobalField summaries paginate to capacity without eager-loading the final detail', async ({ page, request }) => {
+  const expected = await listResourceSummaries(request, 'globalFields');
+  const expectedNames = expected.map((item) => item.name);
+  const capacityNames = Array.from(
+    { length: capacityGlobalFieldCount },
+    (_, index) => capacityGlobalFieldName(index),
+  );
+  expect(expected.length).toBeGreaterThanOrEqual(1_250);
+  expect(expectedNames.filter((name) => name.startsWith(`globalFields/${capacityGlobalFieldPrefix}-`)))
+    .toEqual(capacityNames);
+  expect(new Set(expectedNames).size).toBe(expectedNames.length);
+
+  const target = expected.at(-1);
+  expect(target).toBeDefined();
+  expect(target!.name).toBe(capacityNames.at(-1));
+
+  const detailRequests: string[] = [];
+  page.on('request', (browserRequest) => {
+    const name = globalFieldDetailName(browserRequest);
+    if (name) detailRequests.push(name);
+  });
+
+  const initialResponsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return isGlobalFieldList(response) && !url.searchParams.has('cursor');
+  });
+  await openAuthenticated(page);
+  const pages = [await resourcePage(await initialResponsePromise)];
+
+  await page.getByRole('button', { name: /^全局字段\s+\d+$/ }).click();
+  const loadMore = page.getByRole('button', { name: '加载更多', exact: true });
+  let nextCursor = pages[0].nextCursor;
+  while (nextCursor) {
+    const expectedCursor = nextCursor;
+    const nextResponsePromise = page.waitForResponse((response) =>
+      isGlobalFieldList(response) && new URL(response.url()).searchParams.get('cursor') === expectedCursor);
+    await expect(loadMore).toBeVisible();
+    await loadMore.click();
+    const nextPage = await resourcePage(await nextResponsePromise);
+    pages.push(nextPage);
+    nextCursor = nextPage.nextCursor;
+    if (nextCursor) {
+      await expect(loadMore).toBeVisible();
+      await expect(loadMore).toBeEnabled();
+    } else {
+      await expect(loadMore).toHaveCount(0);
+    }
+  }
+
+  const browserNames = pages.flatMap((resourcePageResult) => resourcePageResult.items.map((item) => item.name));
+  expect(new Set(browserNames).size).toBe(browserNames.length);
+  expect(browserNames).toEqual(expectedNames);
+  expect(detailRequests).not.toContain(target!.name);
+
+  await page.getByPlaceholder('搜索字段名称或说明').fill(target!.displayName);
+  const targetRow = page.getByRole('table').getByRole('button', {
+    name: anchoredRowName(target!.displayName),
+  });
+  await expect(targetRow).toBeVisible();
+
+  const detailPath = resourcePath('globalFields', target!.name);
+  const detailResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'GET' && new URL(response.url()).pathname === detailPath);
+  await targetRow.click();
+  expect((await detailResponsePromise).status()).toBe(200);
+  expect(detailRequests.filter((name) => name === target!.name)).toHaveLength(1);
+
+  const dialog = page.getByRole('dialog', { name: '字段详情' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('字段名称')).toHaveValue(target!.displayName);
+});

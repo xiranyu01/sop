@@ -30,6 +30,12 @@ lifecycle、etag、revision pointer 等查询列，读取/readiness 会重新投
 Cloudflare Pages Functions/Wrangler 是唯一 API runtime。本地、preview 和 production
 各自使用隔离 D1、R2、secret、migration history 和 bootstrap marker。
 
+本地先复制忽略的环境变量模板，并把附件 origin 改成实际可访问的 HTTPS 地址：
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
 ```bash
 pnpm install
 pnpm pages:dev
@@ -87,6 +93,8 @@ bundle schema/renderer version 必须拒绝，不能猜测 upcast。
 - 最多十个 part，总计 100 MiB；非最后一个 part 必须恰好 10 MiB。
 - UTF-8 filename 最多 255 bytes，结构化 metadata 合计最多 16 KiB。
 - 非空 public URL 写入时必须是 absolute HTTPS URL。
+- Pages 环境配置 `R2_PUBLIC_BASE_URL` 后，服务端从 immutable object key 自动生成并
+  记录公开 URL；调用方不负责拼接 object key。
 - provider/upload failure 必须显式返回；confirm/export 不做 live R2、DNS、URL、hash 或
   size consistency check。
 - unlink 只改 metadata，不物理删除 R2 object。本版本没有 cleanup/lifecycle worker。

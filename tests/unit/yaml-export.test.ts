@@ -4,7 +4,7 @@ import YAML from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
 import { Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { exportRequirementYaml, exportTaskSopYaml } from '../../server/export';
-import { convertLegacyToV1alpha1 } from '../../server/migrations/legacyToV1alpha1';
+import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
 import { seedData } from '../e2e/fixtures/seed';
 
 async function golden(name: string): Promise<string> {
@@ -31,7 +31,7 @@ function expectLocalRefsResolve(document: Record<string, unknown>): void {
   for (const key of collections) visit(document[key]);
 }
 
-function markRequirementConfirmed(snapshot: ReturnType<typeof convertLegacyToV1alpha1>['snapshot']): void {
+function markRequirementConfirmed(snapshot: ReturnType<typeof convertLegacyToV1alpha1>['resources']): void {
   const revision = snapshot.requirementRevisions[0];
   revision.snapshot!.lifecycle = Lifecycle.CONFIRMED;
   revision.origin = RevisionOrigin.IMPORTED_CONFIRMED;
@@ -40,7 +40,7 @@ function markRequirementConfirmed(snapshot: ReturnType<typeof convertLegacyToV1a
 
 describe('deterministic canonical YAML export', () => {
   it('matches the reviewed TaskSop golden and remains byte-identical after current catalog edits', async () => {
-    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
     const first = exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1');
     snapshot.scenes = snapshot.scenes.map((scene) => ({ ...scene, displayName: '后续修改的当前场景' }));
     snapshot.globalFields = snapshot.globalFields.map((field) => ({ ...field, value: '后续修改的当前词表' }));
@@ -53,7 +53,7 @@ describe('deterministic canonical YAML export', () => {
   });
 
   it('matches the reviewed Requirement golden and omits history, storage, and volatile metadata', async () => {
-    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
     markRequirementConfirmed(snapshot);
     const output = exportRequirementYaml(snapshot, 'REQ001', '0.0.1');
     expect(output).toBe(await golden('requirement.golden.yaml'));
@@ -66,7 +66,7 @@ describe('deterministic canonical YAML export', () => {
   });
 
   it('never rewrites enum-looking free text', () => {
-    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
     markRequirementConfirmed(snapshot);
     snapshot.requirementRevisions[0].snapshot!.spec!.businessGoal = 'PRIORITY_P1';
     const output = exportRequirementYaml(snapshot, 'REQ001', '0.0.1');
@@ -75,7 +75,7 @@ describe('deterministic canonical YAML export', () => {
   });
 
   it('serializes durations as one canonical ISO 8601 representation', () => {
-    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
     snapshot.taskSopRevisions[0].snapshot!.spec!.expectedDuration = {
       $typeName: 'google.protobuf.Duration', seconds: 3661n, nanos: 500_000_000,
     };
@@ -89,7 +89,7 @@ describe('deterministic canonical YAML export', () => {
       id: 'utf8-file', name: '测试 附件.txt', size: 4, contentType: 'text/plain', storageKey: 'managed/file',
       uploadedAt: '2026-01-01T00:00:00.000Z',
     }];
-    const snapshot = convertLegacyToV1alpha1(data).snapshot;
+    const snapshot = convertLegacyToV1alpha1(data).resources;
     const attachment = snapshot.taskSopRevisions[0].frozenDependencies!.attachments[0];
     attachment.uri = 'https://cdn.example.test/%7E/%2F?q=a%2Fb#%E7%89%87%E6%AE%B5';
     const fetchSpy = vi.spyOn(globalThis, 'fetch');

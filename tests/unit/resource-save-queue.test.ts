@@ -76,6 +76,54 @@ describe('ResourceSaveQueue', () => {
     expect(queue.hasUnsavedChanges).toBe(false);
   });
 
+  it('acknowledges a committed unknown outcome before saving the newest pending edit', async () => {
+    const first = deferred<{ etag: string }>();
+    const save = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ etag: 'e3' });
+    const read = vi.fn().mockResolvedValue({ value: { title: 'a' }, etag: 'e2' });
+    const queue = new ResourceSaveQueue({
+      resourceName: 'taskSops/demo', initial: { value: { title: 'base' }, etag: 'e1' },
+      transport: { save, read },
+    });
+
+    queue.submit({ title: 'a' });
+    queue.submit({ title: 'b' });
+    first.reject({ kind: 'retryable', message: 'connection lost', unknownOutcome: true });
+    await settle();
+    await queue.retry();
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenNthCalledWith(2, 'taskSops/demo', { title: 'b' }, 'e2');
+    expect(queue.state).toMatchObject({ kind: 'ready', etag: 'e3' });
+    expect(queue.hasUnsavedChanges).toBe(false);
+  });
+
+  it('resends the newest local edit when an unknown outcome left the server etag unchanged', async () => {
+    const first = deferred<{ etag: string }>();
+    const save = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ etag: 'e2' });
+    const read = vi.fn().mockResolvedValue({ value: { title: 'base' }, etag: 'e1' });
+    const queue = new ResourceSaveQueue({
+      resourceName: 'taskSops/demo', initial: { value: { title: 'base' }, etag: 'e1' },
+      transport: { save, read },
+    });
+
+    queue.submit({ title: 'a' });
+    queue.submit({ title: 'b' });
+    first.reject({ kind: 'retryable', message: 'connection lost', unknownOutcome: true });
+    await settle();
+    await queue.retry();
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenNthCalledWith(2, 'taskSops/demo', { title: 'b' }, 'e1');
+    expect(queue.state).toMatchObject({ kind: 'ready', etag: 'e2' });
+    expect(queue.hasUnsavedChanges).toBe(false);
+  });
+
   it('turns an unknown-outcome reread with newer server content into a conflict', async () => {
     const transport: ResourceSaveTransport<Value> = {
       save: vi.fn().mockRejectedValue({ kind: 'retryable', message: 'connection lost', unknownOutcome: true }),

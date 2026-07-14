@@ -34,7 +34,9 @@ pnpm pages:dev
 
 本地、preview、production 必须使用隔离的 D1、R2、migration history、secret 和
 bootstrap marker。密码放在忽略的 `.dev.vars`、CI secret store 或 Cloudflare secret
-binding 中，不能提交到仓库。
+binding 中，不能提交到仓库。可从 `.dev.vars.example` 复制本地模板；
+`R2_PUBLIC_BASE_URL` 应配置为当前环境公开可访问的 R2 自定义域名或 `r2.dev` HTTPS
+origin，新上传附件会在该 origin 下记录稳定 object URL。
 
 新环境严格按以下顺序初始化：
 

@@ -6,8 +6,8 @@ import process from 'node:process';
 const root = resolve(process.argv[2] ?? process.cwd());
 const productionEntries = process.argv[2]
   ? ['.']
-  : ['functions', 'migrations', 'server', 'src', 'shared', 'schema.sql'];
-const extensions = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.sql']);
+  : ['functions', 'migrations', 'proto', 'server', 'src', 'shared', 'schema.sql'];
+const extensions = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.proto', '.sql']);
 const ignoredSegments = new Set(['node_modules', 'dist', 'coverage', 'gen', '.git']);
 const forbidden = [
   ['CanonicalSnapshot', /\bCanonicalSnapshot\b/g],
@@ -46,4 +46,3 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(`No global snapshot authority found in ${candidates.length} production files.`);
-

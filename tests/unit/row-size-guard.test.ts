@@ -72,6 +72,7 @@ describe('D1 prospective row-size guard', () => {
   });
 
   it('allows the last byte below 1.8 MB and rejects 1.8 MB before persistence', () => {
+    const onRejected = vi.fn();
     expect(guardProspectiveRow('TASK_SOP', 'taskSops/almost-full', {
       protoJson: 'x'.repeat(ROW_SIZE_REJECTION_BYTES - 1),
     })).toMatchObject({
@@ -81,7 +82,13 @@ describe('D1 prospective row-size guard', () => {
 
     expect(() => guardProspectiveRow('TASK_SOP', 'taskSops/full', {
       protoJson: 'x'.repeat(ROW_SIZE_REJECTION_BYTES),
-    })).toThrow(RowSizeLimitError);
+    }, onRejected)).toThrow(RowSizeLimitError);
+    expect(onRejected).toHaveBeenCalledWith(expect.objectContaining({
+      resourceKind: 'TASK_SOP',
+      resourceName: 'taskSops/full',
+      bytes: ROW_SIZE_REJECTION_BYTES,
+      rejectionLimitBytes: ROW_SIZE_REJECTION_BYTES,
+    }));
 
     try {
       guardProspectiveRow('TASK_SOP', 'taskSops/full', {

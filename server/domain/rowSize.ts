@@ -61,19 +61,23 @@ export function guardProspectiveRow(
   onWarning?: (warning: RowSizeWarning) => void,
 ): RowSizeAssessment {
   const bytes = measureVariableLengthColumns(columns);
+  const warningEvent: RowSizeWarning = {
+    resourceKind,
+    resourceName,
+    bytes,
+    warning: true,
+    warningLimitBytes: ROW_SIZE_WARNING_BYTES,
+    rejectionLimitBytes: ROW_SIZE_REJECTION_BYTES,
+  };
   if (bytes >= ROW_SIZE_REJECTION_BYTES) {
+    // Surface the measured value to the request logger before rejecting. The
+    // HTTP status distinguishes this from a successful near-limit warning.
+    onWarning?.(warningEvent);
     throw new RowSizeLimitError(resourceKind, resourceName, bytes);
   }
   const warning = bytes >= ROW_SIZE_WARNING_BYTES;
   if (warning) {
-    onWarning?.({
-      resourceKind,
-      resourceName,
-      bytes,
-      warning: true,
-      warningLimitBytes: ROW_SIZE_WARNING_BYTES,
-      rejectionLimitBytes: ROW_SIZE_REJECTION_BYTES,
-    });
+    onWarning?.(warningEvent);
   }
   return { resourceKind, resourceName, bytes, warning };
 }

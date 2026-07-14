@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { buildExportBundle } from '../../server/export/bundle';
 import { resolveExportClosure } from '../../server/export/closure';
-import { convertLegacyToV1alpha1 } from '../../server/migrations/legacyToV1alpha1';
+import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
 import { renderFrozenPdfModel } from '../../src/export/pdf';
 import { seedData } from '../e2e/fixtures/seed';
 
 function taskBundle() {
-  const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
+  const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
   return {
     snapshot,
     bundle: buildExportBundle(resolveExportClosure(snapshot, {
@@ -23,7 +23,7 @@ function requirementBundle() {
     targetDurationHours: 0, targetCollectionCount: 10,
     taskSop: { sceneName: '基线场景', title: '基线任务 SOP', version: '0.0.1', status: 'confirmed' },
   }];
-  const snapshot = convertLegacyToV1alpha1(data).snapshot;
+  const snapshot = convertLegacyToV1alpha1(data).resources;
   const revision = snapshot.requirementRevisions[0];
   revision.snapshot!.lifecycle = Lifecycle.CONFIRMED;
   revision.origin = RevisionOrigin.IMPORTED_CONFIRMED;

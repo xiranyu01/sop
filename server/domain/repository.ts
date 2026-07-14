@@ -20,6 +20,12 @@ export type ResourceSummary = {
   etag: string;
   lifecycle?: CurrentLifecycle;
   archivedAt?: string;
+  sku?: string;
+  fieldGroup?: string;
+  fieldStatus?: string;
+  sceneName?: string;
+  customerName?: string;
+  robotModelRevisionName?: string;
 };
 
 export type CatalogResourceRecord = ResourceSummary & {
@@ -55,6 +61,9 @@ export type RevisionRecord = {
   revisionOrigin: RevisionOrigin;
   lifecycle: 'DRAFT' | 'CONFIRMED';
   exportEligible: boolean;
+  /** Durable response-loss receipt for runtime root confirmation only. */
+  confirmationCommandId?: string;
+  confirmedFromEtag?: string;
   protoSchema: string;
   revisionProtoJson: string;
   frozenDependenciesProtoJson?: string;
@@ -62,7 +71,7 @@ export type RevisionRecord = {
 };
 
 export type RevisionSummary = Omit<RevisionRecord,
-  'protoSchema' | 'revisionProtoJson' | 'frozenDependenciesProtoJson'>;
+  'confirmationCommandId' | 'confirmedFromEtag' | 'protoSchema' | 'revisionProtoJson' | 'frozenDependenciesProtoJson'>;
 
 export type ExportBundleRecord = {
   rootRevisionName: string;
@@ -89,6 +98,8 @@ export type ReviewedDependency = {
 export type PageRequest = { cursor?: string; limit?: number };
 export type PageResult<T> = { items: T[]; nextCursor?: string };
 
+export const MAX_BULK_RESOURCE_NAMES = 500;
+
 export type ResourceWriteInput = {
   protoSchema: string;
   protoJson: string;
@@ -110,6 +121,8 @@ export type RevisionWriteInput = {
   revisionOrigin?: RevisionOrigin;
   lifecycle?: 'DRAFT' | 'CONFIRMED';
   exportEligible?: boolean;
+  confirmationCommandId?: string;
+  confirmedFromEtag?: string;
   frozenDependenciesProtoJson?: string;
   now?: string;
 };
@@ -140,6 +153,24 @@ export type AtomicConfirmationResult = {
   root: CurrentResourceRecord;
   revision: RevisionRecord;
   bundle: ExportBundleRecord;
+  idempotent: boolean;
+};
+
+export type AtomicRobotModelSaveInput = {
+  rootName: string;
+  expectedEtag: string;
+  current: CurrentResourceWriteInput;
+  revision: RevisionWriteInput;
+};
+
+export type AtomicRobotModelCreateInput = {
+  current: CurrentResourceWriteInput;
+  revision: RevisionWriteInput;
+};
+
+export type AtomicRobotModelSaveResult = {
+  root: CurrentResourceRecord;
+  revision: RevisionRecord;
   idempotent: boolean;
 };
 
@@ -204,6 +235,7 @@ export class RepositoryNotReadyError extends ResourceRepositoryError {
 
 export interface ResourceRepository {
   getCatalog(name: string): Promise<CatalogResourceRecord | undefined>;
+  getCatalogs(names: readonly string[]): Promise<CatalogResourceRecord[]>;
   listCatalog(kind: CatalogResourceKind, page?: PageRequest): Promise<PageResult<ResourceSummary>>;
   createCatalog(input: ResourceWriteInput): Promise<CatalogResourceRecord>;
   updateCatalog(name: string, expectedEtag: string, input: ResourceWriteInput): Promise<CatalogResourceRecord>;
@@ -216,6 +248,7 @@ export interface ResourceRepository {
   archiveCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
 
   getRevision(name: string): Promise<RevisionRecord | undefined>;
+  getRevisions(names: readonly string[]): Promise<RevisionRecord[]>;
   listRevisions(ownerName: string, page?: PageRequest): Promise<PageResult<RevisionSummary>>;
   createRevision(input: RevisionWriteInput): Promise<RevisionRecord>;
   getExportBundle(rootRevisionName: string): Promise<ExportBundleRecord | undefined>;
@@ -228,6 +261,8 @@ export interface ResourceRepository {
     manifestDigest: string,
     dependencies: ReviewedDependency[],
   ): Promise<CurrentResourceRecord>;
+  createRobotModel(input: AtomicRobotModelCreateInput): Promise<AtomicRobotModelSaveResult>;
+  saveRobotModel(input: AtomicRobotModelSaveInput): Promise<AtomicRobotModelSaveResult>;
   confirm(input: AtomicConfirmationInput): Promise<AtomicConfirmationResult>;
 
   getMeta(key: string): Promise<MetaRecord | undefined>;

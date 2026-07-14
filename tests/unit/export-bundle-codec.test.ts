@@ -8,11 +8,11 @@ import {
 } from '../../server/export/codec';
 import { resolveExportClosure } from '../../server/export/closure';
 import { serializeExportBundleYaml } from '../../server/export/yaml';
-import { convertLegacyToV1alpha1 } from '../../server/migrations/legacyToV1alpha1';
+import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
 import { seedData } from '../e2e/fixtures/seed';
 
 function taskBundle() {
-  const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
+  const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
   return buildExportBundle(resolveExportClosure(snapshot, {
     kind: 'task_sop',
     sourceId: 'scene-baseline-NO.001',
@@ -64,7 +64,7 @@ describe('sealed export bundle codec', () => {
       storageKey: 'managed/optional',
       uploadedAt: '2026-01-01T00:00:00.000Z',
     }];
-    const snapshot = convertLegacyToV1alpha1(data).snapshot;
+    const snapshot = convertLegacyToV1alpha1(data).resources;
     const attachment = snapshot.taskSopRevisions[0].frozenDependencies!.attachments[0];
     attachment.sizeBytes = undefined;
     attachment.uri = undefined;

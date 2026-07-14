@@ -11,7 +11,67 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file coscene/sop/v1alpha1/common.proto.
  */
 export const file_coscene_sop_v1alpha1_common: GenFile = /*@__PURE__*/
-  fileDesc("CiFjb3NjZW5lL3NvcC92MWFscGhhMS9jb21tb24ucHJvdG8SFGNvc2NlbmUuc29wLnYxYWxwaGExIsIBCgxOdW1lcmljUmFuZ2USIQoJbWluX3ZhbHVlGAEgASgBQg66SAsSCSkAAAAAAAAAABIhCgltYXhfdmFsdWUYAiABKAFCDrpICxIJKQAAAAAAAAAAOmy6SGkaZwoVbnVtZXJpY19yYW5nZS5vcmRlcmVkEixtaW5fdmFsdWUgbXVzdCBub3QgYmUgZ3JlYXRlciB0aGFuIG1heF92YWx1ZRogdGhpcy5taW5fdmFsdWUgPD0gdGhpcy5tYXhfdmFsdWUikAEKCFF1YW50aXR5EiUKC2ZpeGVkX3ZhbHVlGAEgASgBQg66SAsSCSEAAAAAAAAAAEgAEjMKBXJhbmdlGAIgASgLMiIuY29zY2VuZS5zb3AudjFhbHBoYTEuTnVtZXJpY1JhbmdlSAASFwoEdW5pdBgDIAEoCUIJukgGcgQQARggQg8KBmFtb3VudBIFukgCCAEiUAoJQXR0cmlidXRlEikKA2tleRgBIAEoCUIcukgZchcQARg/MhFeW2Etel1bYS16MC05LV0qJBIYCgZ2YWx1ZXMYAiADKAlCCLpIBZIBAggBIr8CCg1PcGVyYXRpb25TdGVwEjgKAmlkGAEgASgJQiy6SClyJxABGD8yIV5bYS16XShbYS16MC05LV17MCw2MX1bYS16MC05XSk/JBIcCgtkZXNjcmlwdGlvbhgCIAEoCUIHukgEcgIQARIjCgxhdG9taWNfc2tpbGwYAyABKAlCCLpIBXIDGIABSACIAQESFgoFb3JkZXIYBCABKA1CB7pIBCoCIAASKgoTZW5nbGlzaF9kZXNjcmlwdGlvbhgFIAEoCUIIukgFcgMYoB9IAYgBARIrChRlbmdsaXNoX2F0b21pY19za2lsbBgGIAEoCUIIukgFcgMYgAFIAogBAUIPCg1fYXRvbWljX3NraWxsQhYKFF9lbmdsaXNoX2Rlc2NyaXB0aW9uQhcKFV9lbmdsaXNoX2F0b21pY19za2lsbCK6AQoNT3BlcmF0aW9uUnVsZRI4CgJpZBgBIAEoCUIsukgpcicQARg/MiFeW2Etel0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPyQSHAoLZGVzY3JpcHRpb24YAiABKAlCB7pIBHICEAESHgoIY2F0ZWdvcnkYAyABKAlCB7pIBHICGD9IAIgBARIbCgRub3RlGAQgASgJQgi6SAVyAxjQD0gBiAEBQgsKCV9jYXRlZ29yeUIHCgVfbm90ZSK4AQoPT3BlcmF0aW9uUG9saWN5EjQKB2FsbG93ZWQYASADKAsyIy5jb3NjZW5lLnNvcC52MWFscGhhMS5PcGVyYXRpb25SdWxlEjcKCmFjY2VwdGFibGUYAiADKAsyIy5jb3NjZW5lLnNvcC52MWFscGhhMS5PcGVyYXRpb25SdWxlEjYKCWZvcmJpZGRlbhgDIAMoCzIjLmNvc2NlbmUuc29wLnYxYWxwaGExLk9wZXJhdGlvblJ1bGUimgMKDENoYW5nZVBvbGljeRJECglmcmVxdWVuY3kYASABKA4yJS5jb3NjZW5lLnNvcC52MWFscGhhMS5DaGFuZ2VGcmVxdWVuY3lCCrpIB4IBBBABIAASJgoQaW50ZXJ2YWxfcmVjb3JkcxgCIAEoBUIHukgEGgIgAEgAiAEBOoYCukiCAhpUCiBjaGFuZ2VfcG9saWN5LmZyZXF1ZW5jeV9yZXF1aXJlZBIbZnJlcXVlbmN5IG11c3QgYmUgc3BlY2lmaWVkGhN0aGlzLmZyZXF1ZW5jeSAhPSAwGqkBCihjaGFuZ2VfcG9saWN5LmludGVydmFsX21hdGNoZXNfZnJlcXVlbmN5EkhpbnRlcnZhbF9yZWNvcmRzIG11c3QgYmUgc2V0IGlmIGFuZCBvbmx5IGlmIGZyZXF1ZW5jeSBpcyBFVkVSWV9OX1JFQ09SRFMaMyh0aGlzLmZyZXF1ZW5jeSA9PSAyKSA9PSBoYXModGhpcy5pbnRlcnZhbF9yZWNvcmRzKUITChFfaW50ZXJ2YWxfcmVjb3JkcyKcAQoPUmFuZG9taXplZEZpZWxkEj4KCGZpZWxkX2lkGAEgASgJQiy6SClyJxABGD8yIV5bYS16XShbYS16MC05LV17MCw2MX1bYS16MC05XSk/JBITCgtjb25zdHJhaW50cxgCIAMoCRIjCgxkaXNwbGF5X25hbWUYAyABKAlCCLpIBXIDGIACSACIAQFCDwoNX2Rpc3BsYXlfbmFtZSJIChBOYW1lZFZhbHVlU291cmNlEhUKBG5hbWUYASABKAlCB7pIBHICEAESHQoMdmFsdWVfc291cmNlGAIgASgJQge6SARyAhABIuMDChFTdGVwUmFuZG9taXphdGlvbhIPCgdlbmFibGVkGAEgASgIEicKEXN0YXJ0X3N0ZXBfbnVtYmVyGAIgASgNQge6SAQqAiAASACIAQESJQoPZW5kX3N0ZXBfbnVtYmVyGAMgASgNQge6SAQqAiAASAGIAQE6wgK6SL4CGrsCCiFzdGVwX3JhbmRvbWl6YXRpb24uY29tcGxldGVfcmFuZ2USWWVuYWJsZWQgcmFuZG9taXphdGlvbiByZXF1aXJlcyBhbiBvcmRlcmVkIHN0ZXAgcmFuZ2U7IGRpc2FibGVkIHJhbmRvbWl6YXRpb24gbXVzdCBvbWl0IGl0GroBdGhpcy5lbmFibGVkID8gKGhhcyh0aGlzLnN0YXJ0X3N0ZXBfbnVtYmVyKSAmJiBoYXModGhpcy5lbmRfc3RlcF9udW1iZXIpICYmIHRoaXMuc3RhcnRfc3RlcF9udW1iZXIgPD0gdGhpcy5lbmRfc3RlcF9udW1iZXIpIDogKCFoYXModGhpcy5zdGFydF9zdGVwX251bWJlcikgJiYgIWhhcyh0aGlzLmVuZF9zdGVwX251bWJlcikpQhQKEl9zdGFydF9zdGVwX251bWJlckISChBfZW5kX3N0ZXBfbnVtYmVyKmwKCUxpZmVjeWNsZRIZChVMSUZFQ1lDTEVfVU5TUEVDSUZJRUQQABITCg9MSUZFQ1lDTEVfRFJBRlQQARIXChNMSUZFQ1lDTEVfQ09ORklSTUVEEAISFgoSTElGRUNZQ0xFX0FSQ0hJVkVEEAMquAEKD0NoYW5nZUZyZXF1ZW5jeRIgChxDSEFOR0VfRlJFUVVFTkNZX1VOU1BFQ0lGSUVEEAASIQodQ0hBTkdFX0ZSRVFVRU5DWV9FVkVSWV9SRUNPUkQQARIkCiBDSEFOR0VfRlJFUVVFTkNZX0VWRVJZX05fUkVDT1JEUxACEh4KGkNIQU5HRV9GUkVRVUVOQ1lfUEVSX0JBVENIEAMSGgoWQ0hBTkdFX0ZSRVFVRU5DWV9GSVhFRBAEKmgKCFByaW9yaXR5EhgKFFBSSU9SSVRZX1VOU1BFQ0lGSUVEEAASDwoLUFJJT1JJVFlfUDAQARIPCgtQUklPUklUWV9QMRACEg8KC1BSSU9SSVRZX1AyEAMSDwoLUFJJT1JJVFlfUDMQBCqkAQoTQW5ub3RhdGlvblJlYWRpbmVzcxIkCiBBTk5PVEFUSU9OX1JFQURJTkVTU19VTlNQRUNJRklFRBAAEiAKHEFOTk9UQVRJT05fUkVBRElORVNTX1BFTkRJTkcQARIeChpBTk5PVEFUSU9OX1JFQURJTkVTU19SRUFEWRACEiUKIUFOTk9UQVRJT05fUkVBRElORVNTX05PVF9SRVFVSVJFRBADKnoKEUdsb2JhbEZpZWxkU3RhdHVzEiMKH0dMT0JBTF9GSUVMRF9TVEFUVVNfVU5TUEVDSUZJRUQQABIeChpHTE9CQUxfRklFTERfU1RBVFVTX0FDVElWRRABEiAKHEdMT0JBTF9GSUVMRF9TVEFUVVNfSU5BQ1RJVkUQAiqHBwoQR2xvYmFsRmllbGRHcm91cBIiCh5HTE9CQUxfRklFTERfR1JPVVBfVU5TUEVDSUZJRUQQABIiCh5HTE9CQUxfRklFTERfR1JPVVBfUk9CT1RfU1RBVEUQARInCiNHTE9CQUxfRklFTERfR1JPVVBfUkVGRVJFTkNFX09CSkVDVBACEigKJEdMT0JBTF9GSUVMRF9HUk9VUF9SRUxBVElWRV9QT1NJVElPThADEiYKIkdMT0JBTF9GSUVMRF9HUk9VUF9TVVBQT1JUX1NVUkZBQ0UQBBIdChlHTE9CQUxfRklFTERfR1JPVVBfUkVHSU9OEAUSGwoXR0xPQkFMX0ZJRUxEX0dST1VQX1BPU0UQBhIbChdHTE9CQUxfRklFTERfR1JPVVBfRk9STRAHEiAKHEdMT0JBTF9GSUVMRF9HUk9VUF9QQVJBTUVURVIQCBIoCiRHTE9CQUxfRklFTERfR1JPVVBfQUxMT1dFRF9PUEVSQVRJT04QCRIrCidHTE9CQUxfRklFTERfR1JPVVBfQUNDRVBUQUJMRV9PUEVSQVRJT04QChIqCiZHTE9CQUxfRklFTERfR1JPVVBfRk9SQklEREVOX09QRVJBVElPThALEjMKL0dMT0JBTF9GSUVMRF9HUk9VUF9BTk5PVEFUSU9OX0FMTE9XRURfT1BFUkFUSU9OEAwSNQoxR0xPQkFMX0ZJRUxEX0dST1VQX0FOTk9UQVRJT05fRk9SQklEREVOX09QRVJBVElPThANEiMKH0dMT0JBTF9GSUVMRF9HUk9VUF9SQU5ET01fRklFTEQQDhIpCiVHTE9CQUxfRklFTERfR1JPVVBfUk9CT1RfUkFORE9NX0ZJRUxEEA8SLAooR0xPQkFMX0ZJRUxEX0dST1VQX01BVEVSSUFMX1JBTkRPTV9GSUVMRBAQEiYKIkdMT0JBTF9GSUVMRF9HUk9VUF9BTk5PVEFUSU9OX1RZUEUQERImCiJHTE9CQUxfRklFTERfR1JPVVBfREVMSVZFUllfRk9STUFUEBISKAokR0xPQkFMX0ZJRUxEX0dST1VQX0RFTElWRVJZX0xBTkdVQUdFEBMSJgoiR0xPQkFMX0ZJRUxEX0dST1VQX0RFTElWRVJZX01FVEhPRBAUEiYKIkdMT0JBTF9GSUVMRF9HUk9VUF9TQU1QTElOR19QT0xJQ1kQFWIGcHJvdG8z", [file_buf_validate_validate]);
+  fileDesc("CiFjb3NjZW5lL3NvcC92MWFscGhhMS9jb21tb24ucHJvdG8SFGNvc2NlbmUuc29wLnYxYWxwaGExIsEBCg9EZXBlbmRlbmN5VG9rZW4SPgoEa2luZBgBIAEoDjIkLmNvc2NlbmUuc29wLnYxYWxwaGExLkRlcGVuZGVuY3lLaW5kQgq6SAeCAQQQASAAElMKDXJlc291cmNlX25hbWUYAiABKAlCPLpIOXI3EAEYgAIyMF5bQS1aYS16XVtBLVphLXowLTldKi9bQS1aYS16MC05XVtBLVphLXowLTkvLV0qJBIZCgV0b2tlbhgDIAEoCUIKukgHcgUQARiABCLSAQoYRGVwZW5kZW5jeVJldmlld1Byb3Bvc2FsEk8KCXJvb3RfbmFtZRgBIAEoCUI8ukg5cjcQARiAAjIwXltBLVphLXpdW0EtWmEtejAtOV0qL1tBLVphLXowLTldW0EtWmEtejAtOS8tXSokEh0KCXJvb3RfZXRhZxgCIAEoCUIKukgHcgUQARiABBJGCgxkZXBlbmRlbmNpZXMYAyADKAsyJS5jb3NjZW5lLnNvcC52MWFscGhhMS5EZXBlbmRlbmN5VG9rZW5CCbpIBpIBAxD0AyLCAQoMTnVtZXJpY1JhbmdlEiEKCW1pbl92YWx1ZRgBIAEoAUIOukgLEgkpAAAAAAAAAAASIQoJbWF4X3ZhbHVlGAIgASgBQg66SAsSCSkAAAAAAAAAADpsukhpGmcKFW51bWVyaWNfcmFuZ2Uub3JkZXJlZBIsbWluX3ZhbHVlIG11c3Qgbm90IGJlIGdyZWF0ZXIgdGhhbiBtYXhfdmFsdWUaIHRoaXMubWluX3ZhbHVlIDw9IHRoaXMubWF4X3ZhbHVlIpABCghRdWFudGl0eRIlCgtmaXhlZF92YWx1ZRgBIAEoAUIOukgLEgkhAAAAAAAAAABIABIzCgVyYW5nZRgCIAEoCzIiLmNvc2NlbmUuc29wLnYxYWxwaGExLk51bWVyaWNSYW5nZUgAEhcKBHVuaXQYAyABKAlCCbpIBnIEEAEYIEIPCgZhbW91bnQSBbpIAggBIlAKCUF0dHJpYnV0ZRIpCgNrZXkYASABKAlCHLpIGXIXEAEYPzIRXlthLXpdW2EtejAtOS1dKiQSGAoGdmFsdWVzGAIgAygJQgi6SAWSAQIIASK/AgoNT3BlcmF0aW9uU3RlcBI4CgJpZBgBIAEoCUIsukgpcicQARg/MiFeW2Etel0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPyQSHAoLZGVzY3JpcHRpb24YAiABKAlCB7pIBHICEAESIwoMYXRvbWljX3NraWxsGAMgASgJQgi6SAVyAxiAAUgAiAEBEhYKBW9yZGVyGAQgASgNQge6SAQqAiAAEioKE2VuZ2xpc2hfZGVzY3JpcHRpb24YBSABKAlCCLpIBXIDGKAfSAGIAQESKwoUZW5nbGlzaF9hdG9taWNfc2tpbGwYBiABKAlCCLpIBXIDGIABSAKIAQFCDwoNX2F0b21pY19za2lsbEIWChRfZW5nbGlzaF9kZXNjcmlwdGlvbkIXChVfZW5nbGlzaF9hdG9taWNfc2tpbGwiugEKDU9wZXJhdGlvblJ1bGUSOAoCaWQYASABKAlCLLpIKXInEAEYPzIhXlthLXpdKFthLXowLTktXXswLDYxfVthLXowLTldKT8kEhwKC2Rlc2NyaXB0aW9uGAIgASgJQge6SARyAhABEh4KCGNhdGVnb3J5GAMgASgJQge6SARyAhg/SACIAQESGwoEbm90ZRgEIAEoCUIIukgFcgMY0A9IAYgBAUILCglfY2F0ZWdvcnlCBwoFX25vdGUiuAEKD09wZXJhdGlvblBvbGljeRI0CgdhbGxvd2VkGAEgAygLMiMuY29zY2VuZS5zb3AudjFhbHBoYTEuT3BlcmF0aW9uUnVsZRI3CgphY2NlcHRhYmxlGAIgAygLMiMuY29zY2VuZS5zb3AudjFhbHBoYTEuT3BlcmF0aW9uUnVsZRI2Cglmb3JiaWRkZW4YAyADKAsyIy5jb3NjZW5lLnNvcC52MWFscGhhMS5PcGVyYXRpb25SdWxlIpoDCgxDaGFuZ2VQb2xpY3kSRAoJZnJlcXVlbmN5GAEgASgOMiUuY29zY2VuZS5zb3AudjFhbHBoYTEuQ2hhbmdlRnJlcXVlbmN5Qgq6SAeCAQQQASAAEiYKEGludGVydmFsX3JlY29yZHMYAiABKAVCB7pIBBoCIABIAIgBATqGArpIggIaVAogY2hhbmdlX3BvbGljeS5mcmVxdWVuY3lfcmVxdWlyZWQSG2ZyZXF1ZW5jeSBtdXN0IGJlIHNwZWNpZmllZBoTdGhpcy5mcmVxdWVuY3kgIT0gMBqpAQooY2hhbmdlX3BvbGljeS5pbnRlcnZhbF9tYXRjaGVzX2ZyZXF1ZW5jeRJIaW50ZXJ2YWxfcmVjb3JkcyBtdXN0IGJlIHNldCBpZiBhbmQgb25seSBpZiBmcmVxdWVuY3kgaXMgRVZFUllfTl9SRUNPUkRTGjModGhpcy5mcmVxdWVuY3kgPT0gMikgPT0gaGFzKHRoaXMuaW50ZXJ2YWxfcmVjb3JkcylCEwoRX2ludGVydmFsX3JlY29yZHMinAEKD1JhbmRvbWl6ZWRGaWVsZBI+CghmaWVsZF9pZBgBIAEoCUIsukgpcicQARg/MiFeW2Etel0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPyQSEwoLY29uc3RyYWludHMYAiADKAkSIwoMZGlzcGxheV9uYW1lGAMgASgJQgi6SAVyAxiAAkgAiAEBQg8KDV9kaXNwbGF5X25hbWUiSAoQTmFtZWRWYWx1ZVNvdXJjZRIVCgRuYW1lGAEgASgJQge6SARyAhABEh0KDHZhbHVlX3NvdXJjZRgCIAEoCUIHukgEcgIQASLjAwoRU3RlcFJhbmRvbWl6YXRpb24SDwoHZW5hYmxlZBgBIAEoCBInChFzdGFydF9zdGVwX251bWJlchgCIAEoDUIHukgEKgIgAEgAiAEBEiUKD2VuZF9zdGVwX251bWJlchgDIAEoDUIHukgEKgIgAEgBiAEBOsICuki+Ahq7Agohc3RlcF9yYW5kb21pemF0aW9uLmNvbXBsZXRlX3JhbmdlElllbmFibGVkIHJhbmRvbWl6YXRpb24gcmVxdWlyZXMgYW4gb3JkZXJlZCBzdGVwIHJhbmdlOyBkaXNhYmxlZCByYW5kb21pemF0aW9uIG11c3Qgb21pdCBpdBq6AXRoaXMuZW5hYmxlZCA/IChoYXModGhpcy5zdGFydF9zdGVwX251bWJlcikgJiYgaGFzKHRoaXMuZW5kX3N0ZXBfbnVtYmVyKSAmJiB0aGlzLnN0YXJ0X3N0ZXBfbnVtYmVyIDw9IHRoaXMuZW5kX3N0ZXBfbnVtYmVyKSA6ICghaGFzKHRoaXMuc3RhcnRfc3RlcF9udW1iZXIpICYmICFoYXModGhpcy5lbmRfc3RlcF9udW1iZXIpKUIUChJfc3RhcnRfc3RlcF9udW1iZXJCEgoQX2VuZF9zdGVwX251bWJlcipsCglMaWZlY3ljbGUSGQoVTElGRUNZQ0xFX1VOU1BFQ0lGSUVEEAASEwoPTElGRUNZQ0xFX0RSQUZUEAESFwoTTElGRUNZQ0xFX0NPTkZJUk1FRBACEhYKEkxJRkVDWUNMRV9BUkNISVZFRBADKq8BCg5SZXZpc2lvbk9yaWdpbhIfChtSRVZJU0lPTl9PUklHSU5fVU5TUEVDSUZJRUQQABIlCiFSRVZJU0lPTl9PUklHSU5fUlVOVElNRV9DT05GSVJNRUQQARImCiJSRVZJU0lPTl9PUklHSU5fSU1QT1JURURfQ09ORklSTUVEEAISLQopUkVWSVNJT05fT1JJR0lOX0lNUE9SVEVEX0RSQUZUX0NIRUNLUE9JTlQQAyrEAgoORGVwZW5kZW5jeUtpbmQSHwobREVQRU5ERU5DWV9LSU5EX1VOU1BFQ0lGSUVEEAASHAoYREVQRU5ERU5DWV9LSU5EX0NVU1RPTUVSEAESHAoYREVQRU5ERU5DWV9LSU5EX01BVEVSSUFMEAISGQoVREVQRU5ERU5DWV9LSU5EX1NDRU5FEAMSIAocREVQRU5ERU5DWV9LSU5EX0dMT0JBTF9GSUVMRBAEEicKI0RFUEVOREVOQ1lfS0lORF9NQVRFUklBTF9TVEFURV9SVUxFEAUSHgoaREVQRU5ERU5DWV9LSU5EX0FUVEFDSE1FTlQQBhIlCiFERVBFTkRFTkNZX0tJTkRfVEFTS19TT1BfUkVWSVNJT04QBxIoCiRERVBFTkRFTkNZX0tJTkRfUk9CT1RfTU9ERUxfUkVWSVNJT04QCCq4AQoPQ2hhbmdlRnJlcXVlbmN5EiAKHENIQU5HRV9GUkVRVUVOQ1lfVU5TUEVDSUZJRUQQABIhCh1DSEFOR0VfRlJFUVVFTkNZX0VWRVJZX1JFQ09SRBABEiQKIENIQU5HRV9GUkVRVUVOQ1lfRVZFUllfTl9SRUNPUkRTEAISHgoaQ0hBTkdFX0ZSRVFVRU5DWV9QRVJfQkFUQ0gQAxIaChZDSEFOR0VfRlJFUVVFTkNZX0ZJWEVEEAQqaAoIUHJpb3JpdHkSGAoUUFJJT1JJVFlfVU5TUEVDSUZJRUQQABIPCgtQUklPUklUWV9QMBABEg8KC1BSSU9SSVRZX1AxEAISDwoLUFJJT1JJVFlfUDIQAxIPCgtQUklPUklUWV9QMxAEKqQBChNBbm5vdGF0aW9uUmVhZGluZXNzEiQKIEFOTk9UQVRJT05fUkVBRElORVNTX1VOU1BFQ0lGSUVEEAASIAocQU5OT1RBVElPTl9SRUFESU5FU1NfUEVORElORxABEh4KGkFOTk9UQVRJT05fUkVBRElORVNTX1JFQURZEAISJQohQU5OT1RBVElPTl9SRUFESU5FU1NfTk9UX1JFUVVJUkVEEAMqegoRR2xvYmFsRmllbGRTdGF0dXMSIwofR0xPQkFMX0ZJRUxEX1NUQVRVU19VTlNQRUNJRklFRBAAEh4KGkdMT0JBTF9GSUVMRF9TVEFUVVNfQUNUSVZFEAESIAocR0xPQkFMX0ZJRUxEX1NUQVRVU19JTkFDVElWRRACKocHChBHbG9iYWxGaWVsZEdyb3VwEiIKHkdMT0JBTF9GSUVMRF9HUk9VUF9VTlNQRUNJRklFRBAAEiIKHkdMT0JBTF9GSUVMRF9HUk9VUF9ST0JPVF9TVEFURRABEicKI0dMT0JBTF9GSUVMRF9HUk9VUF9SRUZFUkVOQ0VfT0JKRUNUEAISKAokR0xPQkFMX0ZJRUxEX0dST1VQX1JFTEFUSVZFX1BPU0lUSU9OEAMSJgoiR0xPQkFMX0ZJRUxEX0dST1VQX1NVUFBPUlRfU1VSRkFDRRAEEh0KGUdMT0JBTF9GSUVMRF9HUk9VUF9SRUdJT04QBRIbChdHTE9CQUxfRklFTERfR1JPVVBfUE9TRRAGEhsKF0dMT0JBTF9GSUVMRF9HUk9VUF9GT1JNEAcSIAocR0xPQkFMX0ZJRUxEX0dST1VQX1BBUkFNRVRFUhAIEigKJEdMT0JBTF9GSUVMRF9HUk9VUF9BTExPV0VEX09QRVJBVElPThAJEisKJ0dMT0JBTF9GSUVMRF9HUk9VUF9BQ0NFUFRBQkxFX09QRVJBVElPThAKEioKJkdMT0JBTF9GSUVMRF9HUk9VUF9GT1JCSURERU5fT1BFUkFUSU9OEAsSMwovR0xPQkFMX0ZJRUxEX0dST1VQX0FOTk9UQVRJT05fQUxMT1dFRF9PUEVSQVRJT04QDBI1CjFHTE9CQUxfRklFTERfR1JPVVBfQU5OT1RBVElPTl9GT1JCSURERU5fT1BFUkFUSU9OEA0SIwofR0xPQkFMX0ZJRUxEX0dST1VQX1JBTkRPTV9GSUVMRBAOEikKJUdMT0JBTF9GSUVMRF9HUk9VUF9ST0JPVF9SQU5ET01fRklFTEQQDxIsCihHTE9CQUxfRklFTERfR1JPVVBfTUFURVJJQUxfUkFORE9NX0ZJRUxEEBASJgoiR0xPQkFMX0ZJRUxEX0dST1VQX0FOTk9UQVRJT05fVFlQRRAREiYKIkdMT0JBTF9GSUVMRF9HUk9VUF9ERUxJVkVSWV9GT1JNQVQQEhIoCiRHTE9CQUxfRklFTERfR1JPVVBfREVMSVZFUllfTEFOR1VBR0UQExImCiJHTE9CQUxfRklFTERfR1JPVVBfREVMSVZFUllfTUVUSE9EEBQSJgoiR0xPQkFMX0ZJRUxEX0dST1VQX1NBTVBMSU5HX1BPTElDWRAVYgZwcm90bzM", [file_buf_validate_validate]);
+
+/**
+ * DependencyToken is one normalized direct dependency entry. Callers sort the
+ * complete list before hashing its deterministic Proto binary encoding.
+ *
+ * @generated from message coscene.sop.v1alpha1.DependencyToken
+ */
+export type DependencyToken = Message<"coscene.sop.v1alpha1.DependencyToken"> & {
+  /**
+   * @generated from field: coscene.sop.v1alpha1.DependencyKind kind = 1;
+   */
+  kind: DependencyKind;
+
+  /**
+   * @generated from field: string resource_name = 2;
+   */
+  resourceName: string;
+
+  /**
+   * @generated from field: string token = 3;
+   */
+  token: string;
+};
+
+/**
+ * Describes the message coscene.sop.v1alpha1.DependencyToken.
+ * Use `create(DependencyTokenSchema)` to create a new message.
+ */
+export const DependencyTokenSchema: GenMessage<DependencyToken> = /*@__PURE__*/
+  messageDesc(file_coscene_sop_v1alpha1_common, 0);
+
+/**
+ * DependencyReviewProposal binds the exact normalized dependency set shown to
+ * one root etag. Acknowledgement digests the deterministic binary form.
+ *
+ * @generated from message coscene.sop.v1alpha1.DependencyReviewProposal
+ */
+export type DependencyReviewProposal = Message<"coscene.sop.v1alpha1.DependencyReviewProposal"> & {
+  /**
+   * @generated from field: string root_name = 1;
+   */
+  rootName: string;
+
+  /**
+   * @generated from field: string root_etag = 2;
+   */
+  rootEtag: string;
+
+  /**
+   * @generated from field: repeated coscene.sop.v1alpha1.DependencyToken dependencies = 3;
+   */
+  dependencies: DependencyToken[];
+};
+
+/**
+ * Describes the message coscene.sop.v1alpha1.DependencyReviewProposal.
+ * Use `create(DependencyReviewProposalSchema)` to create a new message.
+ */
+export const DependencyReviewProposalSchema: GenMessage<DependencyReviewProposal> = /*@__PURE__*/
+  messageDesc(file_coscene_sop_v1alpha1_common, 1);
 
 /**
  * NumericRange is an inclusive numeric interval.
@@ -35,7 +95,7 @@ export type NumericRange = Message<"coscene.sop.v1alpha1.NumericRange"> & {
  * Use `create(NumericRangeSchema)` to create a new message.
  */
 export const NumericRangeSchema: GenMessage<NumericRange> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 0);
+  messageDesc(file_coscene_sop_v1alpha1_common, 2);
 
 /**
  * Quantity represents either one fixed amount or an inclusive range.
@@ -74,7 +134,7 @@ export type Quantity = Message<"coscene.sop.v1alpha1.Quantity"> & {
  * Use `create(QuantitySchema)` to create a new message.
  */
 export const QuantitySchema: GenMessage<Quantity> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 1);
+  messageDesc(file_coscene_sop_v1alpha1_common, 3);
 
 /**
  * Attribute freezes task-specific object properties in a revision snapshot.
@@ -98,7 +158,7 @@ export type Attribute = Message<"coscene.sop.v1alpha1.Attribute"> & {
  * Use `create(AttributeSchema)` to create a new message.
  */
 export const AttributeSchema: GenMessage<Attribute> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 2);
+  messageDesc(file_coscene_sop_v1alpha1_common, 4);
 
 /**
  * OperationStep is one stable, addressable step in an ordered operation plan.
@@ -142,7 +202,7 @@ export type OperationStep = Message<"coscene.sop.v1alpha1.OperationStep"> & {
  * Use `create(OperationStepSchema)` to create a new message.
  */
 export const OperationStepSchema: GenMessage<OperationStep> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 3);
+  messageDesc(file_coscene_sop_v1alpha1_common, 5);
 
 /**
  * OperationRule is a stable rule used by collection and annotation policies.
@@ -176,7 +236,7 @@ export type OperationRule = Message<"coscene.sop.v1alpha1.OperationRule"> & {
  * Use `create(OperationRuleSchema)` to create a new message.
  */
 export const OperationRuleSchema: GenMessage<OperationRule> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 4);
+  messageDesc(file_coscene_sop_v1alpha1_common, 6);
 
 /**
  * OperationPolicy normalizes allowed, acceptable, and forbidden operations.
@@ -205,7 +265,7 @@ export type OperationPolicy = Message<"coscene.sop.v1alpha1.OperationPolicy"> & 
  * Use `create(OperationPolicySchema)` to create a new message.
  */
 export const OperationPolicySchema: GenMessage<OperationPolicy> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 5);
+  messageDesc(file_coscene_sop_v1alpha1_common, 7);
 
 /**
  * ChangePolicy describes how often randomized values must change.
@@ -229,7 +289,7 @@ export type ChangePolicy = Message<"coscene.sop.v1alpha1.ChangePolicy"> & {
  * Use `create(ChangePolicySchema)` to create a new message.
  */
 export const ChangePolicySchema: GenMessage<ChangePolicy> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 6);
+  messageDesc(file_coscene_sop_v1alpha1_common, 8);
 
 /**
  * RandomizedField identifies one stable business field within its containing
@@ -259,7 +319,7 @@ export type RandomizedField = Message<"coscene.sop.v1alpha1.RandomizedField"> & 
  * Use `create(RandomizedFieldSchema)` to create a new message.
  */
 export const RandomizedFieldSchema: GenMessage<RandomizedField> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 7);
+  messageDesc(file_coscene_sop_v1alpha1_common, 9);
 
 /**
  * NamedValueSource preserves a selectable randomization field and its source.
@@ -283,7 +343,7 @@ export type NamedValueSource = Message<"coscene.sop.v1alpha1.NamedValueSource"> 
  * Use `create(NamedValueSourceSchema)` to create a new message.
  */
 export const NamedValueSourceSchema: GenMessage<NamedValueSource> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 8);
+  messageDesc(file_coscene_sop_v1alpha1_common, 10);
 
 /**
  * StepRandomization selects an inclusive, one-based step range.
@@ -312,7 +372,7 @@ export type StepRandomization = Message<"coscene.sop.v1alpha1.StepRandomization"
  * Use `create(StepRandomizationSchema)` to create a new message.
  */
 export const StepRandomizationSchema: GenMessage<StepRandomization> = /*@__PURE__*/
-  messageDesc(file_coscene_sop_v1alpha1_common, 9);
+  messageDesc(file_coscene_sop_v1alpha1_common, 11);
 
 /**
  * Lifecycle records the business-controlled maturity of a resource.
@@ -346,6 +406,101 @@ export enum Lifecycle {
  */
 export const LifecycleSchema: GenEnum<Lifecycle> = /*@__PURE__*/
   enumDesc(file_coscene_sop_v1alpha1_common, 0);
+
+/**
+ * RevisionOrigin records how an immutable history row entered the system.
+ * Runtime drafts are not revisions; the draft origin exists only for
+ * read-only checkpoints imported from legacy fixtures.
+ *
+ * @generated from enum coscene.sop.v1alpha1.RevisionOrigin
+ */
+export enum RevisionOrigin {
+  /**
+   * @generated from enum value: REVISION_ORIGIN_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: REVISION_ORIGIN_RUNTIME_CONFIRMED = 1;
+   */
+  RUNTIME_CONFIRMED = 1,
+
+  /**
+   * @generated from enum value: REVISION_ORIGIN_IMPORTED_CONFIRMED = 2;
+   */
+  IMPORTED_CONFIRMED = 2,
+
+  /**
+   * @generated from enum value: REVISION_ORIGIN_IMPORTED_DRAFT_CHECKPOINT = 3;
+   */
+  IMPORTED_DRAFT_CHECKPOINT = 3,
+}
+
+/**
+ * Describes the enum coscene.sop.v1alpha1.RevisionOrigin.
+ */
+export const RevisionOriginSchema: GenEnum<RevisionOrigin> = /*@__PURE__*/
+  enumDesc(file_coscene_sop_v1alpha1_common, 1);
+
+/**
+ * DependencyKind identifies a direct dependency reviewed before confirming an
+ * export root. The token is either a mutable resource etag or immutable
+ * revision uid, depending on this kind.
+ *
+ * @generated from enum coscene.sop.v1alpha1.DependencyKind
+ */
+export enum DependencyKind {
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_CUSTOMER = 1;
+   */
+  CUSTOMER = 1,
+
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_MATERIAL = 2;
+   */
+  MATERIAL = 2,
+
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_SCENE = 3;
+   */
+  SCENE = 3,
+
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_GLOBAL_FIELD = 4;
+   */
+  GLOBAL_FIELD = 4,
+
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_MATERIAL_STATE_RULE = 5;
+   */
+  MATERIAL_STATE_RULE = 5,
+
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_ATTACHMENT = 6;
+   */
+  ATTACHMENT = 6,
+
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_TASK_SOP_REVISION = 7;
+   */
+  TASK_SOP_REVISION = 7,
+
+  /**
+   * @generated from enum value: DEPENDENCY_KIND_ROBOT_MODEL_REVISION = 8;
+   */
+  ROBOT_MODEL_REVISION = 8,
+}
+
+/**
+ * Describes the enum coscene.sop.v1alpha1.DependencyKind.
+ */
+export const DependencyKindSchema: GenEnum<DependencyKind> = /*@__PURE__*/
+  enumDesc(file_coscene_sop_v1alpha1_common, 2);
 
 /**
  * ChangeFrequency controls when randomized state must change.
@@ -383,7 +538,7 @@ export enum ChangeFrequency {
  * Describes the enum coscene.sop.v1alpha1.ChangeFrequency.
  */
 export const ChangeFrequencySchema: GenEnum<ChangeFrequency> = /*@__PURE__*/
-  enumDesc(file_coscene_sop_v1alpha1_common, 1);
+  enumDesc(file_coscene_sop_v1alpha1_common, 3);
 
 /**
  * Priority is the negotiated business priority of a requirement.
@@ -421,7 +576,7 @@ export enum Priority {
  * Describes the enum coscene.sop.v1alpha1.Priority.
  */
 export const PrioritySchema: GenEnum<Priority> = /*@__PURE__*/
-  enumDesc(file_coscene_sop_v1alpha1_common, 2);
+  enumDesc(file_coscene_sop_v1alpha1_common, 4);
 
 /**
  * AnnotationReadiness records whether task-level annotation instructions are usable.
@@ -454,7 +609,7 @@ export enum AnnotationReadiness {
  * Describes the enum coscene.sop.v1alpha1.AnnotationReadiness.
  */
 export const AnnotationReadinessSchema: GenEnum<AnnotationReadiness> = /*@__PURE__*/
-  enumDesc(file_coscene_sop_v1alpha1_common, 3);
+  enumDesc(file_coscene_sop_v1alpha1_common, 5);
 
 /**
  * GlobalFieldStatus controls whether a shared vocabulary item is selectable.
@@ -482,7 +637,7 @@ export enum GlobalFieldStatus {
  * Describes the enum coscene.sop.v1alpha1.GlobalFieldStatus.
  */
 export const GlobalFieldStatusSchema: GenEnum<GlobalFieldStatus> = /*@__PURE__*/
-  enumDesc(file_coscene_sop_v1alpha1_common, 4);
+  enumDesc(file_coscene_sop_v1alpha1_common, 6);
 
 /**
  * GlobalFieldGroup identifies every persisted shared-vocabulary namespace.
@@ -605,5 +760,5 @@ export enum GlobalFieldGroup {
  * Describes the enum coscene.sop.v1alpha1.GlobalFieldGroup.
  */
 export const GlobalFieldGroupSchema: GenEnum<GlobalFieldGroup> = /*@__PURE__*/
-  enumDesc(file_coscene_sop_v1alpha1_common, 5);
+  enumDesc(file_coscene_sop_v1alpha1_common, 7);
 

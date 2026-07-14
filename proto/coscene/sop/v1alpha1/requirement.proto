@@ -170,6 +170,12 @@ message Requirement {
 
 // RequirementRevision is an immutable historical snapshot of a Requirement.
 message RequirementRevision {
+  option (buf.validate.message).cel = {
+    id: "requirement_revision.origin_matches_lifecycle"
+    message: "imported draft checkpoints must be draft and export-ineligible; confirmed revisions must be confirmed and export-eligible"
+    expression: "(this.origin == 3 && this.snapshot.lifecycle == 1 && !this.export_eligible) || ((this.origin == 1 || this.origin == 2) && this.snapshot.lifecycle == 2 && this.export_eligible)"
+  };
+
   option (google.api.resource) = {
     type: "sop.coscene.io/RequirementRevision"
     pattern: "requirements/{requirement}/revisions/{revision}"
@@ -181,6 +187,10 @@ message RequirementRevision {
     (google.api.field_behavior) = IDENTIFIER,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.pattern = "^requirements/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  string uid = 8 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.uuid = true
   ];
   Requirement snapshot = 2 [
     (google.api.field_behavior) = OUTPUT_ONLY,
@@ -198,4 +208,12 @@ message RequirementRevision {
   google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
   FrozenDependencyContext frozen_dependencies = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
   optional string source_version_id = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  RevisionOrigin origin = 9 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  bool export_eligible = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
 }

@@ -1,7 +1,7 @@
 import { toJson, type JsonValue } from '@bufbuild/protobuf';
 import YAML from 'yaml';
-import { ExportBundleSchema, type ExportBundle } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
-import { assertValidDomainMessage } from '../../shared/domain/validation';
+import { FrozenExportContentSchema, type ExportBundle } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
+import { verifyExportBundle } from './codec';
 
 const enumPrefixByField: Record<string, string> = {
   kind: 'ROOT_KIND_',
@@ -31,8 +31,8 @@ function yamlTree(value: JsonValue, field?: string): unknown {
 }
 
 export function serializeExportBundleYaml(bundle: ExportBundle): string {
-  assertValidDomainMessage(ExportBundleSchema, bundle);
-  const json = toJson(ExportBundleSchema, bundle, {
+  const content = verifyExportBundle(bundle).content!;
+  const json = toJson(FrozenExportContentSchema, content, {
     alwaysEmitImplicit: true,
     enumAsInteger: false,
     useProtoFieldName: false,

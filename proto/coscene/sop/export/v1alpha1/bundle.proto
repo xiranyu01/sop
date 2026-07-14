@@ -7,6 +7,7 @@ import "coscene/sop/v1alpha1/catalog.proto";
 import "coscene/sop/v1alpha1/common.proto";
 import "coscene/sop/v1alpha1/requirement.proto";
 import "coscene/sop/v1alpha1/task_sop.proto";
+import "google/protobuf/timestamp.proto";
 
 // RootKind identifies the resource selected for export.
 enum RootKind {
@@ -27,6 +28,7 @@ message RevisionIdentity {
   string revision_name = 1 [(buf.validate.field).string.min_len = 1];
   string version_label = 2 [(buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"];
   optional string source_version_id = 3;
+  string revision_uid = 4 [(buf.validate.field).string.uuid = true];
 }
 
 // BundleRoot points to exactly one entry in the bundle.
@@ -44,8 +46,8 @@ message AttachmentEntry {
   SourceIdentity source = 2 [(buf.validate.field).required = true];
   string filename = 3 [(buf.validate.field).string.min_len = 1];
   string media_type = 4 [(buf.validate.field).string.min_len = 1];
-  int64 size_bytes = 5 [(buf.validate.field).int64.gte = 0];
-  string public_uri = 6 [(buf.validate.field).string.uri = true];
+  optional int64 size_bytes = 5 [(buf.validate.field).int64.gte = 0];
+  optional string public_uri = 6 [(buf.validate.field).string.uri = true];
   optional string sha256 = 7 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
 }
 
@@ -280,18 +282,37 @@ message RequirementRevisionEntry {
   repeated string attachment_refs = 7 [(buf.validate.field).repeated.items.string.min_len = 1];
 }
 
-// ExportBundle is the complete deterministic, confirmed-only YAML contract.
-message ExportBundle {
+// FrozenExportContent is the complete deterministic, confirmed-only YAML
+// contract. Its deterministic binary encoding is the sealed digest scope.
+message FrozenExportContent {
   string format = 1 [(buf.validate.field).string.const = "coscene.sop.export"];
   string schema_version = 2 [(buf.validate.field).string.const = "1.0.0"];
   BundleRoot root = 3 [(buf.validate.field).required = true];
-  repeated RequirementRevisionEntry requirements = 4;
-  repeated TaskSopRevisionEntry task_sops = 5;
-  repeated CustomerEntry customers = 6;
-  repeated RobotModelRevisionEntry robot_model_revisions = 7;
-  repeated MaterialEntry materials = 8;
-  repeated SceneEntry scenes = 9;
-  repeated GlobalFieldEntry global_fields = 10;
-  repeated MaterialStateRuleEntry material_state_rules = 11;
-  repeated AttachmentEntry attachments = 12;
+  string root_name = 4 [(buf.validate.field).string.min_len = 1];
+  string root_uid = 5 [(buf.validate.field).string.uuid = true];
+  string revision_name = 6 [(buf.validate.field).string.min_len = 1];
+  string revision_uid = 7 [(buf.validate.field).string.uuid = true];
+  string version_label = 8 [(buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"];
+  google.protobuf.Timestamp confirmation_time = 9 [(buf.validate.field).required = true];
+  string renderer_version = 10 [(buf.validate.field).string.min_len = 1];
+  string export_version = 11 [(buf.validate.field).string.min_len = 1];
+  repeated RequirementRevisionEntry requirements = 12;
+  repeated TaskSopRevisionEntry task_sops = 13;
+  repeated CustomerEntry customers = 14;
+  repeated RobotModelRevisionEntry robot_model_revisions = 15;
+  repeated MaterialEntry materials = 16;
+  repeated SceneEntry scenes = 17;
+  repeated GlobalFieldEntry global_fields = 18;
+  repeated MaterialStateRuleEntry material_state_rules = 19;
+  repeated AttachmentEntry attachments = 20;
+}
+
+// ExportBundle is the persisted sealed envelope. Hash and size deliberately
+// exclude the envelope so their scope is non-recursive.
+message ExportBundle {
+  string format = 1 [(buf.validate.field).string.const = "coscene.sop.export.sealed"];
+  string schema_version = 2 [(buf.validate.field).string.const = "1.0.0"];
+  FrozenExportContent content = 3 [(buf.validate.field).required = true];
+  string content_sha256 = 4 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
+  int64 content_size_bytes = 5 [(buf.validate.field).int64.gt = 0];
 }

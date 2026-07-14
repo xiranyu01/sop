@@ -3,6 +3,14 @@ schema_version: 1.0.0
 root:
   kind: task_sop
   ref: task-sop-40a0142d7cb3
+root_name: taskSops/scene-baseline-no-001-a62a5b09
+root_uid: 3befc3a9-27ae-5606-a5fe-7f6cf0126c67
+revision_name: taskSops/scene-baseline-no-001-a62a5b09/revisions/v-0-0-1
+revision_uid: 67af0f30-5057-5128-a859-a92a71bab8a2
+version_label: 0.0.1
+confirmation_time: 2026-01-01T00:00:00Z
+renderer_version: sop-pdf-v1
+export_version: sop-yaml-v1
 requirements: []
 task_sops:
   - ref: task-sop-40a0142d7cb3
@@ -13,6 +21,7 @@ task_sops:
     revision:
       revision_name: taskSops/scene-baseline-no-001-a62a5b09/revisions/v-0-0-1
       version_label: 0.0.1
+      revision_uid: 67af0f30-5057-5128-a859-a92a71bab8a2
     display_name: 基线任务 SOP
     description: 用于确定性浏览器测试
     scene_ref: scene-d064e60c367c

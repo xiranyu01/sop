@@ -1,6 +1,7 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it, vi } from 'vitest';
 import { AttachmentSchema, MaterialSchema } from '../../gen/coscene/sop/v1alpha1/catalog_pb';
+import { RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { emptyCanonicalSnapshot } from '../../server/domain/appStore';
 import { attachmentOwnership, hasActiveLease, publicAttachmentUri, referencedManagedStorageKeys } from '../../server/domain/attachmentReachability';
 import {
@@ -39,6 +40,9 @@ describe('attachment ownership and reachability', () => {
     snapshot.attachments = [attachment];
     snapshot.requirementRevisions = [{
       $typeName: 'coscene.sop.v1alpha1.RequirementRevision', name: 'requirements/r/revisions/v1', versionLabel: '1.0.0',
+      uid: '00000000-0000-4000-8000-000000000100',
+      origin: RevisionOrigin.IMPORTED_CONFIRMED,
+      exportEligible: true,
       frozenDependencies: { $typeName: 'coscene.sop.v1alpha1.FrozenDependencyContext', customers: [], materials: [], scenes: [], globalFields: [], materialStateRules: [], attachments: [attachment] },
     }];
     snapshot.operational.leases = [{ storageKey: 'managed/rollback.txt', generationId: 'previous', expiresAt: '2030-01-01T00:00:00.000Z' }];

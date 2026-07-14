@@ -73,13 +73,12 @@ message Attachment {
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).string.pattern = "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
   ];
-  int64 size_bytes = 5 [
+  optional int64 size_bytes = 5 [
     (google.api.field_behavior) = OUTPUT_ONLY,
     (buf.validate.field).int64.gte = 0
   ];
-  string uri = 6 [
+  optional string uri = 6 [
     (google.api.field_behavior) = OUTPUT_ONLY,
-    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.uri = true
   ];
   optional string sha256 = 7 [
@@ -243,6 +242,10 @@ message RobotModelRevision {
     (google.api.field_behavior) = IDENTIFIER,
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  string uid = 7 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.uuid = true
   ];
   RobotModel snapshot = 2 [
     (google.api.field_behavior) = OUTPUT_ONLY,

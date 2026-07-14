@@ -4,6 +4,14 @@ import { buildExportBundle } from './bundle';
 import { resolveExportClosure } from './closure';
 import { serializeExportBundleYaml } from './yaml';
 
+export {
+  canonicalFrozenContentProtoJson,
+  decodeExportBundle,
+  encodeExportBundle,
+  measureFrozenExportContent,
+  verifyExportBundle,
+} from './codec';
+
 export function exportRequirementYaml(snapshot: CanonicalSnapshot, sourceId: string, versionLabel: string): string {
   const exists = snapshot.requirementRevisions.some((revision) =>
     revision.snapshot?.sourceId === sourceId && revision.versionLabel === versionLabel);

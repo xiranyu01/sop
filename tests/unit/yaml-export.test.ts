@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
-import { Lifecycle } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { exportRequirementYaml, exportTaskSopYaml } from '../../server/export';
 import { convertLegacyToV1alpha1 } from '../../server/migrations/legacyToV1alpha1';
 import { seedData } from '../e2e/fixtures/seed';
@@ -31,6 +31,13 @@ function expectLocalRefsResolve(document: Record<string, unknown>): void {
   for (const key of collections) visit(document[key]);
 }
 
+function markRequirementConfirmed(snapshot: ReturnType<typeof convertLegacyToV1alpha1>['snapshot']): void {
+  const revision = snapshot.requirementRevisions[0];
+  revision.snapshot!.lifecycle = Lifecycle.CONFIRMED;
+  revision.origin = RevisionOrigin.IMPORTED_CONFIRMED;
+  revision.exportEligible = true;
+}
+
 describe('deterministic canonical YAML export', () => {
   it('matches the reviewed TaskSop golden and remains byte-identical after current catalog edits', async () => {
     const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
@@ -47,7 +54,7 @@ describe('deterministic canonical YAML export', () => {
 
   it('matches the reviewed Requirement golden and omits history, storage, and volatile metadata', async () => {
     const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
-    snapshot.requirementRevisions[0].snapshot!.lifecycle = Lifecycle.CONFIRMED;
+    markRequirementConfirmed(snapshot);
     const output = exportRequirementYaml(snapshot, 'REQ001', '0.0.1');
     expect(output).toBe(await golden('requirement.golden.yaml'));
     expect(output).not.toMatch(/storage_key|etag|current_revision|previous_revision|create_time|update_time|export_time/);
@@ -60,7 +67,7 @@ describe('deterministic canonical YAML export', () => {
 
   it('never rewrites enum-looking free text', () => {
     const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).snapshot;
-    snapshot.requirementRevisions[0].snapshot!.lifecycle = Lifecycle.CONFIRMED;
+    markRequirementConfirmed(snapshot);
     snapshot.requirementRevisions[0].snapshot!.spec!.businessGoal = 'PRIORITY_P1';
     const output = exportRequirementYaml(snapshot, 'REQ001', '0.0.1');
     expect(output).toContain('business_goal: PRIORITY_P1');
@@ -76,7 +83,7 @@ describe('deterministic canonical YAML export', () => {
     expect(output).toContain('expected_duration: PT1H1M1.5S');
   });
 
-  it('preserves an arbitrary HTTPS attachment URI exactly and never fetches it', () => {
+  it('preserves optional attachment metadata exactly and never performs provider checks', () => {
     const data = structuredClone(seedData);
     data.scenes[0].subscenes[0].versions[0].attachments = [{
       id: 'utf8-file', name: '测试 附件.txt', size: 4, contentType: 'text/plain', storageKey: 'managed/file',
@@ -96,9 +103,12 @@ describe('deterministic canonical YAML export', () => {
 
     attachment.sha256 = 'b'.repeat(64);
     expect(exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1')).toContain(`sha256: ${'b'.repeat(64)}`);
-    attachment.uri = ' https://cdn.example.test/file ';
-    expect(() => exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1')).toThrow('首尾空白');
+    attachment.uri = undefined;
+    attachment.sizeBytes = undefined;
+    const withoutOptionalMetadata = exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1');
+    expect(withoutOptionalMetadata).not.toContain('public_uri:');
+    expect(withoutOptionalMetadata).not.toContain('size_bytes:');
     attachment.uri = 'http://cdn.example.test/file';
-    expect(() => exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1')).toThrow('HTTPS');
+    expect(exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1')).toContain('http://cdn.example.test/file');
   });
 });

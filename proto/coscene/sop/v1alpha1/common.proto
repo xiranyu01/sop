@@ -12,6 +12,64 @@ enum Lifecycle {
   LIFECYCLE_ARCHIVED = 3;
 }
 
+// RevisionOrigin records how an immutable history row entered the system.
+// Runtime drafts are not revisions; the draft origin exists only for
+// read-only checkpoints imported from legacy fixtures.
+enum RevisionOrigin {
+  REVISION_ORIGIN_UNSPECIFIED = 0;
+  REVISION_ORIGIN_RUNTIME_CONFIRMED = 1;
+  REVISION_ORIGIN_IMPORTED_CONFIRMED = 2;
+  REVISION_ORIGIN_IMPORTED_DRAFT_CHECKPOINT = 3;
+}
+
+// DependencyKind identifies a direct dependency reviewed before confirming an
+// export root. The token is either a mutable resource etag or immutable
+// revision uid, depending on this kind.
+enum DependencyKind {
+  DEPENDENCY_KIND_UNSPECIFIED = 0;
+  DEPENDENCY_KIND_CUSTOMER = 1;
+  DEPENDENCY_KIND_MATERIAL = 2;
+  DEPENDENCY_KIND_SCENE = 3;
+  DEPENDENCY_KIND_GLOBAL_FIELD = 4;
+  DEPENDENCY_KIND_MATERIAL_STATE_RULE = 5;
+  DEPENDENCY_KIND_ATTACHMENT = 6;
+  DEPENDENCY_KIND_TASK_SOP_REVISION = 7;
+  DEPENDENCY_KIND_ROBOT_MODEL_REVISION = 8;
+}
+
+// DependencyToken is one normalized direct dependency entry. Callers sort the
+// complete list before hashing its deterministic Proto binary encoding.
+message DependencyToken {
+  DependencyKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string resource_name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+    pattern: "^[A-Za-z][A-Za-z0-9]*/[A-Za-z0-9][A-Za-z0-9/-]*$"
+  }];
+  string token = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 512
+  }];
+}
+
+// DependencyReviewProposal binds the exact normalized dependency set shown to
+// one root etag. Acknowledgement digests the deterministic binary form.
+message DependencyReviewProposal {
+  string root_name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+    pattern: "^[A-Za-z][A-Za-z0-9]*/[A-Za-z0-9][A-Za-z0-9/-]*$"
+  }];
+  string root_etag = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 512
+  }];
+  repeated DependencyToken dependencies = 3 [(buf.validate.field).repeated.max_items = 500];
+}
+
 // ChangeFrequency controls when randomized state must change.
 enum ChangeFrequency {
   CHANGE_FREQUENCY_UNSPECIFIED = 0;

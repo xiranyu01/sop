@@ -1,4 +1,4 @@
-import { Lifecycle } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import type { CanonicalSnapshot } from '../domain/appStore';
 import { CanonicalDataError } from '../domain/errors';
 import { compareStable, stableHash, stableJson } from '../migrations/identity';
@@ -58,6 +58,12 @@ function requireConfirmed(
 ): void {
   if (!revision.snapshot || revision.snapshot.lifecycle !== Lifecycle.CONFIRMED) {
     throw new CanonicalDataError(`仅支持导出已确认版本：${revision.name}`);
+  }
+  if (!revision.exportEligible || ![
+    RevisionOrigin.RUNTIME_CONFIRMED,
+    RevisionOrigin.IMPORTED_CONFIRMED,
+  ].includes(revision.origin)) {
+    throw new CanonicalDataError(`版本不是可导出的已确认历史：${revision.name}`);
   }
   if (!revision.frozenDependencies) {
     throw new CanonicalDataError(`已确认版本缺少冻结依赖：${revision.name}`);
@@ -173,17 +179,6 @@ export function resolveExportClosure(snapshot: CanonicalSnapshot, root: ExportRo
     if (!revision) throw new CanonicalDataError(`找不到任务 SOP 版本：${root.sourceId} v${root.versionLabel}`);
     addTask(revision);
     rootRef = bundleRef('task-sop', revision.name);
-  }
-
-  for (const attachment of attachments.values()) {
-    if (attachment.uri.trim() !== attachment.uri) {
-      throw new CanonicalDataError(`附件公开链接不能包含首尾空白：${attachment.name}`);
-    }
-    let url: URL;
-    try { url = new URL(attachment.uri); } catch {
-      throw new CanonicalDataError(`附件缺少公开 HTTPS 链接：${attachment.name}`);
-    }
-    if (url.protocol !== 'https:') throw new CanonicalDataError(`附件公开链接必须使用 HTTPS：${attachment.name}`);
   }
 
   return {

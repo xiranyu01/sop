@@ -19,6 +19,7 @@ import {
   GlobalFieldStatus,
   Lifecycle,
   Priority,
+  RevisionOrigin,
 } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { RequirementRevisionSchema, RequirementSchema } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
 import { TaskSopRevisionSchema, TaskSopSchema } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
@@ -43,7 +44,7 @@ import {
   revisionName,
   stableHash,
   stableJson,
-} from './identity';
+} from '../domain/identity';
 import { finalizeReport, type MigrationIssue, type MigrationReport } from './report';
 
 export type LegacyConversion = { snapshot: CanonicalSnapshot; report: MigrationReport };
@@ -80,6 +81,16 @@ function timestamp(value?: string) {
 
 function lifecycle(value: EntityStatus): Lifecycle {
   return { draft: Lifecycle.DRAFT, confirmed: Lifecycle.CONFIRMED, archived: Lifecycle.ARCHIVED }[value];
+}
+
+function importedRevisionState(value: EntityStatus): {
+  lifecycle: Lifecycle;
+  origin: RevisionOrigin;
+  exportEligible: boolean;
+} {
+  return value === 'draft'
+    ? { lifecycle: Lifecycle.DRAFT, origin: RevisionOrigin.IMPORTED_DRAFT_CHECKPOINT, exportEligible: false }
+    : { lifecycle: Lifecycle.CONFIRMED, origin: RevisionOrigin.IMPORTED_CONFIRMED, exportEligible: true };
 }
 
 function priority(value: LegacyPriority): Priority {
@@ -538,7 +549,13 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
   for (const item of data.robotModels) {
     const name = resourceName('robotModels', item.id); const revision = revisionName(name, '1.0.0', 'current');
     const canonical = create(RobotModelSchema, { name, uid: deterministicUid('robotModel', item.id), sourceId: item.id, displayName: [item.brand, item.model].filter(Boolean).join(' ') || item.id, manufacturer: optional(item.brand), modelCode: optional(item.model), endEffector: optional(item.terminal), topics: Object.entries(item.topics).sort(([a], [b]) => stableCompare(a, b)).map(([id, topic]) => ({ id: canonicalId(id, `${item.id}:topic:${id}`), topic })), extraTopicRequirements: Object.entries(item.extraTopicRequirements).sort(([a], [b]) => stableCompare(a, b)).map(([topicId, requirement]) => ({ topicId: canonicalId(topicId, `${item.id}:topic:${topicId}`), requirement })), currentRevision: revision });
-    snapshot.robotModels.push(canonical); snapshot.robotModelRevisions.push(create(RobotModelRevisionSchema, { name: revision, snapshot: canonical, versionLabel: '1.0.0', sourceVersionId: 'current' }));
+    snapshot.robotModels.push(canonical); snapshot.robotModelRevisions.push(create(RobotModelRevisionSchema, {
+      name: revision,
+      uid: deterministicUid('robotModelRevision', `${item.id}:current`),
+      snapshot: canonical,
+      versionLabel: '1.0.0',
+      sourceVersionId: 'current',
+    }));
     robotById.set(item.id, revision); register(name, `robotModel:${item.id}`, [`robotModel:${item.id}`]); register(revision, `robotModelRevision:${item.id}`, [`robotModelRevision:${item.id}:current`]);
     recordFingerprints[`robotModel:${item.id}`] = fingerprintRecord(item, canonical);
   }
@@ -557,7 +574,8 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
       const previousRevision = version.parentVersionId ? revisionByVersionId.get(version.parentVersionId) : index > 0 ? revisionName(taskName, subscene.versions[index - 1].version, subscene.versions[index - 1].versionId) : undefined;
       if (version.parentVersionId && !previousRevision) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: 'parentVersionId', message: `parent revision not found: ${version.parentVersionId}` });
       const taskAttachments = (version.attachments ?? []).flatMap((item) => attachmentNames.get(item.id) ?? []);
-      const snapshotMessage = create(TaskSopSchema, { name: taskName, uid: deterministicUid('taskSop', taskLegacyId), sourceId: taskLegacyId, displayName: version.title || subscene.name, description: optional(version.description), scene: sceneNames.get(scene.id)!, lifecycle: lifecycle(version.status), spec: toTaskSpec(version, materialNames, attachmentNames, issues, owner), attachments: taskAttachments, currentRevision: revName, updateTime: timestamp(version.updatedAt), referenceUris: version.references.recordUrls, referenceAttachments: version.references.attachments.map((item) => ({ fileToken: item.fileToken, filename: item.name, sizeBytes: BigInt(item.size) })), legacySceneDisplayName: optional(version.sceneName ?? scene.name), legacySubsceneDisplayName: optional(version.subsceneName ?? subscene.name), legacySubsceneCode: subscene.code });
+      const importedState = importedRevisionState(version.status);
+      const snapshotMessage = create(TaskSopSchema, { name: taskName, uid: deterministicUid('taskSop', taskLegacyId), sourceId: taskLegacyId, displayName: version.title || subscene.name, description: optional(version.description), scene: sceneNames.get(scene.id)!, lifecycle: importedState.lifecycle, spec: toTaskSpec(version, materialNames, attachmentNames, issues, owner), attachments: taskAttachments, currentRevision: revName, updateTime: timestamp(version.updatedAt), referenceUris: version.references.recordUrls, referenceAttachments: version.references.attachments.map((item) => ({ fileToken: item.fileToken, filename: item.name, sizeBytes: BigInt(item.size) })), legacySceneDisplayName: optional(version.sceneName ?? scene.name), legacySubsceneDisplayName: optional(version.subsceneName ?? subscene.name), legacySubsceneCode: subscene.code });
       const materialSet = new Set(snapshotMessage.spec?.objects.flatMap((object) => object.material ? [object.material] : []) ?? []);
       const frozenMaterials = snapshot.materials.filter((material) => materialSet.has(material.name));
       const frozenGlobalFields = selectFrozenGlobalFields(taskVocabularyReferences(version), snapshot.globalFields, issues, owner);
@@ -571,7 +589,18 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
         materialStateRules: snapshot.materialStateRules.filter((rule) => embeddedRuleNames.has(rule.name)),
         attachments: snapshot.attachments.filter((attachment) => attachmentSet.has(attachment.name)),
       });
-      const revision = create(TaskSopRevisionSchema, { name: revName, snapshot: snapshotMessage, previousRevision, versionLabel: version.version, createTime: timestamp(version.updatedAt), frozenDependencies: frozen, sourceVersionId: version.versionId });
+      const revision = create(TaskSopRevisionSchema, {
+        name: revName,
+        uid: deterministicUid('taskSopRevision', `${taskLegacyId}:${version.versionId ?? version.version}`),
+        snapshot: snapshotMessage,
+        previousRevision,
+        versionLabel: version.version,
+        createTime: timestamp(version.updatedAt),
+        frozenDependencies: frozen,
+        sourceVersionId: version.versionId,
+        origin: importedState.origin,
+        exportEligible: importedState.exportEligible,
+      });
       revisions.push(revision); register(revName, owner, [version.versionId ? `taskSopRevision-id:${version.versionId}` : '', `taskSopRevision-display:${scene.name}/${subscene.name}/${version.version}`, `taskSopRevision-title:${scene.name}/${version.title}/${version.version}`]);
       taskCandidates.push({ revision: revName, sceneName: scene.name, code: subscene.code, subsceneName: subscene.name, title: version.title, version: version.version, versionId: version.versionId, lifecycle: lifecycle(version.status) });
       recordFingerprints[owner] = fingerprintRecord(version, revision);
@@ -615,8 +644,9 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
         return { id: canonicalId(selected.id ?? selected.subsceneCode ?? `item-${index + 1}`, `${owner}:item:${index}`), displayName: selected.title ?? selected.subsceneName ?? resolved?.title ?? `Item ${index + 1}`, description: optional(selected.description), taskSopRevision: resolved?.revision ?? '', target, legacySceneName: optional(selected.sceneName), legacySubsceneCode: optional(selected.subsceneCode), legacySubsceneName: optional(selected.subsceneName), legacyVersionLabel: optional(selected.taskSop?.version ?? selected.version), legacyVersionId: optional(selected.taskSop?.versionId), legacyParentVersionId: optional(selected.taskSop?.parentVersionId), legacyLifecycle: selected.taskSop?.status ? lifecycle(selected.taskSop.status) : resolved?.lifecycle };
       });
       const attachmentList = (version.attachments ?? []).flatMap((attachment) => attachmentNames.get(attachment.id) ?? []);
+      const importedState = importedRevisionState(version.status);
       const canonical = create(RequirementSchema, {
-        name, uid: deterministicUid('requirement', item.id), sourceId: item.id, displayName: version.title, lifecycle: lifecycle(version.status), attachments: attachmentList, currentRevision: revName, updateTime: timestamp(version.updatedAt),
+        name, uid: deterministicUid('requirement', item.id), sourceId: item.id, displayName: version.title, lifecycle: importedState.lifecycle, attachments: attachmentList, currentRevision: revName, updateTime: timestamp(version.updatedAt),
         spec: {
           customer: customerName ?? '', robotModelRevision: robotRevision ?? '', projectDisplayName: optional(version.projectName), businessGoal: version.businessGoal, deadline: dateValue(version.deadline), sourceUri: optional(version.sourceBaseUrl), priority: priority(version.priority), requestedSceneNames: version.requestedScenes,
           aggregateTarget: version.requiredDurationHours > 0 ? { duration: durationHours(version.requiredDurationHours) } : undefined,
@@ -634,7 +664,18 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
         globalFields: selectFrozenGlobalFields(requirementVocabularyReferences(version), snapshot.globalFields, issues, owner),
         attachments: snapshot.attachments.filter((attachment) => requirementAttachmentSet.has(attachment.name)),
       });
-      const revision = create(RequirementRevisionSchema, { name: revName, snapshot: canonical, previousRevision, versionLabel: version.version, createTime: timestamp(version.updatedAt), frozenDependencies: frozen, sourceVersionId: version.versionId });
+      const revision = create(RequirementRevisionSchema, {
+        name: revName,
+        uid: deterministicUid('requirementRevision', `${item.id}:${version.versionId ?? version.version}`),
+        snapshot: canonical,
+        previousRevision,
+        versionLabel: version.version,
+        createTime: timestamp(version.updatedAt),
+        frozenDependencies: frozen,
+        sourceVersionId: version.versionId,
+        origin: importedState.origin,
+        exportEligible: importedState.exportEligible,
+      });
       register(revName, owner, [version.versionId ? `requirementRevision-id:${version.versionId}` : '']); recordFingerprints[owner] = fingerprintRecord(version, revision);
       return revision;
     });

@@ -33,8 +33,8 @@ describe('canonical export closure', () => {
     expect(closure.robotModelRevisions).toHaveLength(1);
     expect(closure.customers).toHaveLength(1);
     const bundle = buildExportBundle(closure);
-    expect(bundle.requirements[0].spec?.productionItems.map((item) => item.displayName)).toEqual(['第二项', '第一项']);
-    expect(bundle.requirements[0].spec?.productionItems[0].taskSopRef).toBe(bundle.taskSops[0].ref);
+    expect(bundle.content?.requirements[0].spec?.productionItems.map((item) => item.displayName)).toEqual(['第二项', '第一项']);
+    expect(bundle.content?.requirements[0].spec?.productionItems[0].taskSopRef).toBe(bundle.content?.taskSops[0].ref);
   });
 
   it('exports a standalone TaskSop without inventing Requirement or Robot dependencies', () => {

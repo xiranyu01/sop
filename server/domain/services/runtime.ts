@@ -4,7 +4,7 @@ import {
   RobotModelRevisionSchema,
   RobotModelSchema,
 } from '../../../gen/coscene/sop/v1alpha1/catalog_pb';
-import { Lifecycle } from '../../../gen/coscene/sop/v1alpha1/common_pb';
+import { Lifecycle, RevisionOrigin } from '../../../gen/coscene/sop/v1alpha1/common_pb';
 import { RequirementRevisionSchema } from '../../../gen/coscene/sop/v1alpha1/requirement_pb';
 import { TaskSopRevisionSchema } from '../../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import type {
@@ -20,7 +20,7 @@ import type {
 import type { LegacyApiStore } from '../../../shared/transport/restDto';
 import { exportRequirementYaml, exportTaskSopYaml } from '../../export';
 import { convertLegacyToV1alpha1 } from '../../migrations/legacyToV1alpha1';
-import { canonicalId, deterministicUid, revisionName, stableJson } from '../../migrations/identity';
+import { canonicalId, deterministicUid, revisionName, stableJson } from '../identity';
 import { createId, nextPatchVersion } from '../../versioning';
 import { encodeCanonicalSnapshot, type AppStore, type AttachmentUploadState, type CanonicalSnapshot, type StorePin } from '../appStore';
 import { runAttachmentCleanup } from '../attachmentCleanup';
@@ -303,7 +303,11 @@ function mergeTaskSops(current: CanonicalSnapshot, candidate: CanonicalSnapshot)
       }
       const missingMaterial = next.snapshot.spec?.objects.find((object) => !object.material || !candidate.materials.some((item) => item.name === object.material));
       if (missingMaterial) throw new CanonicalDataError(`任务物料不存在，不能确认任务 SOP：${missingMaterial.displayName}`);
-      return create(TaskSopRevisionSchema, next);
+      return create(TaskSopRevisionSchema, {
+        ...next,
+        origin: RevisionOrigin.RUNTIME_CONFIRMED,
+        exportEligible: true,
+      });
     }
     return next;
   });
@@ -353,7 +357,11 @@ function mergeRequirements(current: CanonicalSnapshot, candidate: CanonicalSnaps
         return !task || task.snapshot?.lifecycle !== Lifecycle.CONFIRMED;
       });
       if (missing.length) throw new CanonicalDataError('有任务 SOP 还没有确认，不能确认需求');
-      return create(RequirementRevisionSchema, next);
+      return create(RequirementRevisionSchema, {
+        ...next,
+        origin: RevisionOrigin.RUNTIME_CONFIRMED,
+        exportEligible: true,
+      });
     }
     return next;
   });
@@ -530,6 +538,7 @@ export class CanonicalRuntime {
       });
       const revision = create(RobotModelRevisionSchema, {
         name,
+        uid: deterministicUid('robotModelRevision', sourceRevisionId),
         snapshot: robot,
         previousRevision: existingRevision?.name,
         versionLabel,

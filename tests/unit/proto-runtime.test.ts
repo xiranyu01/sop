@@ -1,4 +1,4 @@
-import { create, fromJson, toJson } from '@bufbuild/protobuf';
+import { create, fromBinary, fromJson, toBinary, toJson } from '@bufbuild/protobuf';
 import { createValidator } from '@bufbuild/protovalidate';
 import { describe, expect, it } from 'vitest';
 import {
@@ -18,6 +18,9 @@ import {
   Lifecycle,
   OperationStepSchema,
   Priority,
+  DependencyKind,
+  DependencyReviewProposalSchema,
+  RevisionOrigin,
 } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import {
   RequirementRevisionSchema,
@@ -92,6 +95,7 @@ const robot = create(RobotModelSchema, {
 });
 const robotRevision = create(RobotModelRevisionSchema, {
   name: 'robotModels/arm/revisions/1',
+  uid: '00000000-0000-4000-8000-000000000010',
   snapshot: robot,
   versionLabel: '1.0.0',
 });
@@ -132,9 +136,12 @@ const task = create(TaskSopSchema, {
 });
 const taskRevision = create(TaskSopRevisionSchema, {
   name: 'taskSops/place-cup/revisions/1',
+  uid: '00000000-0000-4000-8000-000000000011',
   snapshot: task,
   versionLabel: '1.0.0',
   frozenDependencies: frozen,
+  origin: RevisionOrigin.RUNTIME_CONFIRMED,
+  exportEligible: true,
 });
 const requirementSpec = create(RequirementSpecSchema, {
   customer: customer.name,
@@ -172,9 +179,12 @@ const requirement = create(RequirementSchema, {
 });
 const requirementRevision = create(RequirementRevisionSchema, {
   name: 'requirements/demo/revisions/1',
+  uid: '00000000-0000-4000-8000-000000000012',
   snapshot: requirement,
   versionLabel: '1.0.0',
   frozenDependencies: frozen,
+  origin: RevisionOrigin.RUNTIME_CONFIRMED,
+  exportEligible: true,
 });
 
 describe('generated Proto runtime', () => {
@@ -235,5 +245,38 @@ describe('generated Proto runtime', () => {
     expect(presentEmpty.size).toBe('');
     expect(toJson(MaterialSchema, absent)).not.toHaveProperty('size');
     expect(toJson(MaterialSchema, presentEmpty)).toHaveProperty('size', '');
+  });
+
+  it('enforces imported draft checkpoint and confirmed revision origin invariants', () => {
+    const checkpoint = create(TaskSopRevisionSchema, {
+      ...taskRevision,
+      uid: '00000000-0000-4000-8000-000000000013',
+      snapshot: { ...task, lifecycle: Lifecycle.DRAFT },
+      origin: RevisionOrigin.IMPORTED_DRAFT_CHECKPOINT,
+      exportEligible: false,
+    });
+    const validator = createValidator();
+    expect(validator.validate(TaskSopRevisionSchema, checkpoint).kind).toBe('valid');
+    expect(validator.validate(TaskSopRevisionSchema, { ...checkpoint, exportEligible: true }).kind).toBe('invalid');
+    expect(validator.validate(TaskSopRevisionSchema, {
+      ...checkpoint,
+      origin: RevisionOrigin.IMPORTED_CONFIRMED,
+      exportEligible: true,
+    }).kind).toBe('invalid');
+  });
+
+  it('round-trips the normalized dependency review proposal through deterministic Proto binary', () => {
+    const proposal = create(DependencyReviewProposalSchema, {
+      rootName: 'taskSops/place-cup',
+      rootEtag: 'etag-1',
+      dependencies: [{
+        kind: DependencyKind.MATERIAL,
+        resourceName: 'materials/cup',
+        token: 'etag-material-1',
+      }],
+    });
+    const encoded = toBinary(DependencyReviewProposalSchema, proposal);
+    expect(fromBinary(DependencyReviewProposalSchema, encoded)).toEqual(proposal);
+    expect(createValidator().validate(DependencyReviewProposalSchema, proposal).kind).toBe('valid');
   });
 });

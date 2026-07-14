@@ -1,13 +1,24 @@
 import { create } from '@bufbuild/protobuf';
 import {
   ExportBundleSchema,
+  FrozenExportContentSchema,
   RootKind,
   type ExportBundle,
+  type FrozenExportContent,
   type SourceIdentity,
 } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
 import type { CanonicalSnapshot } from '../domain/appStore';
 import { CanonicalDataError } from '../domain/errors';
 import { bundleRef, type ExportClosure } from './closure';
+import {
+  exportSchemaVersion,
+  frozenExportFormat,
+  measureFrozenExportContent,
+  sealedBundleFormat,
+} from './codec';
+
+export const rendererVersion = 'sop-pdf-v1' as const;
+export const yamlExportVersion = 'sop-yaml-v1' as const;
 
 function source(value: { name: string; uid: string; sourceId?: string }): SourceIdentity {
   return {
@@ -18,9 +29,10 @@ function source(value: { name: string; uid: string; sourceId?: string }): Source
   };
 }
 
-function revision(value: { name: string; versionLabel: string; sourceVersionId?: string }) {
+function revision(value: { name: string; uid: string; versionLabel: string; sourceVersionId?: string }) {
   return {
     revisionName: value.name,
+    revisionUid: value.uid,
     versionLabel: value.versionLabel,
     sourceVersionId: value.sourceVersionId,
   };
@@ -128,15 +140,34 @@ function taskSpec(
   };
 }
 
-export function buildExportBundle(closure: ExportClosure): ExportBundle {
+function rootRevision(closure: ExportClosure) {
+  const revision = closure.root.kind === 'requirement'
+    ? closure.requirements.find((item) => bundleRef('requirement', item.name) === closure.rootRef)
+    : closure.taskSops.find((item) => bundleRef('task-sop', item.name) === closure.rootRef);
+  if (!revision?.snapshot) throw new CanonicalDataError('导出闭包缺少根版本');
+  if (!revision.uid) throw new CanonicalDataError(`导出根版本缺少 UID：${revision.name}`);
+  if (!revision.createTime) throw new CanonicalDataError(`导出根版本缺少确认时间：${revision.name}`);
+  return revision;
+}
+
+export function buildFrozenExportContent(closure: ExportClosure): FrozenExportContent {
   const refs = bindingMap(closure);
-  return create(ExportBundleSchema, {
-    format: 'coscene.sop.export',
-    schemaVersion: '1.0.0',
+  const root = rootRevision(closure);
+  return create(FrozenExportContentSchema, {
+    format: frozenExportFormat,
+    schemaVersion: exportSchemaVersion,
     root: {
       kind: closure.root.kind === 'requirement' ? RootKind.REQUIREMENT : RootKind.TASK_SOP,
       ref: closure.rootRef,
     },
+    rootName: root.snapshot!.name,
+    rootUid: root.snapshot!.uid,
+    revisionName: root.name,
+    revisionUid: root.uid,
+    versionLabel: root.versionLabel,
+    confirmationTime: root.createTime,
+    rendererVersion,
+    exportVersion: yamlExportVersion,
     requirements: closure.requirements.map((item) => {
       const snapshot = item.snapshot!;
       const spec = snapshot.spec!;
@@ -229,4 +260,19 @@ export function buildExportBundle(closure: ExportClosure): ExportBundle {
       sizeBytes: item.sizeBytes, publicUri: item.uri, sha256: item.sha256,
     })),
   });
+}
+
+export function sealExportContent(content: FrozenExportContent): ExportBundle {
+  const measured = measureFrozenExportContent(content);
+  return create(ExportBundleSchema, {
+    format: sealedBundleFormat,
+    schemaVersion: exportSchemaVersion,
+    content,
+    contentSha256: measured.contentSha256,
+    contentSizeBytes: measured.contentSizeBytes,
+  });
+}
+
+export function buildExportBundle(closure: ExportClosure): ExportBundle {
+  return sealExportContent(buildFrozenExportContent(closure));
 }

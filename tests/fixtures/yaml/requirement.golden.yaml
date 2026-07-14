@@ -3,6 +3,14 @@ schema_version: 1.0.0
 root:
   kind: requirement
   ref: requirement-bced1c6d67bd
+root_name: requirements/req001-38da6033
+root_uid: 35de70e9-c3a3-54a0-8ecc-0d873ded750d
+revision_name: requirements/req001-38da6033/revisions/v-0-0-1
+revision_uid: 43843384-2fd5-5343-8564-684915fb7a7b
+version_label: 0.0.1
+confirmation_time: 2026-01-01T00:00:00Z
+renderer_version: sop-pdf-v1
+export_version: sop-yaml-v1
 requirements:
   - ref: requirement-bced1c6d67bd
     source:
@@ -12,6 +20,7 @@ requirements:
     revision:
       revision_name: requirements/req001-38da6033/revisions/v-0-0-1
       version_label: 0.0.1
+      revision_uid: 43843384-2fd5-5343-8564-684915fb7a7b
     display_name: 基线客户需求
     spec:
       customer_ref: customer-d2be63997a86
@@ -72,6 +81,7 @@ robot_model_revisions:
       revision_name: robotModels/robot-baseline/revisions/current
       version_label: 1.0.0
       source_version_id: current
+      revision_uid: 4509bdab-561f-54e3-ac85-72bfa4c3d414
     display_name: coScene Baseline
     manufacturer: coScene
     model_code: Baseline

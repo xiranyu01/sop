@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%2310203a%22/><text x=%226%22 y=%2221%22 font-size=%2212%22 fill=%22white%22>SOP</text></svg>" />
+    <title>SOP 首屏设计方向候选</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        background: #e9edf2;
+        color: #172033;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-width: 1040px;
+        background: #e9edf2;
+      }
+
+      button, input { font: inherit; }
+      button { cursor: pointer; }
+
+      .labbar {
+        position: sticky;
+        z-index: 100;
+        top: 0;
+        display: grid;
+        grid-template-columns: minmax(220px, 0.8fr) minmax(700px, 2.7fr) minmax(260px, 1fr);
+        min-height: 86px;
+        align-items: center;
+        gap: 20px;
+        border-bottom: 1px solid #cfd6df;
+        background: #fafbfc;
+        padding: 12px 20px;
+        box-shadow: 0 8px 28px rgba(23, 32, 51, 0.08);
+      }
+
+      .lab-title { min-width: 0; }
+      .lab-title strong { display: block; font-size: 15px; }
+      .lab-title span { display: block; margin-top: 4px; color: #697386; font-size: 12px; }
+
+      .theme-tabs {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .theme-tab {
+        min-height: 28px;
+        overflow: hidden;
+        border: 1px solid #d8dee7;
+        border-radius: 6px;
+        background: #fff;
+        color: #394458;
+        padding: 5px 9px;
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .theme-tab:hover { border-color: #9eabbc; }
+      .theme-tab[aria-pressed="true"] {
+        border-color: #1f6feb;
+        background: #eaf2ff;
+        color: #0f4ca8;
+        font-weight: 700;
+        box-shadow: inset 0 0 0 1px #1f6feb;
+      }
+
+      .theme-summary { min-width: 0; }
+      .theme-summary strong { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+      .theme-summary p {
+        margin: 5px 0 0;
+        overflow: hidden;
+        color: #697386;
+        font-size: 11px;
+        line-height: 1.45;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .risk {
+        display: inline-flex;
+        border-radius: 999px;
+        background: #e9f7ee;
+        color: #207a45;
+        padding: 2px 7px;
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .preview-note {
+        position: fixed;
+        z-index: 90;
+        right: 18px;
+        bottom: 16px;
+        border: 1px solid rgba(92, 107, 128, 0.22);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.86);
+        color: #5f6b7c;
+        padding: 6px 10px;
+        font-size: 11px;
+        box-shadow: 0 8px 24px rgba(23, 32, 51, 0.1);
+        backdrop-filter: blur(12px);
+      }
+
+      .mock-app {
+        --canvas: #f6f8fa;
+        --surface: #ffffff;
+        --surface-muted: #f6f8fa;
+        --surface-hover: #f3f6f9;
+        --surface-active: #eaeef2;
+        --text: #1f2328;
+        --text-muted: #656d76;
+        --text-faint: #7d8590;
+        --border: #d0d7de;
+        --border-soft: #e6eaef;
+        --accent: #0969da;
+        --accent-hover: #0862ca;
+        --accent-soft: #ddf4ff;
+        --accent-contrast: #ffffff;
+        --sidebar: #f6f8fa;
+        --sidebar-text: #1f2328;
+        --sidebar-muted: #656d76;
+        --sidebar-border: #d8dee4;
+        --nav-active: #ffffff;
+        --nav-hover: #eaeef2;
+        --nav-indicator: #0969da;
+        --brand-bg: #0969da;
+        --brand-text: #ffffff;
+        --count-bg: #eaeef2;
+        --count-text: #57606a;
+        --control-bg: #ffffff;
+        --radius-panel: 6px;
+        --radius-control: 6px;
+        --radius-nav: 6px;
+        --panel-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+        --sidebar-width: 240px;
+        --workspace-pad: 24px;
+        --row-height: 48px;
+        --table-head-bg: #f6f8fa;
+        --table-head-transform: none;
+        --table-head-size: 12px;
+        --title-size: 26px;
+        --font: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        --font-feature: "tnum" 1;
+        position: relative;
+        min-height: calc(100vh - 86px);
+        background: var(--canvas);
+        color: var(--text);
+        font-family: var(--font);
+        font-feature-settings: var(--font-feature);
+      }
+
+      .app-shell {
+        display: grid;
+        grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+        min-height: calc(100vh - 86px);
+      }
+
+      .sidebar {
+        position: relative;
+        border-right: 1px solid var(--sidebar-border);
+        background: var(--sidebar);
+        color: var(--sidebar-text);
+        padding: 20px 14px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 0 6px 26px;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        flex: 0 0 auto;
+        place-items: center;
+        border: 1px solid color-mix(in srgb, var(--brand-bg), black 6%);
+        border-radius: var(--radius-control);
+        background: var(--brand-bg);
+        color: var(--brand-text);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+      }
+
+      .brand-copy strong, .brand-copy span { display: block; }
+      .brand-copy strong { color: var(--sidebar-text); font-size: 15px; letter-spacing: -0.01em; }
+      .brand-copy span { margin-top: 3px; color: var(--sidebar-muted); font-size: 12px; }
+
+      .nav-list { display: grid; gap: 4px; }
+      .nav-button {
+        position: relative;
+        display: flex;
+        width: 100%;
+        min-height: 40px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        overflow: hidden;
+        border: 1px solid transparent;
+        border-radius: var(--radius-nav);
+        background: transparent;
+        color: var(--sidebar-muted);
+        padding: 8px 10px;
+        text-align: left;
+      }
+
+      .nav-button:hover { background: var(--nav-hover); color: var(--sidebar-text); }
+      .nav-button.active {
+        border-color: var(--sidebar-border);
+        background: var(--nav-active);
+        color: var(--sidebar-text);
+        font-weight: 650;
+      }
+
+      .nav-button.active::before {
+        position: absolute;
+        top: 8px;
+        bottom: 8px;
+        left: 0;
+        width: 3px;
+        border-radius: 0 3px 3px 0;
+        background: var(--nav-indicator);
+        content: "";
+      }
+
+      .nav-count {
+        display: inline-grid;
+        min-width: 28px;
+        min-height: 20px;
+        place-items: center;
+        border-radius: 999px;
+        background: var(--count-bg);
+        color: var(--count-text);
+        padding: 1px 7px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .workspace { min-width: 0; padding: var(--workspace-pad); }
+      .topbar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .topbar h1 {
+        margin: 0;
+        color: var(--text);
+        font-size: var(--title-size);
+        font-weight: 720;
+        letter-spacing: -0.025em;
+        line-height: 1.2;
+      }
+
+      .topbar p { margin: 7px 0 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+
+      .primary-button, .ghost-button {
+        display: inline-flex;
+        min-height: 36px;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--radius-control);
+        padding: 7px 13px;
+        white-space: nowrap;
+      }
+
+      .primary-button {
+        border: 1px solid color-mix(in srgb, var(--accent), black 8%);
+        background: var(--accent);
+        color: var(--accent-contrast);
+        font-weight: 650;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.16) inset;
+      }
+
+      .primary-button:hover { background: var(--accent-hover); }
+      .ghost-button {
+        border: 1px solid var(--border);
+        background: var(--control-bg);
+        color: var(--text);
+      }
+
+      .panel {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-panel);
+        background: var(--surface);
+        box-shadow: var(--panel-shadow);
+      }
+
+      .table-toolbar {
+        display: flex;
+        min-height: 76px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        border-bottom: 1px solid var(--border-soft);
+        padding: 15px 18px;
+      }
+
+      .toolbar-copy { min-width: 250px; }
+      .toolbar-copy h2 { margin: 0; font-size: 17px; font-weight: 680; letter-spacing: -0.015em; }
+      .toolbar-copy p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; }
+      .table-tools { display: flex; align-items: flex-end; justify-content: flex-end; gap: 9px; }
+
+      .search-field { display: grid; width: 230px; gap: 5px; }
+      .search-field label { color: var(--text-muted); font-size: 11px; font-weight: 650; }
+      .search-wrap { position: relative; }
+      .search-wrap::before {
+        position: absolute;
+        top: 50%;
+        left: 10px;
+        width: 11px;
+        height: 11px;
+        border: 1.5px solid var(--text-faint);
+        border-radius: 50%;
+        content: "";
+        transform: translateY(-58%);
+      }
+
+      .search-wrap::after {
+        position: absolute;
+        top: 21px;
+        left: 20px;
+        width: 5px;
+        height: 1.5px;
+        background: var(--text-faint);
+        content: "";
+        transform: rotate(45deg);
+        transform-origin: left center;
+      }
+
+      .search-field input {
+        width: 100%;
+        min-height: 36px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-control);
+        background: var(--control-bg);
+        color: var(--text);
+        padding: 7px 10px 7px 30px;
+        outline: none;
+      }
+
+      .search-field input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 84%);
+      }
+
+      .result-count {
+        display: inline-flex;
+        min-height: 36px;
+        align-items: center;
+        color: var(--text-muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .table-scroll { width: 100%; overflow-x: auto; }
+      table { width: 100%; min-width: 940px; border-collapse: collapse; table-layout: fixed; }
+      th, td { border-bottom: 1px solid var(--border-soft); padding: 0 13px; text-align: left; }
+      th {
+        height: 38px;
+        background: var(--table-head-bg);
+        color: var(--text-muted);
+        font-size: var(--table-head-size);
+        font-weight: 680;
+        letter-spacing: 0.015em;
+        text-transform: var(--table-head-transform);
+      }
+      td { height: var(--row-height); color: var(--text); font-size: 13px; }
+      tbody tr { transition: background 120ms ease; }
+      tbody tr:hover { background: var(--surface-hover); }
+      tbody tr:last-child td { border-bottom: 0; }
+      .cell-title { font-weight: 650; }
+      .cell-muted { color: var(--text-muted); }
+      .cell-number, .cell-date { font-variant-numeric: tabular-nums; }
+      .cell-number { text-align: right; }
+      .status {
+        display: inline-flex;
+        min-width: 50px;
+        justify-content: center;
+        border: 1px solid color-mix(in srgb, #a56500, transparent 76%);
+        border-radius: 999px;
+        background: color-mix(in srgb, #f5b700, transparent 86%);
+        color: #835600;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .text-button {
+        border: 0;
+        background: transparent;
+        color: var(--accent);
+        padding: 4px 0;
+        font-weight: 600;
+      }
+
+      /* 02 Carbon Compact */
+      .mock-app[data-theme="carbon"] {
+        --canvas: #f4f4f4;
+        --surface: #ffffff;
+        --surface-muted: #f4f4f4;
+        --surface-hover: #e8e8e8;
+        --text: #161616;
+        --text-muted: #525252;
+        --text-faint: #6f6f6f;
+        --border: #8d8d8d;
+        --border-soft: #e0e0e0;
+        --accent: #0f62fe;
+        --accent-hover: #0353e9;
+        --accent-soft: #d0e2ff;
+        --sidebar: #262626;
+        --sidebar-text: #f4f4f4;
+        --sidebar-muted: #c6c6c6;
+        --sidebar-border: #393939;
+        --nav-active: #393939;
+        --nav-hover: #353535;
+        --nav-indicator: #78a9ff;
+        --brand-bg: #f4f4f4;
+        --brand-text: #161616;
+        --count-bg: #393939;
+        --count-text: #f4f4f4;
+        --control-bg: #ffffff;
+        --radius-panel: 0px;
+        --radius-control: 0px;
+        --radius-nav: 0px;
+        --panel-shadow: none;
+        --row-height: 42px;
+        --table-head-bg: #e0e0e0;
+        --table-head-size: 11px;
+        --title-size: 28px;
+        --font: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      }
+      .mock-app[data-theme="carbon"] .nav-button.active::before { top: 0; bottom: 0; }
+      .mock-app[data-theme="carbon"] .table-toolbar { background: #fff; border-bottom-color: #8d8d8d; }
+      .mock-app[data-theme="carbon"] .primary-button { box-shadow: none; }
+
+      /* 03 Linear Soft, community-inspired */
+      .mock-app[data-theme="linear"] {
+        --canvas: #f7f7f8;
+        --surface: rgba(255, 255, 255, 0.94);
+        --surface-muted: #fafafa;
+        --surface-hover: #f1f0f7;
+        --text: #202124;
+        --text-muted: #6b6c72;
+        --text-faint: #909198;
+        --border: #dedee3;
+        --border-soft: #ececf0;
+        --accent: #5e5ce6;
+        --accent-hover: #4f4dd6;
+        --accent-soft: #eeedff;
+        --sidebar: #202126;
+        --sidebar-text: #fafafa;
+        --sidebar-muted: #a8a8b0;
+        --sidebar-border: #303136;
+        --nav-active: #303137;
+        --nav-hover: #292a30;
+        --nav-indicator: #8a88ff;
+        --brand-bg: #5e5ce6;
+        --brand-text: #ffffff;
+        --count-bg: #36373e;
+        --count-text: #d7d7dd;
+        --radius-panel: 10px;
+        --radius-control: 7px;
+        --radius-nav: 7px;
+        --panel-shadow: 0 10px 34px rgba(30, 31, 36, 0.07), 0 1px 2px rgba(30, 31, 36, 0.04);
+        --row-height: 48px;
+        --table-head-bg: #fafafa;
+        --title-size: 25px;
+      }
+      .mock-app[data-theme="linear"] .workspace {
+        background: radial-gradient(circle at 92% -10%, rgba(94, 92, 230, 0.055), transparent 30%);
+      }
+      .mock-app[data-theme="linear"] .nav-button.active { border-color: #3c3d45; }
+
+      /* 04 Warm Editorial, community-inspired */
+      .mock-app[data-theme="notion"] {
+        --canvas: #f7f6f3;
+        --surface: #ffffff;
+        --surface-muted: #faf9f7;
+        --surface-hover: #f7f6f3;
+        --text: #2f2f2f;
+        --text-muted: #787774;
+        --text-faint: #9b9a97;
+        --border: #dfdedb;
+        --border-soft: #efeeec;
+        --accent: #2f756c;
+        --accent-hover: #28665e;
+        --accent-soft: #e7f1ef;
+        --accent-contrast: #ffffff;
+        --sidebar: #fbfaf8;
+        --sidebar-text: #37352f;
+        --sidebar-muted: #787774;
+        --sidebar-border: #e8e7e4;
+        --nav-active: #efeeeb;
+        --nav-hover: #f1f0ed;
+        --nav-indicator: #2f756c;
+        --brand-bg: #ffffff;
+        --brand-text: #37352f;
+        --count-bg: #efeeeb;
+        --count-text: #787774;
+        --control-bg: #ffffff;
+        --radius-panel: 6px;
+        --radius-control: 5px;
+        --radius-nav: 5px;
+        --panel-shadow: none;
+        --workspace-pad: 28px 32px;
+        --row-height: 50px;
+        --table-head-bg: #fbfaf8;
+        --title-size: 27px;
+      }
+      .mock-app[data-theme="notion"] .brand-mark { border-color: #d7d5d0; box-shadow: 0 1px 2px rgba(55, 53, 47, .08); }
+      .mock-app[data-theme="notion"] .nav-button.active { border-color: transparent; }
+      .mock-app[data-theme="notion"] .panel { border-color: #e4e3e0; }
+
+      /* 05 Atlassian Structured */
+      .mock-app[data-theme="atlassian"] {
+        --canvas: #f7f8f9;
+        --surface: #ffffff;
+        --surface-muted: #f7f8f9;
+        --surface-hover: #f1f2f4;
+        --text: #172b4d;
+        --text-muted: #626f86;
+        --text-faint: #8590a2;
+        --border: #b7bdc8;
+        --border-soft: #dcdfe4;
+        --accent: #0c66e4;
+        --accent-hover: #0055cc;
+        --accent-soft: #e9f2ff;
+        --sidebar: #172b4d;
+        --sidebar-text: #ffffff;
+        --sidebar-muted: #b6c2cf;
+        --sidebar-border: #2c3e5d;
+        --nav-active: #2c456e;
+        --nav-hover: #233a60;
+        --nav-indicator: #579dff;
+        --brand-bg: #0c66e4;
+        --brand-text: #ffffff;
+        --count-bg: #2c456e;
+        --count-text: #dfe1e6;
+        --radius-panel: 8px;
+        --radius-control: 4px;
+        --radius-nav: 4px;
+        --panel-shadow: 0 1px 1px rgba(9, 30, 66, .08), 0 0 1px rgba(9, 30, 66, .22);
+        --workspace-pad: 24px 28px;
+        --row-height: 48px;
+        --table-head-bg: #f7f8f9;
+        --title-size: 26px;
+      }
+      .mock-app[data-theme="atlassian"] .table-toolbar { min-height: 80px; }
+
+      /* 06 Vercel Monochrome, community-inspired */
+      .mock-app[data-theme="vercel"] {
+        --canvas: #fafafa;
+        --surface: #ffffff;
+        --surface-muted: #fafafa;
+        --surface-hover: #fafafa;
+        --text: #111111;
+        --text-muted: #666666;
+        --text-faint: #8f8f8f;
+        --border: #d4d4d4;
+        --border-soft: #ebebeb;
+        --accent: #111111;
+        --accent-hover: #333333;
+        --accent-soft: #eeeeee;
+        --sidebar: #ffffff;
+        --sidebar-text: #111111;
+        --sidebar-muted: #666666;
+        --sidebar-border: #e5e5e5;
+        --nav-active: #f2f2f2;
+        --nav-hover: #f5f5f5;
+        --nav-indicator: #111111;
+        --brand-bg: #111111;
+        --brand-text: #ffffff;
+        --count-bg: #eeeeee;
+        --count-text: #444444;
+        --radius-panel: 5px;
+        --radius-control: 5px;
+        --radius-nav: 5px;
+        --panel-shadow: none;
+        --row-height: 46px;
+        --table-head-bg: #fafafa;
+        --table-head-transform: uppercase;
+        --table-head-size: 10px;
+        --title-size: 25px;
+      }
+      .mock-app[data-theme="vercel"] .panel { border-color: #d9d9d9; }
+      .mock-app[data-theme="vercel"] .brand-mark { border-radius: 50%; }
+      .mock-app[data-theme="vercel"] .table-toolbar { border-bottom-color: #d9d9d9; }
+
+      @media (max-width: 1180px) {
+        .labbar { grid-template-columns: 190px minmax(660px, 1fr); }
+        .theme-summary { display: none; }
+        .mock-app { --sidebar-width: 220px; --workspace-pad: 20px; }
+        .toolbar-copy p { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="labbar">
+      <div class="lab-title">
+        <strong>SOP 首屏设计方向</strong>
+        <span>同结构、同数据、仅切换视觉语言</span>
+      </div>
+      <nav class="theme-tabs" aria-label="候选设计风格">
+        <button class="theme-tab" data-theme-choice="primer" aria-pressed="true">01 Primer Precision</button>
+        <button class="theme-tab" data-theme-choice="carbon" aria-pressed="false">02 Carbon Compact</button>
+        <button class="theme-tab" data-theme-choice="linear" aria-pressed="false">03 Linear Soft</button>
+        <button class="theme-tab" data-theme-choice="notion" aria-pressed="false">04 Warm Editorial</button>
+        <button class="theme-tab" data-theme-choice="atlassian" aria-pressed="false">05 Atlassian Structured</button>
+        <button class="theme-tab" data-theme-choice="vercel" aria-pressed="false">06 Vercel Monochrome</button>
+      </nav>
+      <div class="theme-summary" aria-live="polite">
+        <strong><span id="theme-name">Primer Precision</span><span class="risk" id="theme-risk">改动最小</span></strong>
+        <p id="theme-description">细边框、冷灰层级、克制蓝色；最接近当前企业后台结构。</p>
+      </div>
+    </header>
+
+    <div class="mock-app" id="mock-app" data-theme="primer">
+      <div class="app-shell">
+        <aside class="sidebar">
+          <div class="brand">
+            <div class="brand-mark">SOP</div>
+            <div class="brand-copy">
+              <strong>需求管理</strong>
+              <span>coScene 数据采集</span>
+            </div>
+          </div>
+          <nav class="nav-list" aria-label="主导航">
+            <button class="nav-button active"><span>客户需求</span><strong class="nav-count">2</strong></button>
+            <button class="nav-button"><span>场景库</span><strong class="nav-count">2</strong></button>
+            <button class="nav-button"><span>客户</span><strong class="nav-count">2</strong></button>
+            <button class="nav-button"><span>物料</span><strong class="nav-count">4</strong></button>
+            <button class="nav-button"><span>机器型号</span><strong class="nav-count">2</strong></button>
+            <button class="nav-button"><span>全局字段</span><strong class="nav-count">101</strong></button>
+          </nav>
+        </aside>
+
+        <main class="workspace">
+          <header class="topbar">
+            <div>
+              <h1>客户需求管理</h1>
+              <p>管理客户需求、生产需求项和对应任务 SOP 版本，确认后可导出需求 YAML。</p>
+            </div>
+            <button class="ghost-button">刷新</button>
+          </header>
+
+          <section class="panel">
+            <div class="table-toolbar">
+              <div class="toolbar-copy">
+                <h2>需求列表</h2>
+                <p>按需求名称、客户、项目、状态或版本搜索，点击行进入详情页</p>
+              </div>
+              <div class="table-tools">
+                <div class="search-field">
+                  <label for="requirement-search">搜索</label>
+                  <div class="search-wrap">
+                    <input id="requirement-search" type="search" placeholder="需求名称、客户、项目" />
+                  </div>
+                </div>
+                <span class="result-count">2 条</span>
+                <button class="primary-button">新建需求</button>
+              </div>
+            </div>
+
+            <div class="table-scroll">
+              <table>
+                <colgroup>
+                  <col style="width: 18%" /><col style="width: 8%" /><col style="width: 16%" />
+                  <col style="width: 8%" /><col style="width: 8%" /><col style="width: 10%" />
+                  <col style="width: 8%" /><col style="width: 13%" /><col style="width: 7%" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>需求名称</th><th>客户</th><th>项目名称</th><th>状态</th><th>版本</th>
+                    <th class="cell-number">生产需求项</th><th class="cell-number">总时长</th><th>截止日期</th><th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="cell-title">WE 家庭场景</td><td>WE</td><td>WE 家庭场景采集</td>
+                    <td><span class="status">草稿</span></td><td class="cell-muted">v0.0.1</td>
+                    <td class="cell-number">2</td><td class="cell-number">100 h</td><td class="cell-date">2026-07-01</td>
+                    <td><button class="text-button">查看</button></td>
+                  </tr>
+                  <tr>
+                    <td class="cell-title">mayi 的客户需求</td><td>mayi</td><td class="cell-muted">—</td>
+                    <td><span class="status">草稿</span></td><td class="cell-muted">v0.0.1</td>
+                    <td class="cell-number">1</td><td class="cell-number">500 h</td><td class="cell-date">2026-06-22</td>
+                    <td><button class="text-button">查看</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div class="preview-note">点击顶部方案名称切换 · 仅视觉 mock</div>
+
+    <script>
+      const themes = {
+        primer: { name: 'Primer Precision', risk: '改动最小', description: '细边框、冷灰层级、克制蓝色；最接近当前企业后台结构。' },
+        carbon: { name: 'Carbon Compact', risk: '低风险', description: '高数据密度、方正组件、灰阶分层；表格效率感最强。' },
+        linear: { name: 'Linear Soft', risk: '中低风险', description: '精细发丝边框、柔和紫蓝、极轻浮层；更年轻、更精致。' },
+        notion: { name: 'Warm Editorial', risk: '低风险', description: '受编辑台账与 Notion 社区分析启发；暖白暖灰、低对比边框、重视阅读层级。' },
+        atlassian: { name: 'Atlassian Structured', risk: '低风险', description: '8px 节奏、清晰容器边界、强层级蓝；复杂工作流易扫描。' },
+        vercel: { name: 'Vercel Monochrome', risk: '中风险', description: '纯黑白灰、几乎无阴影、强排版与网格线；最简、最现代。' },
+      };
+
+      const app = document.querySelector('#mock-app');
+      const buttons = [...document.querySelectorAll('[data-theme-choice]')];
+      const name = document.querySelector('#theme-name');
+      const risk = document.querySelector('#theme-risk');
+      const description = document.querySelector('#theme-description');
+
+      function selectTheme(key, persist = true) {
+        if (!themes[key]) key = 'primer';
+        app.dataset.theme = key;
+        buttons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.themeChoice === key)));
+        name.textContent = themes[key].name;
+        risk.textContent = themes[key].risk;
+        description.textContent = themes[key].description;
+        document.title = `${themes[key].name} · SOP 首屏设计方向`;
+        if (persist) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('theme', key);
+          window.history.replaceState(null, '', url);
+          window.localStorage.setItem('sop-design-mock-theme', key);
+        }
+      }
+
+      buttons.forEach((button) => button.addEventListener('click', () => selectTheme(button.dataset.themeChoice)));
+      const queryTheme = new URLSearchParams(window.location.search).get('theme');
+      selectTheme(queryTheme || window.localStorage.getItem('sop-design-mock-theme') || 'primer', false);
+    </script>
+  </body>
+</html>

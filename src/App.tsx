@@ -2674,7 +2674,7 @@ function SearchPanel({
 }) {
   return (
     <div className="table-toolbar">
-      <div>
+      <div className="toolbar-copy">
         <h2>{title}</h2>
         {description && <p>{description}</p>}
       </div>
@@ -3579,7 +3579,7 @@ function RequirementPage({
   if (!detailOpen || !selectedRequirement || !selectedVersion) {
     return (
       <div className="page-stack">
-        <section className="panel table-panel">
+        <section className="panel table-panel requirement-list-panel">
           <SearchPanel
             title="需求列表"
             description="按需求名称、客户、项目、状态或版本搜索，点击行进入详情页"

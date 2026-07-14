@@ -12,4 +12,5 @@ uploads
 test-results
 playwright-report
 playwright-report-pages
-.pnpm-store
+.pnpm-store/
+.playwright-cli/

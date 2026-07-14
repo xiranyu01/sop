@@ -10,7 +10,7 @@ import type {
   RobotModel,
   Scene,
   SubsceneVersion,
-} from '../src/types';
+} from '../shared/transport/restDto';
 import type { LegacyApiStore, ApiRequest, ApiResponse } from '../shared/transport/restDto';
 import { buildRequirementYaml, buildTaskSopYaml } from './yamlExport';
 import { canEditStatus, createId, createShortId, nextPatchVersion, nowIso } from './versioning';

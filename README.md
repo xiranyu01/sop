@@ -1,32 +1,26 @@
 # SOP 需求管理网页
 
-一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.11` YAML，任务 SOP 可以单独导出为 `task_sop_yaml_v0.5` YAML，两者都支持导出 PDF 便于沟通和归档。
+一个用于管理客户、物料、机器人型号、场景、任务 SOP 和客户需求版本的内部工具。系统现在以 `coscene.sop.v1alpha1` Proto 资源图为内部权威领域契约；浏览器读取严格校验的 ProtoJSON 投影，持久化运行在可冻结、可切换的 canonical namespace 上。
 
-新的规范化领域模型正在 `proto/coscene/sop/v1alpha1/` 中定义。设计边界、资源名、revision 语义和后续运行时迁移范围见 [`docs/proto-v1alpha1.md`](docs/proto-v1alpha1.md)。当前应用仍运行旧的 TypeScript/JSON 模型，Proto 尚未接管运行时读写或 YAML 导出。
+YAML 只作为对外导出格式，不是第二套内部模型。v1 仅导出已确认 revision 的不可变依赖闭包，不提供 YAML 导入；格式为 `coscene.sop.export` / `1.0.0`，并携带 canonical resource name、UID、来源 ID 和 revision identity，便于外部系统反查和追踪。
 
-线上主部署建议使用 Cloudflare Pages + Pages Functions + D1。GitHub Pages 只能托管静态页面，不能运行本项目的 `/api/*` 写入接口，也不能提供共享数据存储。
+设计说明：
+
+- [Proto v1alpha1 领域契约](docs/proto-v1alpha1.md)
+- [YAML Export v1 契约](docs/yaml-export-v1.md)
+- [存储迁移与生产切换手册](docs/storage-migration-v1alpha1.md)
+- [字段覆盖账本](docs/proto-field-coverage.md)
+
+线上主部署使用 Cloudflare Pages + Pages Functions + D1；附件使用 R2 或其 S3 兼容接口。GitHub Pages 无法运行本项目的写接口和共享存储。
 
 ## 主要能力
 
-- 客户与客户需求放在同一工作流里：可查看每个客户的历史需求和需求数量。
-- 物料、机器型号、场景、任务 SOP、全局字段均用列表页管理，支持搜索。
-- 物料自动生成 SKU 编号，支持上传物料图片。
-- 场景下管理多个任务 SOP；任务 SOP 有内部随机短编号和多版本，页面、客户需求、YAML 都不保存或展示任务编号。
-- 任务 SOP 可配置物料、物料初始/目标状态、机器人状态、随机性、采集步骤、标注步骤、操作要求和附件。
-- 客户需求可添加多个生产需求项；每个需求项可维护名称、描述、目标采集时长、目标采集数量，并单独选择要使用的任务 SOP 版本。
-- 确认客户需求前会校验每个生产需求项是否已选择已确认的任务 SOP 版本。
-- 已确认版本只读；再次编辑会自动生成新的草稿补丁版本，草稿版本可以删除。
-- 支持需求附件、任务 SOP 附件和物料图片上传，单个文件最大 1G。
-- 支持 YAML 预览、复制、下载；客户需求和任务 SOP 都通过统一导出菜单导出 YAML 或 PDF。
-- Cloudflare 线上版本使用应用内访问密码保护，适合第一版内部试用。
-
-## Schema 版本
-
-- `app_data_v0.1`：本地 JSON / D1 主数据结构版本。
-- `requirement_yaml_v0.11`：客户需求 YAML 导出结构版本；基础信息包含业务目标、原始需求来源和客户附件，全局要求包含 topic、随机性、补充说明、采集操作要求和标注操作要求。
-- `task_sop_yaml_v0.5`：任务 SOP YAML 结构版本，附件、示例图和物料图片会输出可访问 URL。
-
-这些版本会写入 `data/metadata.json`；对外 YAML 只输出自身的顶层 `schema_version`，不输出内部 `app_data` 版本。
+- 管理客户、物料、机器人型号、场景、全局字段和物料状态规则。
+- 管理带不可变 revision 的任务 SOP 与客户需求；已确认版本只读，继续编辑会创建新草稿。
+- Requirement 的生产项固定引用 TaskSopRevision 和 RobotModelRevision，不跟随“最新版本”漂移。
+- 支持需求附件、任务 SOP 附件、物料图片的分片上传与受控下载，单文件最大 1 GiB。
+- 支持任务 SOP / Requirement 的 YAML 和 PDF 导出；YAML 只允许从已确认 revision 导出。
+- Cloudflare 环境使用应用访问密码保护，适合内部协作。
 
 ## 本地启动
 
@@ -35,67 +29,46 @@ pnpm install
 pnpm dev
 ```
 
-打开 Vite 输出的地址，通常是 `http://127.0.0.1:5173`。
+前端通常在 `http://127.0.0.1:5173`，API 在 `http://127.0.0.1:8787`。
 
-本地开发使用 Express API 和 `data/*.json` 文件存储；附件和图片会保存到 `uploads/`，该目录已加入 `.gitignore`。
+首次启动会从 `data/*.json` 兼容数据构建并校验 canonical generation，随后把权威运行时 snapshot 保存到 `data/canonical/`。可通过 `SOP_DATA_DIR`、`SOP_CANONICAL_DIR`、`SOP_UPLOADS_DIR` 和 `SOP_EXPORTS_DIR` 覆盖路径。附件对象保存在 `uploads/`，不提交到 Git。
 
-## 常用校验
+## 验证
 
 ```bash
-pnpm typecheck
-pnpm build
+pnpm verify
+pnpm test:e2e
+pnpm test:e2e:pages
 ```
 
-提交或部署前建议至少跑完这两条命令。
+`verify` 包含 Proto 格式/lint/build、生成代码漂移、TypeScript、单元、集成和生产构建检查。两个 E2E 分别覆盖本地 Express 和接近生产的 Pages Functions + 隔离本地 D1/R2。
 
-## 数据与存储
+## 数据与兼容边界
 
-- `data/customers.json`：客户信息
-- `data/materials.json`：物料信息，包含自动生成的 SKU 和可选图片元数据
-- `data/metadata.json`：当前数据与 YAML schema 版本
-- `data/robot-models.json`：机器型号和 topic 信息
-- `data/scenes.json`：场景与任务 SOP 库；任务 SOP 内部按随机短编号管理，一个编号可有多个版本
-- `data/requirements.json`：客户需求；保存需求版本、生产需求项和锁定的任务 SOP 版本，不保存任务编号
-- `data/global-fields.json`：全局字段词表
-- `data/material-state-rules.json`：历史兼容数据，当前物料状态规则主要在任务 SOP 内维护
-- `exports/requirements/<requirement_id>/<version>.yaml`：本地导出的需求 YAML
-- `uploads/`：本地上传的附件和图片，不提交到 GitHub
+- `proto/coscene/sop/v1alpha1/`：内部领域契约。
+- `proto/coscene/sop/export/v1alpha1/`：YAML 导出契约。
+- `data/*.json` 与 D1 `app_data`：迁移种子及限时回滚兼容输入，不再是 canonical runtime 的权威模型。
+- `data/canonical/`：本地 canonical generation、namespace 和运行元数据。
+- D1 `canonical_migration_generations`：可复核的迁移 generation 与报告。
+- D1 `canonical_namespaces`：运行时 snapshot、epoch、写冻结状态和乐观并发 generation。
+- D1 `canonical_store_meta.runtime_namespace`：显式激活的运行 namespace。
+- `uploads/` / R2：附件对象；canonical snapshot 保存身份、可达性和清理/回滚租约。
 
-线上 Cloudflare 版本会把 JSON 主数据保存到 D1 的 `app_data` key/value 表里；`data/*.json` 只作为首次初始化种子数据。附件、任务 SOP 图片/视频和物料图片建议保存到 R2 bucket：同账号 R2 可通过 `ATTACHMENTS` binding 提供给 Pages Functions，跨账号 R2 可通过 S3 兼容访问参数提供。
+当前 REST 写接口仍是 UI 兼容边界：服务端将 canonical snapshot 投影为 DTO，应用现有表单变更后再严格转换回 Proto。该适配器会保留到生产切换完成、回滚窗口关闭并明确签字后再删除。
 
 ## Cloudflare 部署
 
-1. 在 Cloudflare 创建 D1 数据库，例如 `sop-prod`。
-2. 执行 [schema.sql](./schema.sql) 中的建表 SQL。
-3. 可选但推荐：创建 R2 bucket，例如 `sop-attachments`，用于附件和图片上传。
-4. 在 Cloudflare Pages 连接 GitHub 仓库 `xiranyu01/sop`，设置：
-   - Production branch: `main`
-   - Build command: `pnpm build`
-   - Build output directory: `dist`
-5. 在 Pages 项目里绑定 D1：
-   - Variable name: `DB`
-   - D1 database: `sop-prod`
-6. 如果启用附件上传，优先在 Pages 项目里绑定同账号 R2：
-   - Variable name: `ATTACHMENTS`
-   - R2 bucket: `sop-attachments`
-7. 如果附件 bucket 在另一个 Cloudflare 账号，改用 Pages secrets 配置 S3 访问参数：
-   - `R2_S3_ENDPOINT`
-   - `R2_S3_BUCKET`
-   - `R2_S3_ACCESS_KEY_ID`
-   - `R2_S3_SECRET_ACCESS_KEY`
-8. 添加环境变量：
-   - `APP_PASSWORD=<访问密码>`
-   - `NODE_VERSION=22`
-9. 部署后访问 `https://<project>.pages.dev`，输入访问密码使用。
+1. 创建 D1 数据库和可选 R2 bucket，并配置 `DB`、`ATTACHMENTS`、`APP_PASSWORD` 等 binding/secrets。
+2. 用 `pnpm exec wrangler d1 migrations apply sop-prod --remote` 安装 expand-only schema。
+3. 构建命令使用 `pnpm build`，输出目录为 `dist`，Node 使用 22。
+4. 严格按照[生产切换手册](docs/storage-migration-v1alpha1.md)准备 generation、核验、显式激活、只读烟测和 reopen。
 
-本地模拟 Cloudflare Pages Functions：
+生产环境不要设置 `CANONICAL_BOOTSTRAP_MODE=auto`。默认行为是只构建、校验并冻结候选 namespace，返回 `503` 和 `candidateNamespace`，由操作员完成受控切换。`auto` 只用于本地 `pnpm pages:dev` 和隔离 CI E2E。
+
+本地模拟 Pages Functions：
 
 ```bash
 pnpm pages:dev
 ```
 
-`pnpm pages:dev` 会使用 `dev-password` 作为本地访问密码。
-
-## 开发说明
-
-详细的数据结构、API、版本规则、YAML/PDF 导出规则、Cloudflare 部署说明和发布检查见 [DEVELOPMENT.md](./DEVELOPMENT.md)。
+本地密码为 `dev-password`。更多 API、迁移和开发约定见 [DEVELOPMENT.md](DEVELOPMENT.md)。

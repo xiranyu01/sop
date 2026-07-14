@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import YAML from 'yaml';
-import type { Requirement } from '../../src/types';
+import type { Requirement } from '../../shared/transport/restDto';
 import { apiJson, authHeaders, openAuthenticated } from './helpers/app';
 
 test('Requirement create → update → confirm → patch draft → delete and TaskSop navigation remain stable', async ({ page, request }, testInfo) => {

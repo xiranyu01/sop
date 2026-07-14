@@ -1,20 +1,24 @@
 # SOP 需求管理网页开发说明
 
-## 项目定位
+## 架构定位
 
-这是一个本地优先、可部署到 Cloudflare 的 SOP 客户需求管理工具，用来管理客户信息、物料信息、机器型号、场景/任务 SOP 库、全局字段词表和客户需求版本。
+项目以 Proto v1alpha1 为内部权威领域契约：资源、revision、引用、冻结依赖和附件身份都在 Proto 中定义。YAML 是 confirmed-only 的外部投影，不参与内部读写，也暂不支持导入。
 
-第一版目标是简单可运行、方便 review、方便后续迁移到正式系统。当前只有应用内共享访问密码，不做用户账号、角色权限、操作审计和多人并发冲突处理。
+当前 UI 仍使用适合表单编辑的 REST DTO。读链路是 canonical ProtoJSON → 严格 decode/validate → view model；写链路暂时是 canonical snapshot → REST DTO → 现有 route mutation → deterministic converter → Proto validate → atomic commit。后者是有意保留的迁移适配层，不应被误认为领域模型。
 
 ## 技术栈
 
 - 前端：Vite + React + TypeScript
-- 本地后端：Express + TypeScript
-- 线上后端：Cloudflare Pages Functions
-- 线上主数据：Cloudflare D1，使用 `app_data` key/value 表保存现有 JSON
-- 附件存储：本地 `uploads/`；线上可选 Cloudflare R2 `ATTACHMENTS` binding
-- YAML 生成：`yaml`
-- 包管理：pnpm
+- 本地 API：Express + TypeScript
+- 线上 API：Cloudflare Pages Functions
+- 领域与序列化：Proto、Buf、Protobuf-ES、Protovalidate
+- 本地 canonical 存储：文件 namespace，默认位于 `data/canonical/`
+- 线上 canonical 存储：D1 `canonical_namespaces` + `canonical_store_meta`
+- 兼容输入：`data/*.json`、D1 `app_data`
+- 附件：本地 `uploads/`；线上 R2 binding 或 R2 S3 兼容接口
+- YAML：`yaml`
+- 测试：Vitest + Playwright
+- 包管理：pnpm 11.5.1，Node 22
 
 ## 本地启动
 
@@ -23,39 +27,73 @@ pnpm install
 pnpm dev
 ```
 
-默认地址：
-
 - 前端：http://127.0.0.1:5173
 - API：http://127.0.0.1:8787
 
-如果只启动其中一侧：
+也可分别运行 `pnpm server` 和 `pnpm client`。常用路径可通过以下环境变量覆盖：
+
+- `SOP_DATA_DIR`
+- `SOP_CANONICAL_DIR`
+- `SOP_UPLOADS_DIR`
+- `SOP_EXPORTS_DIR`
+
+## 必跑验证
 
 ```bash
-pnpm server
-pnpm client
+pnpm verify
+pnpm test:e2e
+pnpm test:e2e:pages
 ```
 
-本地附件和图片会保存到 `uploads/`。该目录是运行时数据，已加入 `.gitignore`，不要提交。
-
-## 常用命令
+单项命令：
 
 ```bash
+pnpm proto:check
+pnpm proto:drift
+pnpm proto:breaking
 pnpm typecheck
-pnpm build
-pnpm preview
-pnpm pages:dev
-```
-
-每次提交前建议至少运行：
-
-```bash
-pnpm typecheck
+pnpm test:unit
+pnpm test:integration
 pnpm build
 ```
 
-## 旧数据迁移预检（inactive generation）
+`test:e2e` 驱动本地 Express/Vite；`test:e2e:pages` 构建生产产物，并使用 Wrangler Pages、隔离本地 D1 和 R2 执行同一组关键页面流程。
 
-Proto v1alpha1 迁移只构建独立的 `BUILDING` / `VALIDATED` generation；这些命令不会创建或修改 active marker，也不会删除 `data/*.json` 或 D1 `app_data`。本地预检和构建示例：
+## 目录结构
+
+```text
+.
+├── proto/coscene/sop/
+│   ├── v1alpha1/                 # 内部权威领域契约
+│   └── export/v1alpha1/          # YAML Export v1 契约
+├── gen/                          # Buf 生成的 TypeScript；禁止手改
+├── shared/
+│   ├── domain/                   # 前后端共享 Proto decode/validate
+│   └── transport/restDto.ts      # 临时 REST/form DTO 边界
+├── server/
+│   ├── domain/                   # canonical AppStore、服务、附件生命周期
+│   ├── export/                   # confirmed-only YAML bundle exporter
+│   ├── migrations/               # deterministic converter/generation/bootstrap
+│   ├── api.ts                    # HTTP compatibility routes
+│   ├── store.ts                  # 本地 canonical + legacy file/object adapter
+│   └── d1Store.ts                # D1 canonical + legacy adapter
+├── src/
+│   ├── domain/                   # Proto → UI view model/form mappings
+│   └── App.tsx                   # 页面与交互
+├── functions/api/[[path]].ts     # Pages Function 入口
+├── data/                         # 兼容种子；canonical 默认在 data/canonical/
+├── migrations/                   # D1 expand-only SQL
+├── tests/                        # unit / integration / Playwright E2E
+└── docs/                         # 契约和生产 runbook
+```
+
+## Canonical 存储与迁移
+
+### 本地
+
+`server/index.ts` 启动时从兼容数据计算 source fingerprint，构建或复用 validated generation，然后把它作为 canonical namespace 运行。相同输入和版本重跑是 deterministic no-op；源数据或 converter/schema/identity 版本变化会得到新的 generation。
+
+迁移诊断命令：
 
 ```bash
 pnpm migration preflight --legacy-dir data
@@ -65,395 +103,99 @@ pnpm migration validate --legacy-dir data --canonical-root .canonical --attachme
 pnpm migration report --canonical-root .canonical --generation <generation-id>
 ```
 
-相同 source/converter/schema/identity fingerprint 的完成态重跑必须是 no-op；中断的 `BUILDING` generation 可由 `resume` 继续。源数据或 converter 版本变化会创建新的 generation，不能写回旧 generation。报告出现 identity collision、缺失/歧义引用、坏日期/时间、不可达的托管附件或 semantic reconciliation 失败时，generation 保持 `BUILDING` 且禁止后续激活。
+identity collision、缺失/歧义引用、坏日期、不可达托管附件或 semantic reconciliation 失败都会阻止 generation 进入 `VALIDATED`。
 
-D1 表结构通过 expand-only SQL 添加：
+### Cloudflare D1
 
-```bash
-pnpm wrangler d1 migrations apply <database-name> --remote
-```
+- `canonical_migration_generations` 保存来源 fingerprint、版本、manifest、snapshot 和报告。
+- `canonical_namespaces` 保存运行 snapshot、epoch、写状态和 commit generation。
+- `canonical_store_meta.runtime_namespace` 是显式激活 marker。
+- `app_data` 仅保留为首次 bootstrap、现有适配器和限时回滚输入。
 
-远程执行前必须记录 D1 Time Travel bookmark 和当前 maintenance epoch。应用层迁移使用 `migrateLegacyD1()` 以及 D1 binding 的 transactional `batch`，按 epoch 条件发布 `VALIDATED`；本阶段不提供 activation 命令。切换 active marker、冻结写入、烟测和回滚属于后续 cutover 单元。
+Pages 生产默认是 prepare-only：授权请求会构建、验证并冻结候选 namespace，但不写 marker，返回 503 和 `candidateNamespace`。只有本地/CI 使用 `CANONICAL_BOOTSTRAP_MODE=auto`。完整的迁移、核验、激活、只读烟测、reopen 和回滚步骤见 [docs/storage-migration-v1alpha1.md](docs/storage-migration-v1alpha1.md)。
 
-## 目录结构
+## 核心领域规则
 
-```text
-.
-├── data/                         # 本地主数据 JSON，也是 D1 首次初始化种子数据
-├── exports/                      # 本地 YAML 导出目录，生成产物，不建议提交
-├── functions/
-│   └── api/[[path]].ts           # Cloudflare Pages Function API 入口
-├── server/                       # 共享 API、存储和导出逻辑
-│   ├── api.ts                    # API 路由和业务规则
-│   ├── d1Store.ts                # D1 key/value 存储
-│   ├── index.ts                  # 本地 Express API 入口
-│   ├── r2AttachmentStore.ts      # Cloudflare R2 附件存储适配
-│   ├── store.ts                  # 本地 JSON 与 uploads 存储
-│   ├── versioning.ts             # 版本号和 ID 工具
-│   └── yamlExport.ts             # requirement_yaml_v0.11 导出映射
-├── src/
-│   ├── App.tsx                   # 主要页面和业务交互
-│   ├── App.css                   # 页面样式
-│   ├── main.tsx                  # 前端入口
-│   └── types.ts                  # 前后端共享类型
-├── uploads/                      # 本地上传文件，运行时生成，不提交
-├── index.html
-├── package.json
-├── pnpm-lock.yaml
-├── schema.sql
-├── tsconfig.json
-└── vite.config.ts
-```
+- `name` 是 canonical resource name；`uid` 是不可变 UUID；`display_name` 可修改；`source_id` 保存旧系统身份。
+- revision 名是不可变资源名，`version_label` 是 `MAJOR.MINOR.PATCH` 人类版本。
+- 已确认资源不可原地编辑；`StartDraft` 从确认 snapshot 开新草稿。
+- Requirement production item 固定引用 `TaskSopRevision.name`，Requirement 同时固定 RobotModelRevision。
+- `Confirm` 在一个原子提交中校验完整性、生成 revision、冻结依赖并更新 parent。
+- 导出只能读取已确认 revision 和 frozen dependency context，禁止刷新当前 catalog。
+- attachment 下载必须经过 canonical reachability；外部 URI 不得被解析为托管 storage key。
 
-## 数据文件
-
-当前主数据都放在 `data/` 下：
-
-- `data/customers.json`：客户信息
-- `data/metadata.json`：当前数据 schema 与 YAML schema 版本
-- `data/materials.json`：物料信息，物料有自动生成的 `SKU1`、`SKU2` 等 SKU 编号，可保存图片元数据
-- `data/robot-models.json`：机器型号和 topic 信息
-- `data/scenes.json`：场景与任务 SOP 库；场景下包含多个任务 SOP，任务 SOP 有内部随机短编号和多个版本
-- `data/requirements.json`：客户需求；保存需求版本、客户、机器人、全局要求、附件、生产需求项、每个生产需求项选择的任务 SOP 引用和目标采集时长/数量，不保存任务编号
-- `data/global-fields.json`：全局字段词表；用于机器人状态、随机性字段、交付语言、质检策略、采集/标注操作要求等可复用枚举
-- `data/material-state-rules.json`：历史兼容文件；当前物料状态规则主要在任务 SOP 里直接维护
-
-`exports/requirements/<requirement_id>/<version>.yaml` 是本地点击导出时生成的 YAML 文件，不是源数据。
-
-公开推送 GitHub 前请检查 `data/` 中是否包含真实客户、电话、邮箱、项目名或内部链接。公开仓库建议先脱敏，或改成样例数据。
-
-线上 Cloudflare 版本不写本地文件，`data/*.json` 只作为 D1 首次初始化种子数据。运行时数据存储在 D1 的 `app_data` 表：
-
-```sql
-CREATE TABLE IF NOT EXISTS app_data (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-```
-
-当前使用这些 key：
-
-- `customers`
-- `materials`
-- `robotModels`
-- `scenes`
-- `requirements`
-- `globalFields`
-- `materialStateRules`
-
-## 附件与图片
-
-需求附件、任务 SOP 附件和物料图片共用同一套分片上传接口：
-
-- 单个文件最大 1G
-- 默认分片大小 16MB
-- 本地 Express 写入 `uploads/`
-- Cloudflare Pages Functions 写入 R2 bucket。同账号 bucket 使用 `ATTACHMENTS` binding；跨账号 bucket 使用 R2 S3 兼容 secrets。
-
-线上如果没有配置 `ATTACHMENTS`，也没有完整配置 `R2_S3_ENDPOINT` / `R2_S3_BUCKET` / `R2_S3_ACCESS_KEY_ID` / `R2_S3_SECRET_ACCESS_KEY`，页面会禁用上传入口并显示存储未配置提示；主数据读取、编辑、YAML/PDF 导出仍可使用。
-
-物料图片只允许上传 `image/*`。任务 SOP 附件支持图片或视频。需求附件不限制具体文件类型。
-
-## 核心概念
-
-### 客户与客户需求
-
-客户是需求的归属对象。客户列表中会显示该客户累计需求数量，进入客户后可以查看历史需求。
-
-客户需求面向客户沟通和交付。需求 ID 使用 6 位随机短编号，只用于本地数据查找和版本关系计算；页面和对外 YAML 不展示需求 ID，YAML 通过 `version_id` 和 `parent_version_id` 追溯版本。每个客户需求包含多个版本。
-
-客户需求中只锁定任务 SOP 引用：
-
-- 任务 SOP 版本号
-- 任务 SOP 名称快照
-- 该需求下的目标采集时长
-
-导出 YAML 或 PDF 时，会根据锁定的任务 SOP 名称和版本号，从场景库里读取对应任务 SOP 正文；场景名由任务 SOP 自身带出。历史数据如果仍带内部编号，系统只用于兼容查找，不再写入新的客户需求或 YAML。
-
-### 场景与任务 SOP
-
-场景是任务 SOP 的目录容器。任务 SOP 内部使用 6 位随机短编号用于路由、附件和历史兼容，同一个内部编号下可以有多个版本。编号不在页面、客户需求和 YAML 中保存或展示。
-
-任务 SOP 内容包含：
-
-- 基础信息、描述和附件
-- 已选物料与数量
-- 物料初始状态和物料目标状态
-- 机器人初始态、目标态和随机性要求
-- 物料随机性要求
-- 采集步骤和采集步骤随机性
-- 任务 SOP 特有的采集操作要求、采集禁止操作、不完美但可接受的采集操作
-- 标注步骤、标注操作要求、标注禁止操作
-- 参考记录信息
-
-### 全局字段
-
-全局字段是可复用词表。页面左侧按更大的类别收纳，例如对象状态、随机性、采集操作、标注操作、交付/质检和基础字段。
-
-字段支持新增、编辑、启用和停用，不支持物理删除。停用字段不再出现在新的选择中，历史需求和历史任务 SOP 中的文字快照不受影响。
-
-## 版本规则
-
-- 新建客户需求默认生成 `0.0.1` 草稿。
-- 草稿版本可以直接编辑，也可以删除，但至少保留一个版本。
-- 确认后的客户需求只读。
-- 编辑已确认客户需求时，会自动复制并生成新的补丁版本草稿，例如 `0.0.1 -> 0.0.2`。
-- 客户需求确认前会校验所有生产需求项是否已选择已确认的任务 SOP 版本；如果存在未选择、草稿或找不到的任务 SOP 版本，会拒绝确认并提示原因。
-- 任务 SOP 版本规则与客户需求一致。
-- 任务 SOP `0.0.1` 草稿可以编辑名称和描述；非 `0.0.1` 草稿只允许编辑版本描述等正文内容，不改历史任务 SOP 名称。
-- 客户需求引用具体任务 SOP 名称和版本号，任务 SOP 发布新版不会自动影响历史客户需求。
+详细语义见 [docs/proto-v1alpha1.md](docs/proto-v1alpha1.md)。
 
 ## API 概览
 
-主要业务 API 定义在 `server/api.ts`。本地 Express 入口 `server/index.ts` 和 Cloudflare Pages Function `functions/api/[[path]].ts` 都复用这套业务逻辑。
+本地 Express 和 Pages Function 共用 `server/api.ts`。
 
-基础数据：
+读取：
 
-- `GET /api/data`：读取全部主数据
-- `POST /api/customers`：新增或更新客户
-- `POST /api/materials`：新增或更新物料，自动补齐 SKU
-- `POST /api/robot-models`：新增或更新机器型号
-- `POST /api/global-fields`：新增或更新全局字段
-- `POST /api/material-state-rules`：历史兼容接口
-- `POST /api/scenes`：新增或更新场景
+- `GET /api/canonical-data`：浏览器使用的完整 canonical ProtoJSON；客户端严格 decode/validate。
+- `GET /api/data`：兼容 DTO 投影，仅供现有表单/API 路由。
+- `GET /api/storage-status`：附件能力和可选公开基址。
 
-客户需求：
+资源 mutation：
 
-- `POST /api/requirements`：新建客户需求
-- `PUT /api/requirements/:id`：编辑客户需求；如果基准版本已确认，则生成新草稿版本
-- `DELETE /api/requirements/:id/versions/:version`：删除客户需求草稿版本
-- `POST /api/requirements/:id/confirm`：确认客户需求版本；所选任务 SOP 必须全部已确认
-- `POST /api/requirements/:id/export-yaml`：生成 YAML。本地写入 `exports/`，线上只返回 YAML 文本和虚拟路径
+- `POST /api/customers`
+- `POST /api/materials`
+- `POST /api/robot-models`
+- `POST /api/global-fields`
+- `POST /api/material-state-rules`
+- `POST /api/scenes`
+- `POST /api/requirements`
+- `PUT /api/requirements/:id`
+- `DELETE /api/requirements/:id/versions/:version`
+- `POST /api/requirements/:id/confirm`
+- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions`
+- `DELETE /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version`
+- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/confirm`
 
-任务 SOP（内部 API 路径仍沿用 `subscenes`，用于兼容已有数据和附件路径）：
+附件接口包含 init、part upload、complete、abort、delete 和受控 `GET /api/attachments/:storageKey`。路径仍使用旧资源 ID/version 是传输兼容策略，服务端最终提交 canonical attachment identity 和 lifecycle state。
 
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions`：创建或编辑任务 SOP 版本
-- `DELETE /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version`：删除任务 SOP 草稿版本
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/confirm`：确认任务 SOP 版本
-
-附件和图片：
-
-- `GET /api/storage-status`：查看附件存储是否可用
-- `GET /api/attachments/:storageKey`：下载附件或图片
-- `POST /api/requirements/:id/versions/:version/attachments/init`：初始化需求附件上传
-- `PUT /api/requirements/:id/versions/:version/attachments/:uploadId/parts/:partNumber`：上传需求附件分片
-- `POST /api/requirements/:id/versions/:version/attachments/:attachmentId/complete`：完成需求附件上传
-- `POST /api/requirements/:id/versions/:version/attachments/:attachmentId/abort`：取消需求附件上传
-- `DELETE /api/requirements/:id/versions/:version/attachments/:attachmentId`：删除需求附件
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/init`：初始化任务 SOP 附件上传
-- `PUT /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:uploadId/parts/:partNumber`：上传任务 SOP 附件分片
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId/complete`：完成任务 SOP 附件上传
-- `POST /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId/abort`：取消任务 SOP 附件上传
-- `DELETE /api/scenes/:sceneId/subscenes/:subsceneCode/versions/:version/attachments/:attachmentId`：删除任务 SOP 附件
-- `POST /api/materials/:materialId/images/init`：初始化物料图片上传
-- `PUT /api/materials/:materialId/images/:uploadId/parts/:partNumber`：上传物料图片分片
-- `POST /api/materials/:materialId/images/:attachmentId/complete`：完成物料图片上传
-- `POST /api/materials/:materialId/images/:attachmentId/abort`：取消物料图片上传
-- `DELETE /api/materials/:materialId/images/:attachmentId`：删除物料图片
-
-Cloudflare 环境要求所有 API 请求携带：
+Cloudflare API 要求：
 
 ```text
 Authorization: Bearer <APP_PASSWORD>
 ```
 
-## YAML 导出
+未授权请求必须在读取 body、bootstrap D1 或访问 R2 前返回 401。
 
-当前导出 schema 是 `requirement_yaml_v0.11`，顶层结构为：
+## YAML Export v1
 
-```yaml
-schema_version: requirement_yaml_v0.11
-requirement:
-  basic_info:
-    title:
-    version:
-    version_id:
-    parent_version_id:
-    status:
-    project_name:
-    deadline:
-    business_goal:
-    required_duration_hours:
-    original_requirement_source:
-    attachments: []
-  customer: {}
-  robot: {}
-  global_requirements:
-    extra_topic_requirements:
-    global_randomization_requirements:
-    additional_notes:
-    collection_operation_requirements: {}
-    annotation_operation_requirements: {}
-  delivery_requirements: {}
-  annotation_requirements: {}
-  quality_inspection_requirements: {}
-  production_requirement_items: []
-  task_sop_details: []
-```
-
-任务 SOP 详情页可单独导出 `task_sop_yaml_v0.5`，顶层结构为：
+规范入口是 `coscene.sop.export.v1alpha1.ExportBundle`：
 
 ```yaml
-schema_version: task_sop_yaml_v0.5
-task_sop:
-  sop_version:
-  sop_version_id:
-  parent_sop_version_id:
-  status:
-  scene_name:
-  task_sop_name:
-  description:
-  attachments: []
-  environment_config: {}
-  collection_config: {}
-  annotation_config: {}
+format: coscene.sop.export
+schema_version: 1.0.0
+root:
+  kind: requirement
+  ref: requirement-...
 ```
 
-导出逻辑在 `server/yamlExport.ts`。
+导出只接受已确认 TaskSopRevision 或 RequirementRevision，包含解释该 revision 所需的精确冻结闭包。每个 addressable entry 同时包含 bundle-local `ref` 和 `source.resource_name` / `source.uid` / 可选 `source.source_id`；revision 还包含 `revision_name`、`version_label` 和可选 `source_version_id`。
 
-导出原则：
+附件公开链接必须已作为绝对 HTTPS `public_uri` 冻结在 revision 中。导出器不读取 R2、DNS 或当前 deployment 配置，也不从内部 `storage_key` 拼链接。相同 snapshot 的输出必须 byte-identical。
 
-- 页面字段和 YAML 字段保持语义一致。
-- 客户需求先保存生产需求项；每个生产需求项再保存任务 SOP 名称和版本引用，场景名由任务 SOP 自动带出，导出时读取对应任务 SOP 版本正文。
-- 需求版本、任务 SOP 引用会导出版本号、版本 ID 和父版本 ID，方便追溯版本关系。
-- 任务 SOP schema 版本只在顶层 `schema_version` 标明；环境、采集、标注配置使用各自的 `config_version` 表达业务配置版本。
-- 需求附件、任务 SOP 附件、示例图和物料图片都会导出 `url`；线上使用 `R2_PUBLIC_BASE_URL` 拼公开 bucket 链接。
-- 需求 ID 只用于系统内部查找和版本关系计算，不写入对外 YAML；任务 SOP 内部编号不写入客户需求和 YAML。
-- 对外 YAML 不输出内部 `app_data` schema 版本，也不输出单独的 `traceability` 块。
-- 对外需求 YAML 不输出优先级、交付结构链接和 `scene_data_scope` 摘要；业务目标、总目标时长、原始需求来源和客户附件都归入 `requirement.basic_info`。
-- 客户额外 topic 要求、全局随机性要求、其他补充说明、采集操作要求和标注操作要求归入 `requirement.global_requirements`。
-- 历史遗留字段不主动清理，但导出时不输出已废弃的操作中物料状态结构。
-- `step_order`、`open_questions`、动作标签、随机频率等已从当前主导出结构中移除。
-
-前端客户需求详情页支持：
-
-- 生成 YAML 预览
-- 复制 YAML
-- 点击顶部“导出”菜单下载 YAML 或 PDF
-
-## PDF 导出
-
-PDF 导出在前端生成，不依赖服务端文件系统：
-
-- 任务 SOP 详情页可导出当前任务 SOP 版本 PDF。
-- 客户需求详情页可导出整个需求 PDF。
-- 需求 PDF 会先展示生产需求项，再展开其选择的任务 SOP 引用并写入对应任务 SOP 版本正文。
+完整规则见 [docs/yaml-export-v1.md](docs/yaml-export-v1.md)。YAML import 未实现；未来 importer 必须按 `schema_version` 拒绝未知 major，严格解析 identity/reference，不能复用内部 storage key。
 
 ## 开发约定
 
-- 保持简单实现，优先用现有类型和页面结构解决问题。
-- 涉及数据结构变更时，同时检查：
-  - `src/types.ts`
-  - 前端表单和空模板
-  - `server/api.ts`
-  - `server/yamlExport.ts`
-  - `data/*.json` 的兼容性
-- 不要直接删除历史数据字段，除非已经确认迁移策略。
-- 新增可枚举字段时，优先考虑是否属于 `data/global-fields.json`。
-- 需求和任务 SOP 保存文字快照，避免全局字段改名影响历史版本。
-- 修改版本逻辑后，要手动验证草稿、确认、编辑已确认版本、删除草稿版本这四类路径。
-- 修改上传逻辑后，要同时验证本地 `uploads/` 和线上 R2 binding 场景。
+- 改领域语义时先改 Proto 和验证规则，再生成代码、更新 service 与测试；不要手改 `gen/`。
+- 改兼容 DTO 时同步检查 `shared/transport/restDto.ts`、`server/api.ts`、converter、view model 和字段覆盖账本。
+- 不在浏览器生成 canonical ID、UID、revision name 或 version identity。
+- confirmed snapshot、frozen dependency、source identity 和 attachment reachability 不允许静默回退到名字匹配或“最新版本”。
+- mutation 必须经 namespace epoch/generation 原子提交；冻结状态下写入必须失败。
+- 删除附件对象前检查当前可达性、活跃上传、cleanup intent 和 rollback lease。
+- 生产切换不得使用 auto bootstrap；reopen 后不得 marker 回滚。
+- legacy adapter 的删除放在回滚窗口关闭后的独立变更中。
 
 ## 手动验收清单
 
-基础资料：
-
-- 新增客户、物料、机器型号后刷新仍存在。
-- 物料 SKU 自动递增，且不重复。
-- 物料可以上传、下载和删除图片。
-
-全局字段：
-
-- 字段可新增、编辑、启用和停用。
-- 左侧二级分组可展开收起。
-- 停用字段不再出现在新的下拉选择中。
-- 采集操作要求、采集禁止操作、不完美但可接受的采集操作、标注操作要求和标注禁止操作可在需求或任务 SOP 中选择。
-
-场景与任务 SOP：
-
-- 可以创建场景和任务 SOP。
-- 场景 ID 和任务 SOP 内部编号不会在页面中作为主要字段展示。
-- 任务 SOP 详情页可以切换版本。
-- 草稿可编辑，确认版本只读。
-- 编辑确认版本会生成新的草稿版本。
-- 草稿版本可以删除，且至少保留一个版本。
-- 已选物料、物料状态、机器人状态、随机性、采集步骤、标注步骤都能保存。
-- 物料状态表格的参照物、相对位置、支撑面是单选，长表格有可见横向滚动条。
-- 任务 SOP 可以上传、下载和删除图片或视频附件。
-- 任务 SOP PDF 可以正常导出。
-
-客户需求：
-
-- 可以新建需求，并自动生成 6 位随机短 ID。
-- 需求 ID 不在页面和对外 YAML 中展示；需求 YAML 使用版本 ID 追溯。
-- 可以添加多个生产需求项，每个需求项可以维护名称、描述、目标采集时长和目标采集数量，并选择要使用的任务 SOP 版本。
-- 每个生产需求项可以单独选择任务 SOP，选择时可切换具体版本，默认选择最新版。
-- 生产需求项按所选任务 SOP 的所属场景分组展示，并可跳转查看已选择的任务 SOP 详情。
-- 从需求页跳转到任务 SOP 详情时，任务 SOP 页顶部有返回需求页按钮。
-- 总目标时长和生产需求项目标时长合计有差异提示。
-- 如果生产需求项未选择任务 SOP，或选择的任务 SOP 存在草稿/缺失版本，需求确认按钮应禁用或后端拒绝确认。
-- 确认版本后再编辑，会生成新的草稿版本。
-- 需求附件可以上传、下载和删除，单个附件不超过 1G。
-- 需求 PDF 可以正常导出。
-
-YAML：
-
-- 点击“生成预览”能显示 YAML。
-- 点击“复制”能复制 YAML。
-- 点击顶部“导出”菜单能下载 YAML 或 PDF。
-- 导出的 YAML 能被 YAML parser 解析。
-- 导出内容包含客户需求中的额外 topic 要求、采集步骤随机性、标注步骤、标注操作要求、采集禁止操作和不完美但可接受的采集操作。
-- 导出内容不包含 `open_questions` 和已废弃的操作中物料状态结构。
-
-## Cloudflare 部署
-
-本项目不要用 GitHub Pages 做主部署。GitHub Pages 只能托管静态前端，不能运行 `/api/*`，也不能保存共享数据。
-
-推荐部署方式：
-
-1. 在 Cloudflare Workers & Pages 创建 D1 数据库，例如 `sop-prod`。
-2. 在 D1 控制台执行 [schema.sql](./schema.sql)。
-3. 可选但推荐：创建 R2 bucket，例如 `sop-attachments`。
-4. 在 Cloudflare Pages 连接 GitHub 仓库 `xiranyu01/sop`。
-5. Pages 构建配置：
-   - Production branch: `main`
-   - Build command: `pnpm build`
-   - Build output directory: `dist`
-6. Pages Functions 绑定：
-   - D1 binding variable name: `DB`
-   - D1 database: `sop-prod`
-7. 附件存储二选一：
-   - 同账号 R2：配置 R2 binding variable name `ATTACHMENTS`，bucket 例如 `sop-attachments`
-   - 跨账号 R2：配置 Pages secrets `R2_S3_ENDPOINT`、`R2_S3_BUCKET`、`R2_S3_ACCESS_KEY_ID`、`R2_S3_SECRET_ACCESS_KEY`
-8. Pages 环境变量：
-   - `APP_PASSWORD=<访问密码>`
-   - `NODE_VERSION=22`
-9. 重新部署，访问 `https://<project>.pages.dev`。
-
-首次访问 `/api/data` 时，如果 D1 中没有对应 key，会从 repo 内 `data/*.json` 初始化种子数据。
-
-本地模拟 Pages Functions：
-
-```bash
-pnpm typecheck
-pnpm build
-pnpm pages:dev
-```
-
-`pnpm pages:dev` 会把本地访问密码绑定为 `dev-password`。线上密码必须在 Cloudflare Pages 环境变量中配置 `APP_PASSWORD`。
-
-## GitHub 推送前检查
-
-```bash
-git status --short
-pnpm typecheck
-pnpm build
-```
-
-推送前确认：
-
-- `uploads/`、`exports/`、`dist/`、`.wrangler/` 没有被提交。
-- `data/` 中没有不该公开的客户隐私或内部敏感信息。
-- `README.md` 和 `DEVELOPMENT.md` 与当前功能一致。
-- 如果要让线上立即更新，Cloudflare Pages 已连接 `main` 分支，或手动触发重新部署。
+- 客户、物料、机器人、场景、全局字段可创建/编辑，刷新后仍存在。
+- 任务 SOP 和 Requirement 可创建草稿、确认、从已确认版本开新草稿、删除草稿；确认版本保持只读。
+- Requirement 只能固定到已确认 TaskSop revision；新版 SOP 不影响历史 Requirement。
+- 附件可上传、刷新、下载、删除；删除后旧地址不可访问；外部 URL 不走托管下载接口。
+- confirmed Task SOP / Requirement 的 YAML 重复导出 byte-identical，且携带 canonical identity；草稿导出失败。
+- 页面重载、重新登录和 Pages 部署环境行为与本地一致。

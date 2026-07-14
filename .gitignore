@@ -11,4 +11,5 @@ uploads
 .wrangler
 test-results
 playwright-report
+playwright-report-pages
 .pnpm-store

@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:f
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { defaultAppMetadata } from '../src/schemaVersions';
-import type { AppData, AppMetadata, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
+import type { AppData, AppMetadata, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../shared/transport/restDto';
 import type { LegacyApiStore } from '../shared/transport/restDto';
 import type { AttachmentObjectStore, AttachmentObjectMetadata } from './domain/attachmentObjectStore';
 import {

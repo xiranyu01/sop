@@ -2,6 +2,7 @@
   "name": "sop-requirement-manager",
   "version": "0.0.1",
   "private": true,
+  "packageManager": "pnpm@11.5.1",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
@@ -15,12 +16,15 @@
     "proto:lint": "buf lint",
     "proto:build": "buf build",
     "proto:drift": "node scripts/check-proto-drift.mjs",
+    "proto:breaking": "node scripts/check-proto-breaking.mjs",
     "migration": "tsx server/migrations/cli.ts",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:baseline": "playwright test",
-    "pages:dev": "pnpm build && wrangler pages dev dist --d1 DB=sop-prod --binding APP_PASSWORD=dev-password --compatibility-date=2026-06-25",
+    "test:e2e:pages": "pnpm build && playwright test --config playwright.pages.config.ts",
+    "verify": "pnpm proto:check && pnpm proto:drift && pnpm typecheck && pnpm test:unit && pnpm test:integration && pnpm build",
+    "pages:dev": "pnpm build && wrangler pages dev dist --d1 DB=21d042f0-61d8-4344-b9eb-73b43c3c870d --binding APP_PASSWORD=dev-password --binding CANONICAL_BOOTSTRAP_MODE=auto --compatibility-date=2026-06-25",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

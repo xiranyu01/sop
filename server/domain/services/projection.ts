@@ -10,7 +10,7 @@ import type {
   RequirementAttachment,
   RequirementVersion,
   SubsceneVersion,
-} from '../../../src/types';
+} from '../../../shared/transport/restDto';
 import {
   AnnotationReadiness,
   ChangeFrequency,

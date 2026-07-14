@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AppData } from '../../src/types';
+import type { AppData } from '../../shared/transport/restDto';
 import type { LegacyApiStore } from '../../shared/transport/restDto';
 import { encodeRestDto } from '../../shared/transport/restDto';
 import { handleApiRequest } from '../../server/api';

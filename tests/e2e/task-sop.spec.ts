@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import YAML from 'yaml';
-import type { Scene } from '../../src/types';
+import type { Scene } from '../../shared/transport/restDto';
 import { confirmedTaskSop } from './fixtures/seed';
 import { apiJson, authHeaders, openAuthenticated } from './helpers/app';
 

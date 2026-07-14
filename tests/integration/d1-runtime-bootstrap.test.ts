@@ -93,6 +93,14 @@ class RuntimeD1 implements D1DatabaseLike {
           row.generation += 1;
           return { meta: { changes: 1 } };
         }
+        if (sql.startsWith('UPDATE canonical_namespaces SET epoch = epoch + 1')) {
+          const [writable, , namespace, epoch] = this.values;
+          const row = db.namespaces.get(String(namespace));
+          if (!row || row.epoch !== Number(epoch)) return { meta: { changes: 0 } };
+          row.epoch += 1;
+          row.writable = Number(writable);
+          return { meta: { changes: 1 } };
+        }
         throw new Error(`Unsupported run: ${sql}`);
       }
     }();
@@ -100,6 +108,17 @@ class RuntimeD1 implements D1DatabaseLike {
 }
 
 describe('Pages canonical inactive-generation boot', () => {
+  it('prepares and freezes a validated namespace without publishing the runtime marker', async () => {
+    const db = new RuntimeD1();
+    const prepared = await bootstrapValidatedD1Generation(db, structuredClone(seedData), {
+      publishRuntimeNamespace: false,
+    });
+
+    expect(prepared.activated).toBe(false);
+    expect(db.meta.has('runtime_namespace')).toBe(false);
+    expect(db.namespaces.get(prepared.generationId)).toMatchObject({ writable: 0, epoch: 2 });
+  });
+
   it('anchors the first validated generation and ignores later legacy changes without touching active_namespace', async () => {
     const db = new RuntimeD1();
     const first = await bootstrapValidatedD1Generation(db, structuredClone(seedData));

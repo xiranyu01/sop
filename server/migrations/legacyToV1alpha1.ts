@@ -32,7 +32,7 @@ import type {
   RequirementVersion,
   SubsceneVersion,
   TextItem,
-} from '../../src/types';
+} from '../../shared/transport/restDto';
 import { canonicalSchemaVersion, emptyCanonicalSnapshot, type CanonicalSnapshot } from '../domain/appStore';
 import { canonicalCardinalities, canonicalSemanticDigest, fingerprintRecord } from './semanticProjection';
 import {

@@ -1,4 +1,4 @@
-import type { EntityStatus } from '../src/types';
+import type { EntityStatus } from '../shared/transport/restDto';
 
 export function nextPatchVersion(version: string): string {
   const parts = version.split('.').map((part) => Number.parseInt(part, 10));

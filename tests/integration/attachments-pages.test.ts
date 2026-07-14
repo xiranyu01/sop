@@ -107,6 +107,14 @@ class PagesD1 implements D1DatabaseLike {
           row.generation += 1;
           return { meta: { changes: 1 } };
         }
+        if (sql.startsWith('UPDATE canonical_namespaces SET epoch = epoch + 1')) {
+          const [writable, , namespace, epoch] = this.values;
+          const row = db.namespaces.get(String(namespace));
+          if (!row || row.epoch !== Number(epoch)) return { meta: { changes: 0 } };
+          row.epoch += 1;
+          row.writable = Number(writable);
+          return { meta: { changes: 1 } };
+        }
         throw new Error(`Unsupported run: ${sql}`);
       }
     }();
@@ -145,7 +153,7 @@ function pagesRequest(db: PagesD1, bucket: R2BucketLike, pathname: string) {
     pending,
     response: onRequest({
       request: new Request(`https://sop.example.test${pathname}`, { headers: { authorization: 'Bearer test-password' } }),
-      env: { DB: db, ATTACHMENTS: bucket, APP_PASSWORD: 'test-password' },
+      env: { DB: db, ATTACHMENTS: bucket, APP_PASSWORD: 'test-password', CANONICAL_BOOTSTRAP_MODE: 'auto' },
       waitUntil(promise) { pending.push(promise); },
     }),
   };
@@ -170,6 +178,24 @@ describe('Pages attachment authorization and cleanup', () => {
     expect(db.meta.size).toBe(0);
     expect(r2.gets).toEqual([]);
     expect(r2.deletes).toEqual([]);
+  });
+
+  it('prepares a frozen candidate but does not activate it by default', async () => {
+    const db = new PagesD1();
+    const r2 = fakeR2();
+    const response = await onRequest({
+      request: new Request('https://sop.example.test/api/canonical-data', {
+        headers: { authorization: 'Bearer test-password' },
+      }),
+      env: { DB: db, ATTACHMENTS: r2.bucket, APP_PASSWORD: 'test-password' },
+    });
+
+    expect(response.status).toBe(503);
+    const result = await response.json() as { candidateNamespace: string };
+    expect(result.candidateNamespace).toMatch(/^v1alpha1-/);
+    expect(db.meta.has('runtime_namespace')).toBe(false);
+    expect(db.generations.get(result.candidateNamespace)?.lifecycle).toBe('VALIDATED');
+    expect(db.namespaces.get(result.candidateNamespace)?.writable).toBe(0);
   });
 
   it('authorizes R2 downloads from canonical reachability and never fetches removed or external keys', async () => {

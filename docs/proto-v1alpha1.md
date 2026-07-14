@@ -4,13 +4,9 @@
 
 `coscene.sop.v1alpha1` is the source of truth for the normalized SOP domain model. The existing YAML files were used only to discover business concepts; this schema does not preserve their field names or document shapes.
 
-This first change defines resource messages and validation only. It deliberately does not:
+The application now stores canonical Proto snapshots behind namespace/epoch concurrency control, validates decoded ProtoJSON with Protovalidate, serves canonical data to the browser, and exports confirmed revisions through the separate `coscene.sop.export.v1alpha1` contract. Service RPCs and YAML import remain intentionally out of scope.
 
-- replace the current TypeScript runtime model;
-- migrate persisted JSON or D1 values;
-- define service RPCs;
-- define the new YAML manifest envelope;
-- read or write the legacy YAML schemas.
+The existing REST route shapes, `shared/transport/restDto.ts`, `data/*.json`, D1 `app_data`, the deterministic legacy converter, and the old exporter fallback are temporary compatibility/rollback boundaries. They are not alternative domain authorities and are removed only after the production rollback window closes.
 
 ## Decisions
 
@@ -107,38 +103,40 @@ The service layer must additionally validate rules that require graph or collect
 - attachment and catalog resources referenced by immutable revisions satisfy retention policy;
 - workload totals and other cross-item business constraints are consistent.
 
-## Does the current implementation need migration?
+## Implementation and remaining migration boundary
 
-Yes. Defining Proto does not require an immediate runtime change, but using it as the system contract requires a model migration rather than a serializer-only replacement.
+Completed:
 
-### Must migrate
+1. generated TypeScript and strict runtime validation;
+2. deterministic, resumable legacy conversion with reconciliation reports and stable identity;
+3. canonical file/D1 namespaces with epoch fencing, atomic commits and write freeze/reopen;
+4. canonical revision and attachment lifecycle services;
+5. browser reads from `/api/canonical-data` and strict ProtoJSON decoding before projection to form view models;
+6. confirmed-only Proto-backed YAML bundle export with deterministic serialization and traceable identity;
+7. removal of the old `src/types.ts` shared-domain barrel.
 
-1. `src/types.ts`: replace the nested `Scene -> Subscene -> versions` and `Requirement -> versions` domain model with generated Proto types or thin application types derived from them.
-2. `server/versioning.ts` and duplicated ID logic: replace patch-string versions and short hashes with persisted resource names, UUIDs, immutable revision resources, and the deterministic `version_label` policy above.
-3. Requirement-to-SOP resolution: replace scene/title/version matching with a direct `TaskSopRevision.name` reference.
-4. `server/yamlExport.ts`: replace manual casing, localized enum values, derived config versions, and embedded SOP details with the later Proto-backed manifest serializer.
-5. Persisted `data/*.json` and deployed D1 `app_data` values: perform a one-time conversion or explicitly reset them. Ignoring legacy YAML does not remove the need to migrate live stored data.
-6. `src/App.tsx`: eventually replace old DTOs, name-based lookup, and duplicated version/hash logic with generated types and canonical references.
+Intentionally retained during rollout:
 
-### Can remain during the transition
+- existing REST mutation routes and form DTOs;
+- `shared/transport/restDto.ts` as the transport-only type boundary;
+- the deterministic converter in the live mutation adapter;
+- `data/*.json` and D1 `app_data` as bootstrap/rollback inputs;
+- legacy exporter utilities used by compatibility tests/fallback paths;
+- current local/R2/S3 attachment transports.
 
-- Existing HTTP routes may initially remain as compatibility endpoints around a server-side adapter.
-- `AppStore` remains a useful seam between API handlers and storage.
-- Local JSON files and the D1 key/value table can store new resource collections before any relational database redesign.
-- R2/S3/local attachment transports can remain; only attachment identity and ownership metadata need to change.
-- Existing UI forms may temporarily consume a compatibility DTO while the service stores normalized resources.
+The largest remaining contraction is the write path: it currently projects Proto to REST DTO, applies the existing route mutation, then converts and validates the result back into Proto. A later change should make commands mutate canonical resources directly. Compatibility storage and converter deletion must wait until that work is deployed and the production rollback window is explicitly closed.
 
-The adapter is temporary. It should be removed after the frontend, API handlers, persistence, and YAML exporter all use the Proto-first model.
+## Rollout order
 
-## Recommended migration order
+Steps 1–6 below are implemented in this branch; step 7 requires a controlled production operation:
 
-1. Review and approve these v1alpha1 resources and semantics.
-2. Add TypeScript code generation and runtime validation.
-3. Implement a deterministic seed/live-data converter with ambiguity reporting. The converter must create an initial `RobotModelRevision`, retain requirement priority and aggregate workload, and map step randomization plus annotation readiness/note/action tags.
-4. Persist stable resources and revisions behind `AppStore`.
-5. Migrate API handlers from names and version labels to resource references.
-6. Define the YAML manifest Proto and ProtoJSON-compatible YAML representation.
-7. Replace the exporter, then migrate the frontend and delete the temporary adapter.
+1. approve v1alpha1 resources and semantics;
+2. generate and validate Proto;
+3. build deterministic seed/live-data generations with ambiguity reporting;
+4. persist canonical resources and immutable revisions behind `AppStore`;
+5. move runtime reads, lifecycle rules, attachment reachability and export to canonical services;
+6. move browser reads to canonical Proto data and keep forms behind explicit view-model mappings;
+7. prepare, freeze, explicitly activate, smoke-test and reopen the production namespace according to [`storage-migration-v1alpha1.md`](storage-migration-v1alpha1.md), then close the rollback window before deleting adapters.
 
 ## Verification
 
@@ -151,4 +149,4 @@ pnpm proto:check
 
 The repository installs the official `@bufbuild/buf` CLI at the pinned version `1.71.0`, so `pnpm install` provisions the same tool locally and in CI/deployment environments. `pnpm build` also runs the non-mutating Proto checks so deployment cannot bypass them.
 
-For later schema changes, compare against the accepted baseline with `buf breaking` before merging.
+For later schema changes, run `pnpm proto:breaking` against the accepted baseline before merging. The YAML contract evolves independently according to [`yaml-export-v1.md`](yaml-export-v1.md).

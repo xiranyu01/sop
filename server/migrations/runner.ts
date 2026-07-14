@@ -1,7 +1,7 @@
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { AppData } from '../../src/types';
+import type { AppData } from '../../shared/transport/restDto';
 import { canonicalSchemaVersion, decodeCanonicalSnapshot, encodeCanonicalSnapshot } from '../domain/appStore';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../d1Store';
 import { converterVersion, migrationFormatVersion, migrationGenerationId, storageSchemaVersion, type MigrationManifest, type MigrationVersions } from './manifest';

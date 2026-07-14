@@ -13,7 +13,7 @@ import type {
   Subscene,
   SubsceneVersion,
   TextItem,
-} from '../src/types';
+} from '../shared/transport/restDto';
 
 type BuildRequirementYamlOptions = {
   attachmentPublicBaseUrl?: string;

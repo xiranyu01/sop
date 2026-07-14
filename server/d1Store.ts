@@ -7,7 +7,7 @@ import requirementsSeed from '../data/requirements.json';
 import robotModelsSeed from '../data/robot-models.json';
 import scenesSeed from '../data/scenes.json';
 import { defaultAppMetadata } from '../src/schemaVersions';
-import type { AppData, AppMetadata, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
+import type { AppData, AppMetadata, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../shared/transport/restDto';
 import type { LegacyApiStore } from '../shared/transport/restDto';
 import type { AttachmentStore } from './r2AttachmentStore';
 import {

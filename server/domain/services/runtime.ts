@@ -16,7 +16,7 @@ import type {
   Requirement,
   RobotModel,
   Scene,
-} from '../../../src/types';
+} from '../../../shared/transport/restDto';
 import type { LegacyApiStore } from '../../../shared/transport/restDto';
 import { exportRequirementYaml, exportTaskSopYaml } from '../../export';
 import { convertLegacyToV1alpha1 } from '../../migrations/legacyToV1alpha1';

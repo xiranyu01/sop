@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { AppData, Customer, GlobalField, Material, RobotModel } from '../../src/types';
+import type { AppData, Customer, GlobalField, Material, RobotModel } from '../../shared/transport/restDto';
 import { apiJson, openAuthenticated } from './helpers/app';
 
 test('customer create/edit persists after reload and remains searchable', async ({ page }) => {

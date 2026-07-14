@@ -1,10 +1,12 @@
 # Proto field coverage ledger
 
-This ledger is the U2 completeness gate for the persisted application model. Its
-sources are `src/types.ts`, editor bindings in `src/App.tsx`, `server/api.ts`, and
-the JSON fixtures under `data/`. “Canonical mapping” names the Proto field that
-must receive the value during the later legacy conversion; it does not imply
-that U2 changes persistence.
+This ledger was the U2 completeness gate for the persisted application model and
+remains the audit record for the deterministic converter. Its current transport
+source is `shared/transport/restDto.ts`; coverage also includes editor bindings in
+`src/App.tsx`, `server/api.ts`, and JSON fixtures under `data/`. `src/types.ts` was
+removed after imports were moved to the explicit transport boundary. “Canonical
+mapping” names the Proto field populated and reconciled by the implemented
+legacy-to-v1alpha1 converter.
 
 ## Resource and catalog records
 
@@ -108,5 +110,5 @@ return-navigation state. These values are transient and are not written by any
 `AppStore` method.
 
 There are no unclassified persisted fields in the sources listed at the top of
-this document. Converter implementation must fail its own reconciliation gate
-if a later persisted field is added without updating this ledger and Proto.
+this document. The converter fails its reconciliation gate if a later persisted
+field is added without updating this ledger and Proto.

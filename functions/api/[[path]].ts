@@ -14,6 +14,7 @@ type Env = {
   R2_S3_ACCESS_KEY_ID?: string;
   R2_S3_SECRET_ACCESS_KEY?: string;
   R2_PUBLIC_BASE_URL?: string;
+  CANONICAL_BOOTSTRAP_MODE?: string;
 };
 
 type PagesContext = {
@@ -114,7 +115,15 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
   const objects = attachmentStore(context.env);
   const legacyStore = createD1Store(context.env.DB, objects);
   const legacyData = await legacyStore.readData();
-  const migration = await bootstrapValidatedD1Generation(context.env.DB, legacyData);
+  const migration = await bootstrapValidatedD1Generation(context.env.DB, legacyData, {
+    publishRuntimeNamespace: context.env.CANONICAL_BOOTSTRAP_MODE === 'auto',
+  });
+  if (!migration.activated) {
+    return Response.json({
+      message: 'Canonical generation is validated and write-frozen; explicit cutover activation is required.',
+      candidateNamespace: migration.generationId,
+    }, { status: 503 });
+  }
   const canonicalStore = createCanonicalD1AppStore(context.env.DB, {
     bootstrap: { namespace: migration.generationId, snapshot: migration.snapshot },
   });

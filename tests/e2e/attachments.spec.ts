@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { AppData, AttachmentUploadInit, RequirementAttachment } from '../../src/types';
+import type { AppData, AttachmentUploadInit, RequirementAttachment } from '../../shared/transport/restDto';
 import { apiJson, authHeaders, openAuthenticated } from './helpers/app';
 
 test('tiny multipart upload completes, downloads through a real browser trigger, and deletes cleanly', async ({ page, request }) => {

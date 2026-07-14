@@ -1,4 +1,4 @@
-import type { AppData, RequirementVersion, SubsceneVersion } from '../../../src/types';
+import type { AppData, RequirementVersion, SubsceneVersion } from '../../../shared/transport/restDto';
 
 export const confirmedTaskSop: SubsceneVersion = {
   version: '0.0.1',

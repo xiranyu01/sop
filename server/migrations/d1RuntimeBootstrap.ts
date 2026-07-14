@@ -1,4 +1,4 @@
-import type { AppData } from '../../src/types';
+import type { AppData } from '../../shared/transport/restDto';
 import { createCanonicalD1AppStore, type D1DatabaseLike } from '../d1Store';
 import { canonicalSchemaVersion, encodeCanonicalSnapshot, type CanonicalSnapshot } from '../domain/appStore';
 import { referencedManagedStorageKeys } from '../domain/attachmentReachability';
@@ -201,14 +201,14 @@ async function prepareRuntimeGeneration(
 export async function bootstrapValidatedD1Generation(
   db: D1DatabaseLike,
   data: AppData,
-  options: { rollbackAttachmentLeaseMs?: number; clock?: () => Date } = {},
+  options: { rollbackAttachmentLeaseMs?: number; clock?: () => Date; publishRuntimeNamespace?: boolean } = {},
 ) {
   const rollbackLeaseMs = options.rollbackAttachmentLeaseMs ?? defaultRollbackAttachmentLeaseMs;
   if (!Number.isSafeInteger(rollbackLeaseMs) || rollbackLeaseMs < 0) throw new Error('Invalid rollback attachment lease duration');
   const clock = options.clock ?? (() => new Date());
   await ensureRuntimeTables(db);
   const anchored = await runtimeNamespace(db);
-  if (anchored) return prepareRuntimeGeneration(db, anchored, rollbackLeaseMs, clock);
+  if (anchored) return { ...(await prepareRuntimeGeneration(db, anchored, rollbackLeaseMs, clock)), activated: true };
 
   const conversion = convertLegacyToV1alpha1(data);
   if (!conversion.report.ok) {
@@ -263,9 +263,16 @@ export async function bootstrapValidatedD1Generation(
       now,
     ).run();
   await loadValidatedGeneration(db, generationId);
+  const prepared = await prepareRuntimeGeneration(db, generationId, rollbackLeaseMs, clock);
+  if (options.publishRuntimeNamespace === false) {
+    const store = createCanonicalD1AppStore(db);
+    let pin = await store.pin(generationId);
+    if (pin.writable) pin = await store.setWriteState(pin, false);
+    return { ...prepared, snapshot: await store.readSnapshot(pin), activated: false };
+  }
   await db.prepare("INSERT OR IGNORE INTO canonical_store_meta (key, value) VALUES ('runtime_namespace', ?)")
     .bind(generationId).run();
   const selected = await runtimeNamespace(db);
   if (!selected) throw new Error('Canonical runtime namespace marker was not published');
-  return prepareRuntimeGeneration(db, selected, rollbackLeaseMs, clock);
+  return { ...(selected === generationId ? prepared : await prepareRuntimeGeneration(db, selected, rollbackLeaseMs, clock)), activated: true };
 }

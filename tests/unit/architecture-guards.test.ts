@@ -27,6 +27,20 @@ describe('architecture regression guards', () => {
     expect(result.stderr).toContain('snapshot_json');
   });
 
+  it('keeps repository fixtures and bootstrap conversion out of runtime imports', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'sop-runtime-fixture-'));
+    await mkdir(join(fixture, 'functions'), { recursive: true });
+    await writeFile(join(fixture, 'functions', 'api.ts'), "import data from '../data/customers.json';\nexport default data;\n");
+    const fixtureResult = await run('scripts/check-runtime-no-fixtures.mjs', [fixture]);
+    expect(fixtureResult.status).toBe(1);
+    expect(fixtureResult.stderr).toContain('operator-only fixture/bootstrap module');
+
+    await writeFile(join(fixture, 'functions', 'api.ts'), "import { prepareRepositoryData } from '../server/bootstrap/repositoryData';\nexport default prepareRepositoryData;\n");
+    const bootstrapResult = await run('scripts/check-runtime-no-fixtures.mjs', [fixture]);
+    expect(bootstrapResult.status).toBe(1);
+    expect(bootstrapResult.stderr).toContain('repositoryData');
+  });
+
   it('rejects an aliased whole-site mutation even without forbidden snapshot words', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'sop-contract-'));
     const manifest = {

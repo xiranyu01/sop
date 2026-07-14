@@ -27,11 +27,16 @@ import { toDomainJson } from '../../shared/domain/codec';
 import type { AppData } from '../../shared/transport/restDto';
 import { convertLegacyToV1alpha1 } from '../migrations/legacyToV1alpha1';
 
+// Compatibility export for callers created while the bootstrap work was in
+// flight. Runtime code should import the marker helper from `./status` so it
+// does not pull in fixture conversion code.
+export { repositoryBootstrapMarkerValue as bootstrapMarkerValue } from './status';
+
 export const repositorySchemaVersion = 'resource-storage-v1' as const;
 export const repositoryBootstrapVersion = 'repository-fixtures-v1' as const;
 
 export type PreparedResourceWrite<T extends ResourceWriteInput = ResourceWriteInput> = T & { name: string };
-export type PreparedRevisionWrite = RevisionWriteInput & { name: string; ownerName: string };
+export type PreparedRevisionWrite = RevisionWriteInput & { name: string; ownerName: string; versionLabel: string };
 
 export type PreparedRepositoryData = {
   schemaVersion: typeof repositorySchemaVersion;
@@ -123,6 +128,7 @@ export function prepareRepositoryData(data: AppData): PreparedRepositoryData {
     revisions.push({
       name: revision.name,
       ownerName: revision.snapshot.name,
+      versionLabel: revision.versionLabel,
       protoSchema: schema.typeName,
       revisionProtoJson: protoJson(schema, revision),
       versionSequence: sequence,
@@ -241,19 +247,6 @@ export function prepareRepositoryData(data: AppData): PreparedRepositoryData {
     bundles,
     expectedCounts: { catalogs: catalogs.length, currents: currents.length, revisions: revisions.length, bundles: bundles.length },
   };
-}
-
-export function bootstrapMarkerValue(
-  state: 'IN_PROGRESS' | 'COMPLETE',
-  data: PreparedRepositoryData,
-): string {
-  return stableJson({
-    state,
-    schemaVersion: data.schemaVersion,
-    bootstrapVersion: data.bootstrapVersion,
-    datasetDigest: data.datasetDigest,
-    expectedCounts: data.expectedCounts,
-  });
 }
 
 export function nextCandidateVersionAfter(versionLabel?: string): string {

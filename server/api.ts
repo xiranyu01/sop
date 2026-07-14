@@ -16,7 +16,7 @@ import { buildRequirementYaml, buildTaskSopYaml } from './yamlExport';
 import { canEditStatus, createId, createShortId, nextPatchVersion, nowIso } from './versioning';
 import { isCanonicalApiStore } from './domain/services/runtime';
 import { publicAttachmentUri } from './domain/attachmentReachability';
-import { CanonicalDataError, StaleStoreEpochError } from './domain/errors';
+import { CanonicalDataError, ExportNotFoundError, StaleStoreEpochError } from './domain/errors';
 import { resourceName, stableJson } from './migrations/identity';
 
 const maxAttachmentSize = 1024 * 1024 * 1024;
@@ -1231,9 +1231,11 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
         ? subscene.versions.find((item) => item.version === requestedVersion)
         : latestVersion(subscene.versions);
       if (!selectedVersion) return json(404, { message: '找不到任务 SOP 版本' });
-      const yaml = buildTaskSopYaml(data, scene, subscene, selectedVersion, {
-        attachmentPublicBaseUrl: request.attachmentPublicBaseUrl,
-      });
+      const yaml = isCanonicalApiStore(store)
+        ? await store.exportTaskSopYaml(sceneId, subsceneCode, selectedVersion.version)
+        : buildTaskSopYaml(data, scene, subscene, selectedVersion, {
+            attachmentPublicBaseUrl: request.attachmentPublicBaseUrl,
+          });
       return json(200, { yaml, path: `/exports/task-sops/${sceneId}/${subsceneCode}/${selectedVersion.version}.yaml` });
     }
 
@@ -1246,15 +1248,18 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
         ? requirement.versions.find((version) => version.version === (request.body as { version?: string }).version)
         : latestVersion(requirement.versions);
       if (!selectedVersion) return json(404, { message: '找不到客户需求版本' });
-      const yaml = buildRequirementYaml(data, requirement, selectedVersion, {
-        attachmentPublicBaseUrl: request.attachmentPublicBaseUrl,
-      });
+      const yaml = isCanonicalApiStore(store)
+        ? await store.exportRequirementYaml(requirement.id, selectedVersion.version)
+        : buildRequirementYaml(data, requirement, selectedVersion, {
+            attachmentPublicBaseUrl: request.attachmentPublicBaseUrl,
+          });
       const file = await store.writeExport(requirement.id, selectedVersion.version, yaml);
       return json(200, { yaml, path: file });
     }
 
     return json(404, { message: '接口不存在' });
   } catch (error) {
+    if (error instanceof ExportNotFoundError) return json(404, normalizeError(error));
     if (error instanceof CanonicalDataError) return json(400, normalizeError(error));
     if (error instanceof StaleStoreEpochError) return json(409, normalizeError(error));
     return json(500, normalizeError(error));

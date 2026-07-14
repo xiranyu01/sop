@@ -1,0 +1,88 @@
+format: coscene.sop.export
+schema_version: 1.0.0
+root:
+  kind: requirement
+  ref: requirement-bced1c6d67bd
+requirements:
+  - ref: requirement-bced1c6d67bd
+    source:
+      resource_name: requirements/req001-38da6033
+      uid: 35de70e9-c3a3-54a0-8ecc-0d873ded750d
+      source_id: REQ001
+    revision:
+      revision_name: requirements/req001-38da6033/revisions/v-0-0-1
+      version_label: 0.0.1
+    display_name: 基线客户需求
+    spec:
+      customer_ref: customer-d2be63997a86
+      robot_model_revision_ref: robot-model-revision-87701546a1ac
+      project_display_name: 基线项目
+      business_goal: 保护当前页面行为
+      global_requirements:
+        topics: []
+        collection_policy:
+          allowed: []
+          acceptable: []
+          forbidden: []
+        annotation_policy:
+          allowed: []
+          acceptable: []
+          forbidden: []
+      delivery:
+        formats:
+          - json
+        method: download
+        languages:
+          - code: zh-CN
+            display_name: 简体中文
+      annotation:
+        required: false
+        types: []
+      quality_inspection:
+        required: false
+      production_items: []
+      priority: p1
+      aggregate_target:
+        duration: PT1H
+      requested_scene_names:
+        - 基线场景
+      source_uri: https://example.test/source
+      deadline: 2026-12-31
+    attachment_refs: []
+task_sops: []
+customers:
+  - ref: customer-d2be63997a86
+    source:
+      resource_name: customers/cus-baseline
+      uid: e92d2fc3-7bfa-5cf7-a7d4-611a763b6c06
+      source_id: cus-baseline
+    display_name: 基线客户
+    primary_contact:
+      display_name: 测试联系人
+      phone: "10086"
+      email: baseline@example.test
+    notes: 固定 fixture
+robot_model_revisions:
+  - ref: robot-model-revision-87701546a1ac
+    source:
+      resource_name: robotModels/robot-baseline
+      uid: 0614b3b9-ee56-5f99-8397-822cb4e79e20
+      source_id: robot-baseline
+    revision:
+      revision_name: robotModels/robot-baseline/revisions/current
+      version_label: 1.0.0
+      source_version_id: current
+    display_name: coScene Baseline
+    manufacturer: coScene
+    model_code: Baseline
+    end_effector: 夹爪
+    topics:
+      - id: camera
+        topic: /camera
+        constraints: []
+    extra_topic_requirements: []
+materials: []
+scenes: []
+global_fields: []
+material_state_rules: []
+attachments: []

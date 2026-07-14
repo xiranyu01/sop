@@ -1,7 +1,9 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
+import YAML from 'yaml';
 import type { Scene } from '../../src/types';
 import { confirmedTaskSop } from './fixtures/seed';
-import { apiJson, openAuthenticated } from './helpers/app';
+import { apiJson, authHeaders, openAuthenticated } from './helpers/app';
 
 test('TaskSop draft → confirm → patch draft → delete lifecycle remains stable', async ({ page, request }, testInfo) => {
   const code = `NO.E2E${testInfo.retry}`;
@@ -44,6 +46,19 @@ test('confirmed TaskSop YAML is delivered as a non-empty browser download', asyn
   expect(download.suggestedFilename()).toMatch(/基线任务-SOP-0\.0\.1\.yaml|基线任务.*0\.0\.1\.yaml/);
   const path = await download.path();
   expect(path).toBeTruthy();
+  expect(YAML.parse(await readFile(path!, 'utf8'))).toEqual(expect.objectContaining({
+    format: 'coscene.sop.export', schema_version: '1.0.0', root: expect.objectContaining({ kind: 'task_sop' }),
+  }));
 });
 
-test.fixme('draft TaskSop YAML is rejected by the confirmed-only export contract', async () => {});
+test('draft TaskSop YAML is rejected by the confirmed-only export contract', async ({ request }) => {
+  const scenes = await apiJson<Scene[]>(request, 'POST', '/api/scenes/scene-baseline/subscenes/NO.001/versions', {
+    baseVersion: '0.0.1', description: 'draft export rejection',
+  });
+  const version = scenes[0].subscenes[0].versions.at(-1)!.version;
+  const response = await request.post('/api/scenes/scene-baseline/subscenes/NO.001/export-yaml', {
+    headers: authHeaders, data: { version },
+  });
+  expect(response.status()).toBe(400);
+  expect((await response.json()).message).toContain('仅支持导出已确认版本');
+});

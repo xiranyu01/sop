@@ -1,0 +1,84 @@
+format: coscene.sop.export
+schema_version: 1.0.0
+root:
+  kind: task_sop
+  ref: task-sop-40a0142d7cb3
+requirements: []
+task_sops:
+  - ref: task-sop-40a0142d7cb3
+    source:
+      resource_name: taskSops/scene-baseline-no-001-a62a5b09
+      uid: 3befc3a9-27ae-5606-a5fe-7f6cf0126c67
+      source_id: scene-baseline-NO.001
+    revision:
+      revision_name: taskSops/scene-baseline-no-001-a62a5b09/revisions/v-0-0-1
+      version_label: 0.0.1
+    display_name: 基线任务 SOP
+    description: 用于确定性浏览器测试
+    scene_ref: scene-d064e60c367c
+    spec:
+      objects: []
+      robot_state:
+        initial: 安全初始位
+        target: 任务完成
+      object_states:
+        initial: []
+        target: []
+        during_operation: []
+      randomization:
+        robot_initial_state:
+          enabled: false
+          fields: []
+        object_initial_states: []
+        object_during_operation: []
+      collection:
+        steps:
+          - id: step-1
+            description: 执行基线动作
+            order: 1
+            english_description: Run baseline action
+        policy:
+          allowed: []
+          acceptable: []
+          forbidden: []
+        step_randomization:
+          enabled: false
+        step_order: "1"
+      annotation:
+        steps: []
+        policy:
+          allowed: []
+          acceptable: []
+          forbidden: []
+        readiness: not_required
+        action_tags: []
+        step_randomization:
+          enabled: false
+      robot_initial_randomization_requirements: []
+      material_state_rule_refs: []
+    attachment_refs: []
+    reference_uris: []
+    reference_attachments: []
+customers: []
+robot_model_revisions: []
+materials: []
+scenes:
+  - ref: scene-d064e60c367c
+    source:
+      resource_name: scenes/scene-baseline
+      uid: 87c84835-4d35-5589-819f-9faee3748547
+      source_id: scene-baseline
+    display_name: 基线场景
+    description: 固定 fixture 场景
+global_fields:
+  - ref: global-field-fdac7ac52ce0
+    source:
+      resource_name: globalFields/field-baseline
+      uid: a9db2829-f3bc-592a-b4e0-301cfe66be01
+      source_id: field-baseline
+    group: robot_state
+    label: 安全初始位
+    value: 安全初始位
+    status: active
+material_state_rules: []
+attachments: []

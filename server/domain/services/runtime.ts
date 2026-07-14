@@ -18,6 +18,7 @@ import type {
   Scene,
 } from '../../../src/types';
 import type { LegacyApiStore } from '../../../shared/transport/restDto';
+import { exportRequirementYaml, exportTaskSopYaml } from '../../export';
 import { convertLegacyToV1alpha1 } from '../../migrations/legacyToV1alpha1';
 import { canonicalId, deterministicUid, revisionName, stableJson } from '../../migrations/identity';
 import { createId, nextPatchVersion } from '../../versioning';
@@ -70,6 +71,8 @@ type CanonicalLegacyApiStore = LegacyApiStore & {
   writeRequirementsForAttachmentDelete(values: Requirement[]): Promise<Requirement[]>;
   cleanupAttachments(maxItems?: number): Promise<{ deleted: number; aborted: number; failed: number }>;
   resolveAttachment(storageKey: string): Promise<CanonicalSnapshot['attachments'][number] | undefined>;
+  exportRequirementYaml(sourceId: string, versionLabel: string): Promise<string>;
+  exportTaskSopYaml(sceneSourceId: string, subsceneCode: string, versionLabel: string): Promise<string>;
 };
 
 function converted(data: AppData): CanonicalSnapshot {
@@ -141,6 +144,20 @@ function assertNoDirectAttachmentMutation(current: AppData, next: AppData): void
     if (edge.attachments.length > 0 && !currentEdges.some((candidate) =>
       candidate.resource === edge.resource && stableJson(candidate.attachments) === stableJson(edge.attachments))) {
       throw new CanonicalDataError('新版本只能继承同一资源已有的附件');
+    }
+  }
+}
+
+function assertConfirmedRequirementsUnchanged(current: Requirement[], next: Requirement[]): void {
+  const nextById = new Map(next.map((requirement) => [requirement.id, requirement]));
+  for (const requirement of current) {
+    const nextRequirement = nextById.get(requirement.id);
+    if (!nextRequirement) continue;
+    for (const version of requirement.versions.filter((candidate) => candidate.status !== 'draft')) {
+      const nextVersion = nextRequirement.versions.find((candidate) => candidate.version === version.version);
+      if (nextVersion && stableJson(nextVersion) !== stableJson(version)) {
+        throw new CanonicalDataError(`已确认客户需求版本不可修改：${version.versionId || version.version}`);
+      }
     }
   }
 }
@@ -317,9 +334,6 @@ function mergeRequirements(current: CanonicalSnapshot, candidate: CanonicalSnaps
       next.snapshot.spec.globalRequirements.topics = base.snapshot.spec.globalRequirements.topics;
     }
     if (previous?.snapshot?.lifecycle !== undefined && previous.snapshot.lifecycle !== Lifecycle.DRAFT) {
-      if (immutableValue(previous.snapshot) !== immutableValue(next.snapshot)) {
-        throw new CanonicalDataError(`已确认客户需求版本不可修改：${sourceVersionId(previous)}`);
-      }
       return previous;
     }
     if (next.snapshot?.lifecycle === Lifecycle.CONFIRMED) {
@@ -368,6 +382,16 @@ export class CanonicalRuntime {
     const data = projectCanonicalToRest(snapshot);
     this.requestBaseline = structuredClone(data);
     return { pin, snapshot, data };
+  }
+
+  async exportRequirementYaml(sourceId: string, versionLabel: string): Promise<string> {
+    const pin = await this.pin();
+    return exportRequirementYaml(await this.store.readSnapshot(pin), sourceId, versionLabel);
+  }
+
+  async exportTaskSopYaml(sceneSourceId: string, subsceneCode: string, versionLabel: string): Promise<string> {
+    const pin = await this.pin();
+    return exportTaskSopYaml(await this.store.readSnapshot(pin), sceneSourceId, subsceneCode, versionLabel);
   }
 
   async mutate(mutator: (snapshot: CanonicalSnapshot, data: AppData) => CanonicalSnapshot): Promise<AppData> {
@@ -548,6 +572,7 @@ export class CanonicalRuntime {
     const data = await this.mutate((current, legacy) => {
       baseline ??= structuredClone(legacy.requirements);
       const intended = reconcileById(legacy.requirements, baseline, values);
+      assertConfirmedRequirementsUnchanged(legacy.requirements, intended);
       if (!finishUploadId && !allowAttachmentDelete) assertNoDirectAttachmentMutation(legacy, { ...legacy, requirements: intended });
       const candidate = converted({ ...legacy, requirements: intended });
       if (finishUploadId) {
@@ -690,6 +715,10 @@ export function createCanonicalApiStore(appStore: AppStore, options: CanonicalRu
     async resolveAttachment(storageKey) {
       const pin = await appStore.pin(options.namespace);
       return findReachableManagedAttachment(await appStore.readSnapshot(pin), storageKey);
+    },
+    async exportRequirementYaml(sourceId, versionLabel) { return runtime.exportRequirementYaml(sourceId, versionLabel); },
+    async exportTaskSopYaml(sceneSourceId, subsceneCode, versionLabel) {
+      return runtime.exportTaskSopYaml(sceneSourceId, subsceneCode, versionLabel);
     },
     async writeScenes(values: Scene[]) { return runtime.replaceScenes(values); },
     async writeRequirements(values: Requirement[]) { return runtime.replaceRequirements(values); },

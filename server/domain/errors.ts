@@ -7,6 +7,13 @@ export class CanonicalDataError extends CanonicalStoreError {
   }
 }
 
+export class ExportNotFoundError extends CanonicalStoreError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExportNotFoundError';
+  }
+}
+
 export class NamespaceNotFoundError extends CanonicalStoreError {
   constructor(namespace: string) {
     super(`Canonical namespace not found: ${namespace}`);
@@ -34,4 +41,3 @@ export class AtomicCommitError extends CanonicalStoreError {
     this.name = 'AtomicCommitError';
   }
 }
-

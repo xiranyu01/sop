@@ -1,0 +1,297 @@
+syntax = "proto3";
+
+package coscene.sop.export.v1alpha1;
+
+import "buf/validate/validate.proto";
+import "coscene/sop/v1alpha1/catalog.proto";
+import "coscene/sop/v1alpha1/common.proto";
+import "coscene/sop/v1alpha1/requirement.proto";
+import "coscene/sop/v1alpha1/task_sop.proto";
+
+// RootKind identifies the resource selected for export.
+enum RootKind {
+  ROOT_KIND_UNSPECIFIED = 0;
+  ROOT_KIND_REQUIREMENT = 1;
+  ROOT_KIND_TASK_SOP = 2;
+}
+
+// SourceIdentity preserves the originating system identity for traceability.
+message SourceIdentity {
+  string resource_name = 1 [(buf.validate.field).string.min_len = 1];
+  string uid = 2 [(buf.validate.field).string.uuid = true];
+  optional string source_id = 3;
+}
+
+// RevisionIdentity identifies one immutable source revision without exporting history.
+message RevisionIdentity {
+  string revision_name = 1 [(buf.validate.field).string.min_len = 1];
+  string version_label = 2 [(buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"];
+  optional string source_version_id = 3;
+}
+
+// BundleRoot points to exactly one entry in the bundle.
+message BundleRoot {
+  RootKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string ref = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// AttachmentEntry exports immutable metadata and a public retrieval URI only.
+message AttachmentEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  string filename = 3 [(buf.validate.field).string.min_len = 1];
+  string media_type = 4 [(buf.validate.field).string.min_len = 1];
+  int64 size_bytes = 5 [(buf.validate.field).int64.gte = 0];
+  string public_uri = 6 [(buf.validate.field).string.uri = true];
+  optional string sha256 = 7 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
+}
+
+// CustomerEntry is the frozen customer content required by a Requirement.
+message CustomerEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  string display_name = 3 [(buf.validate.field).string.min_len = 1];
+  coscene.sop.v1alpha1.Contact primary_contact = 4;
+  optional string notes = 5;
+}
+
+// MaterialEntry is frozen catalog content referenced by a TaskSop.
+message MaterialEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  string display_name = 3 [(buf.validate.field).string.min_len = 1];
+  optional string sku = 4;
+  optional string category = 5;
+  repeated string colors = 6;
+  repeated string compositions = 7;
+  optional string packaging = 8;
+  optional string size = 9;
+  optional string weight = 10;
+  repeated string attachment_refs = 11 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+// SceneEntry is the frozen scene identity referenced by a TaskSop.
+message SceneEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  string display_name = 3 [(buf.validate.field).string.min_len = 1];
+  optional string description = 4;
+}
+
+// RobotModelRevisionEntry exports exactly one pinned robot revision.
+message RobotModelRevisionEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  RevisionIdentity revision = 3 [(buf.validate.field).required = true];
+  string display_name = 4 [(buf.validate.field).string.min_len = 1];
+  optional string manufacturer = 5;
+  optional string model_code = 6;
+  optional string end_effector = 7;
+  repeated coscene.sop.v1alpha1.TopicBinding topics = 8;
+  repeated coscene.sop.v1alpha1.TopicAdditionalRequirement extra_topic_requirements = 9;
+}
+
+// GlobalFieldEntry exports frozen shared vocabulary without volatile metadata.
+message GlobalFieldEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  coscene.sop.v1alpha1.GlobalFieldGroup group = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string label = 4 [(buf.validate.field).string.min_len = 1];
+  string value = 5 [(buf.validate.field).string.min_len = 1];
+  optional string category = 6;
+  optional string description = 7;
+  coscene.sop.v1alpha1.GlobalFieldStatus status = 8 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// MaterialStateRuleEntry exports frozen state vocabulary without timestamps.
+message MaterialStateRuleEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  string material_type = 3 [(buf.validate.field).string.min_len = 1];
+  repeated string primary_references = 4;
+  repeated string primary_relative_positions = 5;
+  repeated string support_surfaces = 6;
+  repeated string regions = 7;
+  repeated string secondary_references = 8;
+  repeated string secondary_relative_positions = 9;
+  repeated string poses = 10;
+  repeated string forms = 11;
+  repeated string parameters = 12;
+}
+
+// TaskObject stores task-local identity while resource edges use bundle refs.
+message TaskObject {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  optional string material_ref = 3 [(buf.validate.field).string.min_len = 1];
+  coscene.sop.v1alpha1.Quantity quantity = 4;
+  repeated string roles = 5;
+  repeated coscene.sop.v1alpha1.Attribute attributes = 6;
+  repeated string attachment_refs = 7 [(buf.validate.field).repeated.items.string.min_len = 1];
+  coscene.sop.v1alpha1.MaterialDescriptor material_descriptor = 8;
+}
+
+// LocationConstraint is a task location with bundle-local attachment refs.
+message LocationConstraint {
+  optional string display_name = 1;
+  repeated coscene.sop.v1alpha1.ReferenceRelation reference_path = 2;
+  optional string support_surface = 3;
+  repeated string regions = 4;
+  repeated string poses = 5;
+  repeated string forms = 6;
+  repeated coscene.sop.v1alpha1.Attribute parameters = 7;
+  repeated string constraints = 8;
+  optional string collector_instruction = 9;
+  repeated string example_attachment_refs = 10 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+// InitialObjectState lists the permitted initial locations for a task object.
+message InitialObjectState {
+  string object_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated LocationConstraint allowed_locations = 2;
+}
+
+// TargetObjectState records the required terminal location for a task object.
+message TargetObjectState {
+  string object_id = 1 [(buf.validate.field).string.min_len = 1];
+  LocationConstraint required_location = 2 [(buf.validate.field).required = true];
+}
+
+// ObjectStates groups all task object-state requirements.
+message ObjectStates {
+  repeated InitialObjectState initial = 1;
+  repeated TargetObjectState target = 2;
+  repeated coscene.sop.v1alpha1.DuringOperationObjectState during_operation = 3;
+}
+
+// ObjectRandomization keeps policy order and uses bundle-local image refs.
+message ObjectRandomization {
+  repeated string object_ids = 1;
+  coscene.sop.v1alpha1.ChangePolicy change = 2;
+  repeated coscene.sop.v1alpha1.RandomizedField fields = 3;
+  optional string collector_instruction = 4;
+  repeated string constraints = 5;
+  repeated string example_attachment_refs = 6 [(buf.validate.field).repeated.items.string.min_len = 1];
+  repeated coscene.sop.v1alpha1.NamedValueSource locations = 7;
+  repeated coscene.sop.v1alpha1.NamedValueSource poses = 8;
+  repeated coscene.sop.v1alpha1.NamedValueSource forms = 9;
+}
+
+// Randomization contains task policies without canonical resource names.
+message Randomization {
+  coscene.sop.v1alpha1.RobotRandomization robot_initial_state = 1;
+  repeated ObjectRandomization object_initial_states = 2;
+  repeated coscene.sop.v1alpha1.DuringOperationRandomization object_during_operation = 3;
+}
+
+// TaskSopSpec is the import-ready TaskSop content in external reference space.
+message TaskSopSpec {
+  repeated TaskObject objects = 1;
+  coscene.sop.v1alpha1.RobotState robot_state = 2;
+  ObjectStates object_states = 3;
+  Randomization randomization = 4;
+  coscene.sop.v1alpha1.OperationPlan collection = 5;
+  coscene.sop.v1alpha1.AnnotationPlan annotation = 6;
+  optional string expected_duration = 7 [(buf.validate.field).string.pattern = "^PT([0-9]+H([0-9]+M)?([0-9]+(\\.[0-9]+)?S)?|[0-9]+M([0-9]+(\\.[0-9]+)?S)?|[0-9]+(\\.[0-9]+)?S)$"];
+  optional string robot_operation_requirements = 8;
+  repeated string robot_initial_randomization_requirements = 9;
+  optional string legacy_randomization_frequency = 10;
+  repeated string material_state_rule_refs = 11 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+// WorkloadTarget uses ISO 8601 duration and a lossless int64 count.
+message WorkloadTarget {
+  optional string duration = 1 [(buf.validate.field).string.pattern = "^PT([0-9]+H([0-9]+M)?([0-9]+(\\.[0-9]+)?S)?|[0-9]+M([0-9]+(\\.[0-9]+)?S)?|[0-9]+(\\.[0-9]+)?S)$"];
+  optional int64 collection_count = 2 [(buf.validate.field).int64.gt = 0];
+}
+
+// ProductionItem pins workload to a bundle-local TaskSop revision ref.
+message ProductionItem {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  optional string description = 3;
+  string task_sop_ref = 4 [(buf.validate.field).string.min_len = 1];
+  WorkloadTarget target = 5;
+  optional string legacy_scene_name = 6;
+  optional string legacy_subscene_code = 7;
+  optional string legacy_subscene_name = 8;
+  optional string legacy_version_label = 9;
+  optional string legacy_version_id = 10;
+  optional coscene.sop.v1alpha1.Lifecycle legacy_lifecycle = 11 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// RequirementSpec is the import-ready Requirement content in external ref space.
+message RequirementSpec {
+  string customer_ref = 1 [(buf.validate.field).string.min_len = 1];
+  string robot_model_revision_ref = 2 [(buf.validate.field).string.min_len = 1];
+  optional string project_display_name = 3;
+  string business_goal = 4;
+  coscene.sop.v1alpha1.GlobalRequirements global_requirements = 5;
+  coscene.sop.v1alpha1.DeliveryRequirements delivery = 6;
+  coscene.sop.v1alpha1.AnnotationRequirements annotation = 7;
+  coscene.sop.v1alpha1.QualityInspectionRequirements quality_inspection = 8;
+  repeated ProductionItem production_items = 9;
+  coscene.sop.v1alpha1.Priority priority = 10 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  WorkloadTarget aggregate_target = 11;
+  repeated string requested_scene_names = 12;
+  optional string source_uri = 13 [(buf.validate.field).string.uri = true];
+  optional string deadline = 14 [(buf.validate.field).string.pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"];
+  optional string attachment_notes = 15;
+  optional string extra_topic_requirements_text = 16;
+}
+
+// TaskSopRevisionEntry exports one confirmed immutable TaskSop revision.
+message TaskSopRevisionEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  RevisionIdentity revision = 3 [(buf.validate.field).required = true];
+  string display_name = 4 [(buf.validate.field).string.min_len = 1];
+  optional string description = 5;
+  string scene_ref = 6 [(buf.validate.field).string.min_len = 1];
+  TaskSopSpec spec = 7 [(buf.validate.field).required = true];
+  repeated string attachment_refs = 8 [(buf.validate.field).repeated.items.string.min_len = 1];
+  repeated string reference_uris = 9 [(buf.validate.field).repeated.items.string.uri = true];
+  repeated coscene.sop.v1alpha1.LegacyReferenceAttachment reference_attachments = 10;
+}
+
+// RequirementRevisionEntry exports one confirmed immutable Requirement revision.
+message RequirementRevisionEntry {
+  string ref = 1 [(buf.validate.field).string.min_len = 1];
+  SourceIdentity source = 2 [(buf.validate.field).required = true];
+  RevisionIdentity revision = 3 [(buf.validate.field).required = true];
+  string display_name = 4 [(buf.validate.field).string.min_len = 1];
+  optional string description = 5;
+  RequirementSpec spec = 6 [(buf.validate.field).required = true];
+  repeated string attachment_refs = 7 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+// ExportBundle is the complete deterministic, confirmed-only YAML contract.
+message ExportBundle {
+  string format = 1 [(buf.validate.field).string.const = "coscene.sop.export"];
+  string schema_version = 2 [(buf.validate.field).string.const = "1.0.0"];
+  BundleRoot root = 3 [(buf.validate.field).required = true];
+  repeated RequirementRevisionEntry requirements = 4;
+  repeated TaskSopRevisionEntry task_sops = 5;
+  repeated CustomerEntry customers = 6;
+  repeated RobotModelRevisionEntry robot_model_revisions = 7;
+  repeated MaterialEntry materials = 8;
+  repeated SceneEntry scenes = 9;
+  repeated GlobalFieldEntry global_fields = 10;
+  repeated MaterialStateRuleEntry material_state_rules = 11;
+  repeated AttachmentEntry attachments = 12;
+}

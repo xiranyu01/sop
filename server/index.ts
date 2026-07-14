@@ -1,14 +1,30 @@
 import cors from 'cors';
 import express from 'express';
+import path from 'node:path';
 import { handleApiRequest } from './api';
-import { createFileStore } from './store';
+import { createCanonicalApiStore } from './domain/services/runtime';
+import { bootstrapValidatedFileGeneration } from './migrations/fileRuntimeBootstrap';
+import { createCanonicalFileAppStore, createFileStore } from './store';
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
-const fileStore = createFileStore({
-  dataDir: process.env.SOP_DATA_DIR,
-  uploadsDir: process.env.SOP_UPLOADS_DIR,
+const dataDir = path.resolve(process.env.SOP_DATA_DIR ?? path.join(process.cwd(), 'data'));
+const uploadsDir = path.resolve(process.env.SOP_UPLOADS_DIR ?? path.join(process.cwd(), 'uploads'));
+const canonicalRoot = path.resolve(process.env.SOP_CANONICAL_DIR ?? path.join(dataDir, 'canonical'));
+const legacyFileStore = createFileStore({
+  dataDir,
+  uploadsDir,
   exportsDir: process.env.SOP_EXPORTS_DIR,
+});
+const runtimeGeneration = await bootstrapValidatedFileGeneration({ canonicalRoot, legacyDir: dataDir, attachmentRoot: uploadsDir });
+const canonicalStore = createCanonicalFileAppStore({
+  rootDir: canonicalRoot,
+  bootstrap: { namespace: runtimeGeneration.generationId, snapshot: runtimeGeneration.snapshot },
+});
+const fileStore = createCanonicalApiStore(canonicalStore, {
+  namespace: runtimeGeneration.generationId,
+  attachments: legacyFileStore,
+  writeExport: legacyFileStore.writeExport.bind(legacyFileStore),
 });
 
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
@@ -41,7 +57,7 @@ app.get(/^\/api\/attachments\/(.+)$/, (req, res) => {
     res.status(401).json({ message: '访问密码无效或已过期' });
     return;
   }
-  res.download(fileStore.localAttachmentPath(decodeURIComponent(req.params[0])));
+  res.download(legacyFileStore.localAttachmentPath(decodeURIComponent(req.params[0])));
 });
 
 app.all('/api/*', async (req, res) => {

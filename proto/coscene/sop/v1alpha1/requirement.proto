@@ -165,6 +165,7 @@ message Requirement {
   google.protobuf.Timestamp create_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
   google.protobuf.Timestamp update_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
   string etag = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string source_id = 12 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // RequirementRevision is an immutable historical snapshot of a Requirement.
@@ -196,4 +197,5 @@ message RequirementRevision {
   ];
   google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
   FrozenDependencyContext frozen_dependencies = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string source_version_id = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
 }

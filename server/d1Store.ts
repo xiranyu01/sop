@@ -15,6 +15,7 @@ import {
   emptyCanonicalSnapshot,
   encodeCanonicalSnapshot,
   type AppStore,
+  type CanonicalSnapshot,
   type StorePin,
 } from './domain/appStore';
 import { AtomicCommitError, NamespaceNotFoundError, StaleStoreEpochError, WriteFrozenError } from './domain/errors';
@@ -41,6 +42,7 @@ type CanonicalD1Row = {
 
 export type CanonicalD1StoreOptions = {
   defaultNamespace?: string;
+  bootstrap?: { namespace: string; snapshot: CanonicalSnapshot; writable?: boolean };
   faultInjection?: (point: 'before-atomic-update') => void | Promise<void>;
 };
 
@@ -86,6 +88,17 @@ export function createCanonicalD1AppStore(db: D1DatabaseLike, options: Canonical
 
   async function initialize(): Promise<void> {
     await ensureCanonicalTables(db, defaultNamespace);
+    if (options.bootstrap && options.bootstrap.namespace !== defaultNamespace) {
+      await db.prepare(`INSERT OR IGNORE INTO canonical_namespaces
+        (namespace, epoch, writable, generation, snapshot_json, updated_at)
+        VALUES (?, 1, ?, 0, ?, ?)`)
+        .bind(
+          options.bootstrap.namespace,
+          options.bootstrap.writable === false ? 0 : 1,
+          encodeCanonicalSnapshot(options.bootstrap.snapshot),
+          new Date().toISOString(),
+        ).run();
+    }
   }
 
   async function diagnoseRejectedMutation(pin: StorePin): Promise<never> {

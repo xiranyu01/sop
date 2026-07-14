@@ -14,6 +14,8 @@ import type {
 import type { LegacyApiStore, ApiRequest, ApiResponse } from '../shared/transport/restDto';
 import { buildRequirementYaml, buildTaskSopYaml } from './yamlExport';
 import { canEditStatus, createId, createShortId, nextPatchVersion, nowIso } from './versioning';
+import { isCanonicalApiStore } from './domain/services/runtime';
+import { CanonicalDataError, StaleStoreEpochError } from './domain/errors';
 
 const maxAttachmentSize = 1024 * 1024 * 1024;
 const attachmentPartSize = 16 * 1024 * 1024;
@@ -73,6 +75,8 @@ function nextShortId(values: string[]): string {
 function emptySubsceneVersion(patch: Partial<SubsceneVersion> = {}): SubsceneVersion {
   return {
     version: '0.0.1',
+    versionId: patch.versionId || createId('taskv'),
+    parentVersionId: patch.parentVersionId || '',
     status: 'draft',
     title: patch.title || '新的任务 SOP',
     description: patch.description || '',
@@ -199,7 +203,7 @@ function previousRequirementVersion(requirement: Requirement, versionNumber: str
 
 function requirementParentVersionId(requirement: Requirement, versionNumber: string): string {
   const previous = previousRequirementVersion(requirement, versionNumber);
-  return previous ? requirementVersionId(requirement.id, previous.version) : '';
+  return previous ? (previous.versionId || requirementVersionId(requirement.id, previous.version)) : '';
 }
 
 function materialWithAttachment(material: Material, attachment: RequirementAttachment): Material {
@@ -350,6 +354,7 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
   if (authError) return authError;
 
   try {
+    if (isCanonicalApiStore(store)) store = await store.beginRequest();
     const path = request.pathname.replace(/\/$/, '');
     const method = request.method.toUpperCase();
 
@@ -467,8 +472,10 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
     }
 
     if (method === 'POST' && path === '/api/robot-models') {
+      const body = request.body as Partial<RobotModel>;
+      if (isCanonicalApiStore(store)) return json(200, await store.saveRobotModel(body));
       const data = await store.readData();
-      const item = { ...(request.body as Partial<RobotModel>), id: (request.body as Partial<RobotModel>)?.id || createId('robot') } as RobotModel;
+      const item = { ...body, id: body?.id || createId('robot') } as RobotModel;
       return json(200, await store.writeRobotModels(replaceById(data.robotModels, item)));
     }
 
@@ -898,6 +905,8 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
               ...current,
               ...effectivePatch,
               version: editable ? current.version : nextAvailablePatchVersion(subscene.versions, current.version),
+              versionId: editable ? (current.versionId || createId('taskv')) : createId('taskv'),
+              parentVersionId: editable ? current.parentVersionId : current.versionId,
               status: editable ? current.status : 'draft',
               updatedAt: nowIso(),
             };
@@ -961,13 +970,21 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       const data = await store.readData();
       const [sceneId, subsceneCode] = [decodeURIComponent(subsceneConfirm[1]), decodeURIComponent(subsceneConfirm[2])];
       const versionToConfirm = (request.body as { version?: string })?.version;
+      const scene = data.scenes.find((item) => item.id === sceneId);
+      if (!scene) return json(404, { message: '找不到场景' });
+      const subscene = scene.subscenes.find((item) => item.code === subsceneCode);
+      if (!subscene) return json(404, { message: '找不到任务 SOP' });
+      const targetVersion = versionToConfirm || latestVersion(subscene.versions).version;
+      if (!subscene.versions.some((version) => version.version === targetVersion)) {
+        return json(404, { message: '找不到任务 SOP 版本' });
+      }
       const nextScenes = data.scenes.map((scene) => {
         if (scene.id !== sceneId) return scene;
         return {
           ...scene,
           subscenes: scene.subscenes.map((subscene) => {
             if (subscene.code !== subsceneCode) return subscene;
-            const target = versionToConfirm || latestVersion(subscene.versions).version;
+            const target = targetVersion;
             return {
               ...subscene,
               versions: subscene.versions.map((version) =>
@@ -1017,6 +1034,8 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
 
     return json(404, { message: '接口不存在' });
   } catch (error) {
+    if (error instanceof CanonicalDataError) return json(400, normalizeError(error));
+    if (error instanceof StaleStoreEpochError) return json(409, normalizeError(error));
     return json(500, normalizeError(error));
   }
 }

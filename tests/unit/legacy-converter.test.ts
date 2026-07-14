@@ -3,8 +3,17 @@ import { encodeCanonicalSnapshot } from '../../server/domain/appStore';
 import { convertLegacyToV1alpha1 } from '../../server/migrations/legacyToV1alpha1';
 import { readLegacyDirectory } from '../../server/migrations/runner';
 import { deterministicUid } from '../../server/migrations/identity';
+import { sha1, sha256 } from '../../shared/crypto/hash';
 
 describe('legacy v1alpha1 converter', () => {
+  it('matches standard hash vectors and the established UUIDv5 allocation', () => {
+    expect(sha1('')).toBe('da39a3ee5e6b4b0d3255bfef95601890afd80709');
+    expect(sha1('abc')).toBe('a9993e364706816aba3e25717850c26c9cd0d89d');
+    expect(sha256('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+    expect(sha256('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+    expect(deterministicUid('customer', 'legacy-1')).toBe('141228da-d8d1-5ced-8670-c6463d8d80dc');
+  });
+
   it('allocates stable RFC UUIDv5 identities', () => {
     const uid = deterministicUid('customer', 'legacy-1');
     expect(deterministicUid('customer', 'legacy-1')).toBe(uid);

@@ -4,9 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CustomerSchema } from '../../gen/coscene/sop/v1alpha1/catalog_pb';
+import { handleApiRequest } from '../../server/api';
 import { createCanonicalD1AppStore, type D1DatabaseLike, type D1PreparedStatementLike, type D1RunResult } from '../../server/d1Store';
 import type { AppStore } from '../../server/domain/appStore';
 import { AtomicCommitError, StaleStoreEpochError, WriteFrozenError } from '../../server/domain/errors';
+import { createCanonicalApiStore } from '../../server/domain/services/runtime';
 import { createCanonicalFileAppStore } from '../../server/store';
 
 const customer = create(CustomerSchema, {
@@ -40,7 +42,14 @@ class MemoryD1 implements D1DatabaseLike {
         if (sql.startsWith('INSERT OR IGNORE INTO canonical_namespaces')) {
           const namespace = String(this.values[0]);
           if (db.rows.has(namespace)) return { meta: { changes: 0 } };
-          db.rows.set(namespace, { namespace, epoch: 1, writable: 1, generation: 0, snapshot_json: String(this.values[1]) });
+          const bootstrappingNamedNamespace = this.values.length === 4;
+          db.rows.set(namespace, {
+            namespace,
+            epoch: 1,
+            writable: bootstrappingNamedNamespace ? Number(this.values[1]) : 1,
+            generation: 0,
+            snapshot_json: String(bootstrappingNamedNamespace ? this.values[2] : this.values[1]),
+          });
           return { meta: { changes: 1 } };
         }
         if (sql.startsWith('INSERT OR IGNORE INTO canonical_store_meta')) {
@@ -85,6 +94,31 @@ async function exerciseEpochFence(store: AppStore): Promise<void> {
   await expect(store.commit(reopened, (snapshot) => snapshot)).resolves.toMatchObject({ pin: { epoch: reopened.epoch } });
 }
 
+async function exerciseConcurrentApiMutations(store: AppStore, backend: string): Promise<void> {
+  let pins = 0;
+  let release!: () => void;
+  const bothPinned = new Promise<void>((resolve) => { release = resolve; });
+  const barrierStore: AppStore = {
+    ...store,
+    async pin(namespace) {
+      const pin = await store.pin(namespace);
+      pins += 1;
+      if (pins === 2) release();
+      if (pins <= 2) await bothPinned;
+      return pin;
+    },
+  };
+  const api = createCanonicalApiStore(barrierStore);
+  const responses = await Promise.all(['concurrent-a', 'concurrent-b'].map((id) => handleApiRequest(api, {
+    method: 'POST',
+    pathname: '/api/customers',
+    body: { id, name: id, contact: { name: '', phone: '', email: '' } },
+  })));
+  expect(responses.map((response) => response.status), backend).toEqual([200, 200]);
+  expect((await createCanonicalApiStore(store).readData()).customers.map((item) => item.id).sort(), backend)
+    .toEqual(['concurrent-a', 'concurrent-b']);
+}
+
 describe('canonical repository atomicity', () => {
   it('pins namespace/epoch and fences stale mutations for file and D1 stores', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sop-canonical-'));
@@ -117,5 +151,11 @@ describe('canonical repository atomicity', () => {
     const visiblePin = await store.pin();
     expect(visiblePin.generation).toBe(0);
     expect((await store.readSnapshot(visiblePin)).customers).toEqual([]);
+  });
+
+  it('replays a concurrent whole API mutation against the winning generation for file and D1 parity', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sop-canonical-concurrent-'));
+    await exerciseConcurrentApiMutations(createCanonicalFileAppStore({ rootDir: root }), 'file');
+    await exerciseConcurrentApiMutations(createCanonicalD1AppStore(new MemoryD1()), 'D1');
   });
 });

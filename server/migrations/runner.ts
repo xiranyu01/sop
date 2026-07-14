@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { AppData } from '../../src/types';
 import { canonicalSchemaVersion, decodeCanonicalSnapshot, encodeCanonicalSnapshot } from '../domain/appStore';
 import type { D1DatabaseLike, D1PreparedStatementLike } from '../d1Store';
-import { converterVersion, migrationFormatVersion, storageSchemaVersion, type MigrationManifest, type MigrationVersions } from './manifest';
+import { converterVersion, migrationFormatVersion, migrationGenerationId, storageSchemaVersion, type MigrationManifest, type MigrationVersions } from './manifest';
 import { convertLegacyToV1alpha1, decodeLegacyAppData } from './legacyToV1alpha1';
 import { canonicalCardinalities, canonicalIdentities, canonicalSemanticDigest, fingerprintSource } from './semanticProjection';
 import { identityVersion, stableHash, stableJson } from './identity';
@@ -52,14 +52,10 @@ function resolvedVersions(value: Partial<MigrationVersions> = {}): MigrationVers
   return { ...defaultMigrationVersions, ...value };
 }
 
-function generationId(sourceFingerprint: string, versions: MigrationVersions): string {
-  return `v1alpha1-${stableHash(stableJson({ sourceFingerprint, versions })).slice(0, 20)}`;
-}
-
 function buildManifest(data: AppData, report: MigrationReport, versions: MigrationVersions, now: string, maintenanceEpoch: number): MigrationManifest {
   return {
     formatVersion: migrationFormatVersion,
-    generationId: generationId(report.sourceFingerprint, versions),
+    generationId: migrationGenerationId(report.sourceFingerprint, versions),
     lifecycle: 'BUILDING',
     sourceFingerprint: report.sourceFingerprint,
     sourceWatermark: data.metadata.appDataSchemaVersion,
@@ -153,7 +149,7 @@ export async function migrateLegacyFiles(options: CommonMigrationOptions & { leg
   const data = await readLegacyDirectory(options.legacyDir);
   const sourceFingerprint = fingerprintSource(data);
   const versions = resolvedVersions(options.versions);
-  const id = generationId(sourceFingerprint, versions);
+  const id = migrationGenerationId(sourceFingerprint, versions);
   const root = path.join(path.resolve(options.canonicalRoot), 'migration-generations', id);
   const manifestFile = path.join(root, 'manifest.json');
   const snapshotFile = path.join(root, 'snapshot.json');
@@ -234,7 +230,7 @@ async function ensureMigrationTables(db: MigrationD1DatabaseLike): Promise<void>
 export async function migrateLegacyD1(db: MigrationD1DatabaseLike, input: unknown, options: CommonMigrationOptions = {}): Promise<MigrationRunResult> {
   await ensureMigrationTables(db);
   const data = decodeLegacyAppData(input); const sourceFingerprint = fingerprintSource(data); const versions = resolvedVersions(options.versions);
-  const id = generationId(sourceFingerprint, versions); const maintenanceEpoch = options.maintenanceEpoch ?? 1;
+  const id = migrationGenerationId(sourceFingerprint, versions); const maintenanceEpoch = options.maintenanceEpoch ?? 1;
   const existing = await db.prepare('SELECT generation_id, lifecycle, source_fingerprint, maintenance_epoch, manifest_json, snapshot_json, report_json FROM canonical_migration_generations WHERE generation_id = ?').bind(id).first<MigrationD1Row>();
   if (existing) {
     const manifest = JSON.parse(existing.manifest_json) as MigrationManifest; assertCompatibleManifest(manifest, sourceFingerprint, versions, maintenanceEpoch);

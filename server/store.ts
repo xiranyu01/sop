@@ -23,6 +23,7 @@ export type FileStoreOptions = {
 export type CanonicalFileStoreOptions = {
   rootDir: string;
   defaultNamespace?: string;
+  bootstrap?: { namespace: string; snapshot: CanonicalSnapshot; writable?: boolean };
   faultInjection?: (point: 'before-generation-publish' | 'before-manifest-publish') => void | Promise<void>;
 };
 
@@ -97,6 +98,22 @@ export function createCanonicalFileAppStore(options: CanonicalFileStoreOptions):
       await atomicWrite(manifestFile(defaultNamespace), JSON.stringify(manifest));
       await atomicWrite(activeFile, defaultNamespace);
     }
+    if (options.bootstrap && options.bootstrap.namespace !== defaultNamespace) {
+      try {
+        await readFile(manifestFile(options.bootstrap.namespace), 'utf-8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        await atomicWrite(generationFile(options.bootstrap.namespace, 0), encodeCanonicalSnapshot(options.bootstrap.snapshot));
+        const manifest: CanonicalManifest = {
+          namespace: options.bootstrap.namespace,
+          epoch: 1,
+          generation: 0,
+          writable: options.bootstrap.writable ?? true,
+          schemaVersion: options.bootstrap.snapshot.schemaVersion,
+        };
+        await atomicWrite(manifestFile(options.bootstrap.namespace), JSON.stringify(manifest));
+      }
+    }
   }
 
   async function readManifest(namespace: string): Promise<CanonicalManifest> {
@@ -123,6 +140,11 @@ export function createCanonicalFileAppStore(options: CanonicalFileStoreOptions):
     },
     async readSnapshot(pin) {
       await initialize();
+      const manifest = await readManifest(pin.namespace);
+      assertEpoch(manifest, pin);
+      if (manifest.generation !== pin.generation) {
+        throw new AtomicCommitError(`Canonical file generation changed for ${pin.namespace}`);
+      }
       return decodeCanonicalSnapshot(await readFile(generationFile(pin.namespace, pin.generation), 'utf-8'));
     },
     commit(pin, mutation) {

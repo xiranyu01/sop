@@ -10,20 +10,20 @@ that U2 changes persistence.
 
 | Legacy record and fields | Canonical mapping | Classification |
 | --- | --- | --- |
-| `Customer.id` | `Customer.name` plus deterministic `uid` | Domain identity |
+| `Customer.id` | `Customer.{name,uid,source_id}` | Domain identity plus exact compatibility provenance |
 | `Customer.name`, `contact.{name,phone,email}`, `notes` | `Customer.display_name`, `primary_contact.{display_name,phone,email}`, `notes` | Domain |
-| `Material.id` | `Material.name` plus deterministic `uid` | Domain identity |
+| `Material.id` | `Material.{name,uid,source_id}` | Domain identity plus exact compatibility provenance |
 | `Material.skuId`, `type`, `color`, `material`, `packageType` | `Material.{sku,category,colors,compositions,packaging}` | Domain |
 | `Material.size`, `weight`, `images` | `Material.{size,weight,images}` and referenced `Attachment` metadata | Domain |
-| `RobotModel.id` | `RobotModel.name` plus deterministic `uid` | Domain identity |
+| `RobotModel.id` | `RobotModel.{name,uid,source_id}` | Domain identity plus exact compatibility provenance |
 | `RobotModel.brand`, `model`, `terminal` | `RobotModel.{manufacturer,model_code,end_effector}` | Domain |
 | `RobotModel.topics` map | ordered `RobotModel.topics` entries (`TopicBinding.id/topic`) | Domain; converter sorts keys |
 | `RobotModel.extraTopicRequirements` map | ordered `RobotModel.extra_topic_requirements` | Domain; converter sorts keys |
-| `GlobalField.id` | `GlobalField.name` plus deterministic `uid` | Domain identity |
+| `GlobalField.id` | `GlobalField.{name,uid,source_id}` | Domain identity plus exact compatibility provenance |
 | `GlobalField.group`, `label`, `value`, `category`, `description`, `status`, `updatedAt` | like-named `GlobalField` fields, typed group/status enums, `update_time` | Domain |
-| `MaterialStateRule.id` | `MaterialStateRule.name` plus deterministic `uid` | Domain identity |
+| `MaterialStateRule.id` | `MaterialStateRule.{name,uid,source_id}` | Domain identity plus exact compatibility provenance |
 | all `MaterialStateRule` vocabulary arrays and `materialType`, `updatedAt` | like-named `MaterialStateRule` fields and `update_time` | Domain |
-| `Scene.id`, `name`, `description` | `Scene.{name,uid,display_name,description}` | Domain |
+| `Scene.id`, `name`, `description` | `Scene.{name,uid,source_id,display_name,description}` | Domain |
 | `Scene.subscenes[].code/name/versions` | separate `TaskSop` resources and `TaskSopRevision` chains linked by `TaskSop.scene` | Normalized domain |
 
 Every item in the persisted `GlobalFieldGroup` union has a corresponding
@@ -34,7 +34,7 @@ Every item in the persisted `GlobalFieldGroup` union has a corresponding
 
 | Legacy fields | Canonical mapping | Classification |
 | --- | --- | --- |
-| `SubsceneVersion.version`, `versionId`, `parentVersionId`, `status`, `updatedAt` | `TaskSopRevision.{version_label,name,previous_revision,create_time}` and `TaskSop.lifecycle` | Revision domain; legacy IDs retained as conversion provenance/report data rather than duplicate business fields |
+| `SubsceneVersion.version`, `versionId`, `parentVersionId`, `status`, `updatedAt` | `TaskSopRevision.{version_label,source_version_id,name,previous_revision,create_time}` and `TaskSop.lifecycle` | Revision domain; source version ID is explicit transport provenance and parent source ID is recovered through `previous_revision` |
 | `title`, `sceneName`, `subsceneName`, `Subscene.code`, `description` | `TaskSop.{display_name,legacy_scene_display_name,legacy_subscene_display_name,legacy_subscene_code,description}` | Domain |
 | `attachments` | `TaskSop.attachments` and frozen `Attachment` entries | Domain |
 | `requiredDurationHours` | `TaskSopSpec.expected_duration` | Domain |
@@ -60,8 +60,8 @@ Every item in the persisted `GlobalFieldGroup` union has a corresponding
 
 | Legacy fields | Canonical mapping | Classification |
 | --- | --- | --- |
-| `Requirement.id` | `Requirement.name` plus deterministic `uid` | Domain identity |
-| version/version IDs/parent/status/updatedAt | `RequirementRevision.{version_label,name,previous_revision,create_time}` and `Requirement.lifecycle` | Revision domain; legacy IDs remain conversion provenance/report data |
+| `Requirement.id` | `Requirement.{name,uid,source_id}` | Domain identity plus exact compatibility provenance |
+| version/version IDs/parent/status/updatedAt | `RequirementRevision.{version_label,source_version_id,name,previous_revision,create_time}` and `Requirement.lifecycle` | Revision domain; parent source ID is recovered through `previous_revision` |
 | title/project/priority/deadline/source URL/business goal | `Requirement.{display_name}`, `RequirementSpec.{project_display_name,priority,deadline,source_uri,business_goal}` | Domain |
 | `attachmentNotes`, `attachments` | `RequirementSpec.attachment_notes`, `Requirement.attachments`, frozen `Attachment` entries | Domain |
 | `extraTopicRequirementsText` | `RequirementSpec.extra_topic_requirements_text` | Domain; raw text retained losslessly |
@@ -79,7 +79,7 @@ Every item in the persisted `GlobalFieldGroup` union has a corresponding
 ## Attachment and envelope fields
 
 `RequirementAttachment.{id,name,size,contentType,storageKey,uploadedAt}` maps to
-`Attachment.{name,uid,filename,size_bytes,media_type,storage_key,create_time}`.
+`Attachment.{name,uid,source_id,filename,size_bytes,media_type,storage_key,create_time}`.
 A public HTTPS value, when configured later, maps to `Attachment.uri`; it is not
 fabricated during conversion. Upload-init values (`uploadId`, part size, maximum
 size), upload-part ETags, HTTP authorization, and `ExportResult.path` are

@@ -1,3 +1,5 @@
+import { stableHash, stableJson } from './identity';
+
 export const migrationFormatVersion = 'coscene.sop.migration-manifest/v1';
 export const converterVersion = 'legacy-to-v1alpha1/v1';
 export const storageSchemaVersion = 'canonical-generations/v1';
@@ -33,3 +35,7 @@ export type MigrationManifest = {
 
 export type MigrationVersions = Pick<MigrationManifest,
   'converterVersion' | 'storageSchemaVersion' | 'canonicalSchemaVersion' | 'identityVersion'>;
+
+export function migrationGenerationId(sourceFingerprint: string, versions: MigrationVersions): string {
+  return `v1alpha1-${stableHash(stableJson({ sourceFingerprint, versions })).slice(0, 20)}`;
+}

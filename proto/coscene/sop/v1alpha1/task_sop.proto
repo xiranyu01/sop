@@ -124,8 +124,10 @@ message ObjectStates {
 
 // RobotState records human-readable initial and target robot conditions.
 message RobotState {
-  string initial = 1 [(buf.validate.field).string.min_len = 1];
-  string target = 2 [(buf.validate.field).string.min_len = 1];
+  // Drafts may be saved before these fields are complete. Confirmation applies
+  // the stricter lifecycle validation in the canonical TaskSop service.
+  string initial = 1 [(buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE];
+  string target = 2 [(buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE];
 }
 
 // RobotRandomization controls changes to robot initial state.
@@ -284,6 +286,7 @@ message TaskSop {
   optional string legacy_scene_display_name = 15 [(buf.validate.field).string.max_len = 256];
   optional string legacy_subscene_display_name = 16 [(buf.validate.field).string.max_len = 256];
   optional string legacy_subscene_code = 17 [(buf.validate.field).string.max_len = 128];
+  optional string source_id = 18 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // TaskSopRevision is an immutable historical snapshot of a TaskSop.
@@ -315,4 +318,5 @@ message TaskSopRevision {
   ];
   google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
   FrozenDependencyContext frozen_dependencies = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string source_version_id = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
 }

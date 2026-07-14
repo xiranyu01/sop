@@ -1,5 +1,7 @@
 import { handleApiRequest } from '../../server/api';
-import { createD1Store, type D1DatabaseLike } from '../../server/d1Store';
+import { createCanonicalD1AppStore, createD1Store, type D1DatabaseLike } from '../../server/d1Store';
+import { createCanonicalApiStore } from '../../server/domain/services/runtime';
+import { bootstrapValidatedD1Generation } from '../../server/migrations/d1RuntimeBootstrap';
 import { createR2AttachmentStore, type R2BucketLike } from '../../server/r2AttachmentStore';
 import { createS3AttachmentStore, getS3Attachment, hasS3AttachmentConfig, type S3AttachmentConfig } from '../../server/s3AttachmentStore';
 
@@ -106,7 +108,19 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
     }
   }
 
-  const result = await handleApiRequest(createD1Store(context.env.DB, attachmentStore(context.env)), {
+  const objects = attachmentStore(context.env);
+  const legacyStore = createD1Store(context.env.DB, objects);
+  const legacyData = await legacyStore.readData();
+  const migration = await bootstrapValidatedD1Generation(context.env.DB, legacyData);
+  const canonicalStore = createCanonicalD1AppStore(context.env.DB, {
+    bootstrap: { namespace: migration.generationId, snapshot: migration.snapshot },
+  });
+  const apiStore = createCanonicalApiStore(canonicalStore, {
+    namespace: migration.generationId,
+    attachments: objects,
+    writeExport: legacyStore.writeExport.bind(legacyStore),
+  });
+  const result = await handleApiRequest(apiStore, {
     method: context.request.method,
     pathname: url.pathname,
     search: url.search,

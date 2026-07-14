@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto';
+import { hexBytes, sha1, sha256 } from '../../shared/crypto/hash';
 
 export const identityVersion = 'identity-v1';
 
 // RFC 4122 URL namespace. The canonical URL below makes legacy identities
 // deterministic across local, D1, and repeated migration runs.
-const urlNamespace = Buffer.from('6ba7b8119dad11d180b400c04fd430c8', 'hex');
+const urlNamespace = hexBytes('6ba7b8119dad11d180b400c04fd430c8');
 
 const canonicalIdPattern = /^[a-z][a-z0-9-]{0,62}$/;
 
@@ -13,7 +13,7 @@ export function compareStable(left: string, right: string): number {
 }
 
 export function stableHash(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
+  return sha256(value);
 }
 
 export function stableJson(value: unknown): string {
@@ -31,10 +31,14 @@ export function stableJson(value: unknown): string {
 
 export function deterministicUid(kind: string, legacyIdentity: string): string {
   const name = `https://coscene.io/sop/${identityVersion}/${encodeURIComponent(kind)}/${encodeURIComponent(legacyIdentity)}`;
-  const bytes = createHash('sha1').update(urlNamespace).update(name, 'utf8').digest();
+  const nameBytes = new TextEncoder().encode(name);
+  const input = new Uint8Array(urlNamespace.length + nameBytes.length);
+  input.set(urlNamespace);
+  input.set(nameBytes, urlNamespace.length);
+  const bytes = hexBytes(sha1(input));
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString('hex');
+  const hex = [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 

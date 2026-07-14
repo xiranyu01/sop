@@ -158,6 +158,105 @@ function collectResourceReferences(value: unknown, prefix: string, result = new 
   return result;
 }
 
+type VocabularyReference = { group: LegacyGlobalFieldGroup; value: string; path: string };
+
+function taskVocabularyReferences(version: SubsceneVersion): VocabularyReference[] {
+  const refs: VocabularyReference[] = [];
+  const add = (group: LegacyGlobalFieldGroup, values: Array<string | undefined>, path: string) => {
+    values.forEach((value, index) => { if (value) refs.push({ group, value, path: `${path}[${index}]` }); });
+  };
+  add('robot_state', [version.robotState.initial, version.robotState.target], 'robotState');
+  const locations = [
+    ...version.objectStates.initial.flatMap((state) => state.allowedLocations),
+    ...version.objectStates.target.map((state) => ({
+      referencePath: state.referencePath ?? [], supportSurface: state.supportSurface,
+      allowedRegions: state.requiredRegions, allowedPose: state.requiredPose, allowedForm: state.requiredForm,
+      parameters: state.parameters ?? [],
+    })),
+  ];
+  locations.forEach((location, index) => {
+    add('reference_object', location.referencePath.map((item) => item.referenceObject), `objectStates.locations[${index}].referencePath.referenceObject`);
+    add('relative_position', location.referencePath.map((item) => item.relativePosition), `objectStates.locations[${index}].referencePath.relativePosition`);
+    add('support_surface', [location.supportSurface], `objectStates.locations[${index}].supportSurface`);
+    add('region', location.allowedRegions, `objectStates.locations[${index}].regions`);
+    add('pose', location.allowedPose, `objectStates.locations[${index}].poses`);
+    add('form', location.allowedForm, `objectStates.locations[${index}].forms`);
+    add('parameter', location.parameters ?? [], `objectStates.locations[${index}].parameters`);
+  });
+  add('parameter', (version.objectStates.duringOperation ?? []).flatMap((state) => state.parameters.map((item) => item.name)), 'objectStates.duringOperation.parameters');
+  add('robot_random_field', version.randomization.robotInitialState.randomizedFields.map((item) => item.field), 'randomization.robotInitialState.fields');
+  add('material_random_field', (version.randomization.materialInitialState.rules ?? []).flatMap((rule) => [
+    ...rule.randomizedFields.locations.flatMap((item) => [item.name, item.valueSource]),
+    ...rule.randomizedFields.poses.flatMap((item) => [item.name, item.valueSource]),
+    ...rule.randomizedFields.forms.flatMap((item) => [item.name, item.valueSource]),
+  ]), 'randomization.materialInitialState.fields');
+  add('material_random_field', (version.randomization.materialStateDuringOperation?.rules ?? []).flatMap((rule) => rule.randomizedFields.parameters.map((item) => item.name)), 'randomization.materialStateDuringOperation.fields');
+  add('allowed_operation', version.operation.allowedOperations.map((item) => item.description), 'operation.allowed');
+  add('acceptable_operation', (version.operation.acceptableOperations ?? []).map((item) => item.description), 'operation.acceptable');
+  add('forbidden_operation', version.operation.forbiddenOperations.map((item) => item.description), 'operation.forbidden');
+  add('annotation_allowed_operation', (version.annotation.allowedOperations ?? []).map((item) => item.description), 'annotation.allowed');
+  add('annotation_forbidden_operation', (version.annotation.forbiddenOperations ?? []).map((item) => item.description), 'annotation.forbidden');
+  add('annotation_type', version.annotation.actionTags, 'annotation.actionTags');
+  for (const [index, rule] of (version.materialStateRules ?? []).entries()) {
+    add('reference_object', [...rule.primaryReferences, ...rule.secondaryReferences], `materialStateRules[${index}].references`);
+    add('relative_position', [...rule.primaryRelativePositions, ...rule.secondaryRelativePositions], `materialStateRules[${index}].relativePositions`);
+    add('support_surface', rule.supportSurfaces, `materialStateRules[${index}].supportSurfaces`);
+    add('region', rule.regions, `materialStateRules[${index}].regions`);
+    add('pose', rule.poses, `materialStateRules[${index}].poses`);
+    add('form', rule.forms, `materialStateRules[${index}].forms`);
+    add('parameter', rule.parameters, `materialStateRules[${index}].parameters`);
+  }
+  return refs;
+}
+
+function requirementVocabularyReferences(version: RequirementVersion): VocabularyReference[] {
+  const refs: VocabularyReference[] = [];
+  const add = (group: LegacyGlobalFieldGroup, values: Array<string | undefined>, path: string) => {
+    values.forEach((value, index) => { if (value) refs.push({ group, value, path: `${path}[${index}]` }); });
+  };
+  add('allowed_operation', version.allowedOperations.map((item) => item.operation), 'allowedOperations');
+  add('acceptable_operation', (version.acceptableOperations ?? []).map((item) => item.operation), 'acceptableOperations');
+  add('forbidden_operation', version.forbiddenOperations.flatMap((group) => group.operations.map((item) => item.operation)), 'forbiddenOperations');
+  add('annotation_allowed_operation', (version.annotation.allowedOperations ?? []).map((item) => item.operation), 'annotation.allowedOperations');
+  add('annotation_forbidden_operation', (version.annotation.forbiddenOperations ?? []).map((item) => item.operation), 'annotation.forbiddenOperations');
+  add('annotation_type', version.annotation.types, 'annotation.types');
+  add('sampling_policy', [version.qualityInspection.samplingPolicy], 'qualityInspection.samplingPolicy');
+  add('delivery_format', version.delivery.formats, 'delivery.formats');
+  add('delivery_method', [version.delivery.method], 'delivery.method');
+  add('delivery_language', version.delivery.languages.flatMap((item) => [item.code, item.name]), 'delivery.languages');
+  return refs;
+}
+
+function selectFrozenGlobalFields(
+  refs: VocabularyReference[],
+  fields: CanonicalSnapshot['globalFields'],
+  issues: MigrationIssue[],
+  owner: string,
+): CanonicalSnapshot['globalFields'] {
+  const selected = new Set<string>();
+  const reported = new Set<string>();
+  for (const ref of refs) {
+    const sameGroup = fields.filter((field) => field.group === globalFieldGroup[ref.group]);
+    const identifierMatches = sameGroup.filter((field) => field.name === ref.value || field.sourceId === ref.value);
+    const candidates = identifierMatches.length
+      ? identifierMatches
+      : sameGroup.filter((field) => field.value === ref.value || field.label === ref.value);
+    if (candidates.length === 1) selected.add(candidates[0].name);
+    if (candidates.length > 1) {
+      const key = `${ref.group}:${ref.value}`;
+      if (!reported.has(key)) {
+        reported.add(key);
+        issues.push({
+          code: 'AMBIGUOUS_REFERENCE', owner, path: ref.path,
+          message: `global field reference is ambiguous in ${ref.group}: ${ref.value}`,
+          candidates: candidates.map((field) => field.name),
+        });
+      }
+    }
+  }
+  return fields.filter((field) => selected.has(field.name));
+}
+
 function attachmentMessage(item: RequirementAttachment): Attachment {
   const name = resourceName('attachments', item.id);
   return create(AttachmentSchema, {
@@ -168,6 +267,7 @@ function attachmentMessage(item: RequirementAttachment): Attachment {
     sizeBytes: BigInt(item.size),
     storageKey: optional(item.storageKey),
     createTime: timestamp(item.uploadedAt),
+    sourceId: item.id,
   });
 }
 
@@ -198,9 +298,11 @@ function toTaskSpec(version: SubsceneVersion, materialNames: Map<string, string>
   const objectAliases = new Map<string, string[]>();
   const objects = version.materials.map((item, index) => {
     const id = canonicalId(item.materialId || item.type || `object-${index + 1}`, `${owner}:object:${index}`);
-    for (const alias of [item.materialId, item.type]) objectAliases.set(alias, [...(objectAliases.get(alias) ?? []), id]);
+    for (const alias of [item.materialId, item.type]) {
+      if (alias) objectAliases.set(alias, [...(objectAliases.get(alias) ?? []), id]);
+    }
     const material = materialNames.get(item.materialId);
-    if (!material) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: `materials[${index}].materialId`, message: `material not found: ${item.materialId}` });
+    if (item.materialId && !material) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: `materials[${index}].materialId`, message: `material not found: ${item.materialId}` });
     return {
       id,
       displayName: item.type || item.skuId || id,
@@ -218,6 +320,11 @@ function toTaskSpec(version: SubsceneVersion, materialNames: Map<string, string>
     };
   });
   const objectId = (alias: string, path: string) => {
+    // Empty selections are valid while editing a draft. The canonical schema
+    // still requires an object identifier, so keep a deterministic placeholder
+    // without treating the unfinished field as a dangling reference. Projection
+    // maps placeholders that do not belong to the task object set back to "".
+    if (!alias) return canonicalId('draft-object', `${owner}:${path}:empty`);
     const candidates = objectAliases.get(alias) ?? [];
     if (candidates.length === 1) return candidates[0];
     if (candidates.length > 1) issues.push({ code: 'AMBIGUOUS_REFERENCE', owner, path, message: `object alias is ambiguous: ${alias}`, candidates });
@@ -231,6 +338,7 @@ function toTaskSpec(version: SubsceneVersion, materialNames: Map<string, string>
     return undefined;
   };
   const imageNames = (ids: string[] | undefined, path: string) => (ids ?? []).flatMap((id) => {
+    if (!id) return [];
     const name = attachmentNames.get(id);
     if (!name) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path, message: `attachment not found: ${id}` });
     return name ? [name] : [];
@@ -314,18 +422,22 @@ function toTaskSpec(version: SubsceneVersion, materialNames: Map<string, string>
     collection: {
       stepOrder: optional(version.operation.stepOrder), steps: operationSteps(version.operation.steps, 'step'),
       policy: { allowed: operationRules(version.operation.allowedOperations, 'allowed'), acceptable: operationRules(version.operation.acceptableOperations, 'acceptable'), forbidden: operationRules(version.operation.forbiddenOperations, 'forbidden') },
-      stepRandomization: version.operation.stepRandomization ? { enabled: version.operation.stepRandomization.enabled, startStepNumber: version.operation.stepRandomization.startOrder, endStepNumber: version.operation.stepRandomization.endOrder } : undefined,
+      stepRandomization: version.operation.stepRandomization ? version.operation.stepRandomization.enabled
+        ? { enabled: true, startStepNumber: version.operation.stepRandomization.startOrder, endStepNumber: version.operation.stepRandomization.endOrder }
+        : { enabled: false } : undefined,
     },
     annotation: {
       readiness: { pending: AnnotationReadiness.PENDING, ready: AnnotationReadiness.READY, not_required: AnnotationReadiness.NOT_REQUIRED }[version.annotation.status],
       note: optional(version.annotation.note), actionTags: version.annotation.actionTags, steps: operationSteps(version.annotation.steps, 'annotation-step'),
       policy: { allowed: operationRules(version.annotation.allowedOperations, 'annotation-allowed'), forbidden: operationRules(version.annotation.forbiddenOperations, 'annotation-forbidden') },
-      stepRandomization: version.annotation.stepRandomization ? { enabled: version.annotation.stepRandomization.enabled, startStepNumber: version.annotation.stepRandomization.startOrder, endStepNumber: version.annotation.stepRandomization.endOrder } : undefined,
+      stepRandomization: version.annotation.stepRandomization ? version.annotation.stepRandomization.enabled
+        ? { enabled: true, startStepNumber: version.annotation.stepRandomization.startOrder, endStepNumber: version.annotation.stepRandomization.endOrder }
+        : { enabled: false } : undefined,
     },
     expectedDuration: durationHours(version.requiredDurationHours), robotOperationRequirements: optional(version.robotOperationRequirements),
     robotInitialRandomizationRequirements: version.robotInitialRandomizationRequirements ?? [], legacyRandomizationFrequency: optional(version.randomizationFrequency),
     materialStateRules: (version.materialStateRules ?? []).map((rule) => ({
-      name: resourceName('materialStateRules', rule.id), uid: deterministicUid('materialStateRule', rule.id),
+      name: resourceName('materialStateRules', rule.id), uid: deterministicUid('materialStateRule', rule.id), sourceId: rule.id,
       materialType: rule.materialType, primaryReferences: rule.primaryReferences, primaryRelativePositions: rule.primaryRelativePositions,
       supportSurfaces: rule.supportSurfaces, regions: rule.regions, secondaryReferences: rule.secondaryReferences,
       secondaryRelativePositions: rule.secondaryRelativePositions, poses: rule.poses, forms: rule.forms, parameters: rule.parameters,
@@ -384,7 +496,7 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
   for (const requirement of data.requirements) for (const version of requirement.versions) {
     const owner = `requirement:${requirement.id}/${version.version}`;
     validTimestamp(version.updatedAt, owner, 'updatedAt');
-    if (!dateValue(version.deadline)) issues.push({ code: 'INVALID_LEGACY_DATA', owner, path: 'deadline', message: `invalid date: ${version.deadline}` });
+    if (version.deadline && !dateValue(version.deadline)) issues.push({ code: 'INVALID_LEGACY_DATA', owner, path: 'deadline', message: `invalid date: ${version.deadline}` });
     if (version.requiredDurationHours < 0 && version.requiredDurationHours !== -1) issues.push({ code: 'INVALID_LEGACY_DATA', owner, path: 'requiredDurationHours', message: `negative duration is not the -1 unset sentinel: ${version.requiredDurationHours}` });
     version.selectedSubscenes.forEach((selected, index) => {
       if (selected.targetDurationHours < 0 && selected.targetDurationHours !== -1) issues.push({ code: 'INVALID_LEGACY_DATA', owner, path: `selectedSubscenes[${index}].targetDurationHours`, message: `negative duration is not the -1 unset sentinel: ${selected.targetDurationHours}` });
@@ -398,35 +510,35 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
 
   for (const item of data.customers) {
     const name = resourceName('customers', item.id); register(name, `customer:${item.id}`, [`customer:${item.id}`]);
-    const canonical = create(CustomerSchema, { name, uid: deterministicUid('customer', item.id), displayName: item.name, primaryContact: { displayName: optional(item.contact.name), phone: optional(item.contact.phone), email: optional(item.contact.email) }, notes: optional(item.notes) });
+    const canonical = create(CustomerSchema, { name, uid: deterministicUid('customer', item.id), sourceId: item.id, displayName: item.name, primaryContact: { displayName: optional(item.contact.name), phone: optional(item.contact.phone), email: optional(item.contact.email) }, notes: optional(item.notes) });
     snapshot.customers.push(canonical); recordFingerprints[`customer:${item.id}`] = fingerprintRecord(item, canonical);
   }
   for (const item of data.materials) {
     const name = resourceName('materials', item.id); register(name, `material:${item.id}`, [`material:${item.id}`, `material-sku:${item.skuId}`]);
-    const canonical = create(MaterialSchema, { name, uid: deterministicUid('material', item.id), displayName: item.type || item.skuId, sku: optional(item.skuId), category: optional(item.type), colors: item.color ? [item.color] : [], compositions: item.material ? [item.material] : [], packaging: optional(item.packageType), size: optional(item.size), weight: optional(item.weight), images: (item.images ?? []).flatMap((image) => attachmentNames.get(image.id) ?? []) });
+    const canonical = create(MaterialSchema, { name, uid: deterministicUid('material', item.id), sourceId: item.id, displayName: item.type || item.skuId, sku: optional(item.skuId), category: optional(item.type), colors: item.color ? [item.color] : [], compositions: item.material ? [item.material] : [], packaging: optional(item.packageType), size: optional(item.size), weight: optional(item.weight), images: (item.images ?? []).flatMap((image) => attachmentNames.get(image.id) ?? []) });
     snapshot.materials.push(canonical); recordFingerprints[`material:${item.id}`] = fingerprintRecord(item, canonical);
   }
   for (const item of data.scenes) {
     const name = resourceName('scenes', item.id); register(name, `scene:${item.id}`, [`scene:${item.id}`, `scene-display:${item.name}`]);
-    const canonical = create(SceneSchema, { name, uid: deterministicUid('scene', item.id), displayName: item.name, description: optional(item.description) });
+    const canonical = create(SceneSchema, { name, uid: deterministicUid('scene', item.id), sourceId: item.id, displayName: item.name, description: optional(item.description) });
     snapshot.scenes.push(canonical); recordFingerprints[`scene:${item.id}`] = fingerprintRecord({ id: item.id, name: item.name, description: item.description }, canonical);
   }
   for (const item of data.globalFields) {
     const name = resourceName('globalFields', item.id); register(name, `globalField:${item.id}`, [`globalField:${item.id}`]);
-    const canonical = create(GlobalFieldSchema, { name, uid: deterministicUid('globalField', item.id), group: globalFieldGroup[item.group], label: item.label, value: item.value, category: optional(item.category), description: optional(item.description), status: item.status === 'active' ? GlobalFieldStatus.ACTIVE : GlobalFieldStatus.INACTIVE, updateTime: timestamp(item.updatedAt) });
+    const canonical = create(GlobalFieldSchema, { name, uid: deterministicUid('globalField', item.id), sourceId: item.id, group: globalFieldGroup[item.group], label: item.label, value: item.value, category: optional(item.category), description: optional(item.description), status: item.status === 'active' ? GlobalFieldStatus.ACTIVE : GlobalFieldStatus.INACTIVE, updateTime: timestamp(item.updatedAt) });
     snapshot.globalFields.push(canonical); recordFingerprints[`globalField:${item.id}`] = fingerprintRecord(item, canonical);
   }
   for (const item of data.materialStateRules) {
     const name = resourceName('materialStateRules', item.id); register(name, `materialStateRule:${item.id}`, [`materialStateRule:${item.id}`, `materialStateRule-type:${item.materialType}`]);
-    const canonical = create(MaterialStateRuleSchema, { name, uid: deterministicUid('materialStateRule', item.id), ...item, updateTime: timestamp(item.updatedAt) });
+    const canonical = create(MaterialStateRuleSchema, { name, uid: deterministicUid('materialStateRule', item.id), sourceId: item.id, ...item, updateTime: timestamp(item.updatedAt) });
     snapshot.materialStateRules.push(canonical); recordFingerprints[`materialStateRule:${item.id}`] = fingerprintRecord(item, canonical);
   }
 
   const robotById = new Map<string, string>();
   for (const item of data.robotModels) {
     const name = resourceName('robotModels', item.id); const revision = revisionName(name, '1.0.0', 'current');
-    const canonical = create(RobotModelSchema, { name, uid: deterministicUid('robotModel', item.id), displayName: [item.brand, item.model].filter(Boolean).join(' ') || item.id, manufacturer: optional(item.brand), modelCode: optional(item.model), endEffector: optional(item.terminal), topics: Object.entries(item.topics).sort(([a], [b]) => stableCompare(a, b)).map(([id, topic]) => ({ id: canonicalId(id, `${item.id}:topic:${id}`), topic })), extraTopicRequirements: Object.entries(item.extraTopicRequirements).sort(([a], [b]) => stableCompare(a, b)).map(([topicId, requirement]) => ({ topicId: canonicalId(topicId, `${item.id}:topic:${topicId}`), requirement })), currentRevision: revision });
-    snapshot.robotModels.push(canonical); snapshot.robotModelRevisions.push(create(RobotModelRevisionSchema, { name: revision, snapshot: canonical, versionLabel: '1.0.0' }));
+    const canonical = create(RobotModelSchema, { name, uid: deterministicUid('robotModel', item.id), sourceId: item.id, displayName: [item.brand, item.model].filter(Boolean).join(' ') || item.id, manufacturer: optional(item.brand), modelCode: optional(item.model), endEffector: optional(item.terminal), topics: Object.entries(item.topics).sort(([a], [b]) => stableCompare(a, b)).map(([id, topic]) => ({ id: canonicalId(id, `${item.id}:topic:${id}`), topic })), extraTopicRequirements: Object.entries(item.extraTopicRequirements).sort(([a], [b]) => stableCompare(a, b)).map(([topicId, requirement]) => ({ topicId: canonicalId(topicId, `${item.id}:topic:${topicId}`), requirement })), currentRevision: revision });
+    snapshot.robotModels.push(canonical); snapshot.robotModelRevisions.push(create(RobotModelRevisionSchema, { name: revision, snapshot: canonical, versionLabel: '1.0.0', sourceVersionId: 'current' }));
     robotById.set(item.id, revision); register(name, `robotModel:${item.id}`, [`robotModel:${item.id}`]); register(revision, `robotModelRevision:${item.id}`, [`robotModelRevision:${item.id}:current`]);
     recordFingerprints[`robotModel:${item.id}`] = fingerprintRecord(item, canonical);
   }
@@ -445,13 +557,21 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
       const previousRevision = version.parentVersionId ? revisionByVersionId.get(version.parentVersionId) : index > 0 ? revisionName(taskName, subscene.versions[index - 1].version, subscene.versions[index - 1].versionId) : undefined;
       if (version.parentVersionId && !previousRevision) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: 'parentVersionId', message: `parent revision not found: ${version.parentVersionId}` });
       const taskAttachments = (version.attachments ?? []).flatMap((item) => attachmentNames.get(item.id) ?? []);
-      const snapshotMessage = create(TaskSopSchema, { name: taskName, uid: deterministicUid('taskSop', taskLegacyId), displayName: version.title || subscene.name, description: optional(version.description), scene: sceneNames.get(scene.id)!, lifecycle: lifecycle(version.status), spec: toTaskSpec(version, materialNames, attachmentNames, issues, owner), attachments: taskAttachments, currentRevision: revName, updateTime: timestamp(version.updatedAt), referenceUris: version.references.recordUrls, referenceAttachments: version.references.attachments.map((item) => ({ fileToken: item.fileToken, filename: item.name, sizeBytes: BigInt(item.size) })), legacySceneDisplayName: optional(version.sceneName ?? scene.name), legacySubsceneDisplayName: optional(version.subsceneName ?? subscene.name), legacySubsceneCode: subscene.code });
+      const snapshotMessage = create(TaskSopSchema, { name: taskName, uid: deterministicUid('taskSop', taskLegacyId), sourceId: taskLegacyId, displayName: version.title || subscene.name, description: optional(version.description), scene: sceneNames.get(scene.id)!, lifecycle: lifecycle(version.status), spec: toTaskSpec(version, materialNames, attachmentNames, issues, owner), attachments: taskAttachments, currentRevision: revName, updateTime: timestamp(version.updatedAt), referenceUris: version.references.recordUrls, referenceAttachments: version.references.attachments.map((item) => ({ fileToken: item.fileToken, filename: item.name, sizeBytes: BigInt(item.size) })), legacySceneDisplayName: optional(version.sceneName ?? scene.name), legacySubsceneDisplayName: optional(version.subsceneName ?? subscene.name), legacySubsceneCode: subscene.code });
       const materialSet = new Set(snapshotMessage.spec?.objects.flatMap((object) => object.material ? [object.material] : []) ?? []);
       const frozenMaterials = snapshot.materials.filter((material) => materialSet.has(material.name));
+      const frozenGlobalFields = selectFrozenGlobalFields(taskVocabularyReferences(version), snapshot.globalFields, issues, owner);
       const attachmentSet = collectResourceReferences(snapshotMessage, 'attachments/');
       for (const material of frozenMaterials) for (const image of material.images) attachmentSet.add(image);
-      const frozen = create(FrozenDependencyContextSchema, { materials: frozenMaterials, scenes: snapshot.scenes.filter((candidate) => candidate.name === snapshotMessage.scene), attachments: snapshot.attachments.filter((attachment) => attachmentSet.has(attachment.name)) });
-      const revision = create(TaskSopRevisionSchema, { name: revName, snapshot: snapshotMessage, previousRevision, versionLabel: version.version, createTime: timestamp(version.updatedAt), frozenDependencies: frozen });
+      const embeddedRuleNames = new Set(snapshotMessage.spec?.materialStateRules.map((rule) => rule.name) ?? []);
+      const frozen = create(FrozenDependencyContextSchema, {
+        materials: frozenMaterials,
+        scenes: snapshot.scenes.filter((candidate) => candidate.name === snapshotMessage.scene),
+        globalFields: frozenGlobalFields,
+        materialStateRules: snapshot.materialStateRules.filter((rule) => embeddedRuleNames.has(rule.name)),
+        attachments: snapshot.attachments.filter((attachment) => attachmentSet.has(attachment.name)),
+      });
+      const revision = create(TaskSopRevisionSchema, { name: revName, snapshot: snapshotMessage, previousRevision, versionLabel: version.version, createTime: timestamp(version.updatedAt), frozenDependencies: frozen, sourceVersionId: version.versionId });
       revisions.push(revision); register(revName, owner, [version.versionId ? `taskSopRevision-id:${version.versionId}` : '', `taskSopRevision-display:${scene.name}/${subscene.name}/${version.version}`, `taskSopRevision-title:${scene.name}/${version.title}/${version.version}`]);
       taskCandidates.push({ revision: revName, sceneName: scene.name, code: subscene.code, subsceneName: subscene.name, title: version.title, version: version.version, versionId: version.versionId, lifecycle: lifecycle(version.status) });
       recordFingerprints[owner] = fingerprintRecord(version, revision);
@@ -484,18 +604,19 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
     const revisionByVersionId = new Map(item.versions.filter((version) => version.versionId).map((version) => [version.versionId!, revisionName(name, version.version, version.versionId)]));
     const revisions = item.versions.map((version, versionIndex) => {
       const revName = revisionName(name, version.version, version.versionId); const owner = `requirementRevision:${item.id}/${version.version}`;
-      const customerName = registry.aliases.get(`customer:${version.customerId}`);
-      if (!customerName) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: 'customerId', message: `customer not found: ${version.customerId}` });
-      const robotRevision = robotById.get(version.robotModelId);
-      if (!robotRevision) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: 'robotModelId', message: `robot model not found: ${version.robotModelId}` });
+      const customerName = version.customerId ? registry.aliases.get(`customer:${version.customerId}`) : undefined;
+      if (version.customerId && !customerName) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: 'customerId', message: `customer not found: ${version.customerId}` });
+      const robotRevision = version.robotModelId ? robotById.get(version.robotModelId) : undefined;
+      if (version.robotModelId && !robotRevision) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: 'robotModelId', message: `robot model not found: ${version.robotModelId}` });
       const productionItems = version.selectedSubscenes.map((selected, index) => {
-        const resolved = resolveTaskRevision(selected, owner, index);
+        const hasTaskSelection = Boolean(selected.taskSop || selected.version || selected.subsceneCode || selected.subsceneName);
+        const resolved = hasTaskSelection ? resolveTaskRevision(selected, owner, index) : undefined;
         const target = selected.targetDurationHours > 0 || (selected.targetCollectionCount ?? 0) > 0 ? { duration: durationHours(selected.targetDurationHours), collectionCount: selected.targetCollectionCount && selected.targetCollectionCount > 0 ? BigInt(selected.targetCollectionCount) : undefined } : undefined;
         return { id: canonicalId(selected.id ?? selected.subsceneCode ?? `item-${index + 1}`, `${owner}:item:${index}`), displayName: selected.title ?? selected.subsceneName ?? resolved?.title ?? `Item ${index + 1}`, description: optional(selected.description), taskSopRevision: resolved?.revision ?? '', target, legacySceneName: optional(selected.sceneName), legacySubsceneCode: optional(selected.subsceneCode), legacySubsceneName: optional(selected.subsceneName), legacyVersionLabel: optional(selected.taskSop?.version ?? selected.version), legacyVersionId: optional(selected.taskSop?.versionId), legacyParentVersionId: optional(selected.taskSop?.parentVersionId), legacyLifecycle: selected.taskSop?.status ? lifecycle(selected.taskSop.status) : resolved?.lifecycle };
       });
       const attachmentList = (version.attachments ?? []).flatMap((attachment) => attachmentNames.get(attachment.id) ?? []);
       const canonical = create(RequirementSchema, {
-        name, uid: deterministicUid('requirement', item.id), displayName: version.title, lifecycle: lifecycle(version.status), attachments: attachmentList, currentRevision: revName, updateTime: timestamp(version.updatedAt),
+        name, uid: deterministicUid('requirement', item.id), sourceId: item.id, displayName: version.title, lifecycle: lifecycle(version.status), attachments: attachmentList, currentRevision: revName, updateTime: timestamp(version.updatedAt),
         spec: {
           customer: customerName ?? '', robotModelRevision: robotRevision ?? '', projectDisplayName: optional(version.projectName), businessGoal: version.businessGoal, deadline: dateValue(version.deadline), sourceUri: optional(version.sourceBaseUrl), priority: priority(version.priority), requestedSceneNames: version.requestedScenes,
           aggregateTarget: version.requiredDurationHours > 0 ? { duration: durationHours(version.requiredDurationHours) } : undefined,
@@ -508,8 +629,12 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
       const previousRevision = version.parentVersionId ? revisionByVersionId.get(version.parentVersionId) : versionIndex > 0 ? revisionName(name, item.versions[versionIndex - 1].version, item.versions[versionIndex - 1].versionId) : undefined;
       if (version.parentVersionId && !previousRevision) issues.push({ code: 'UNRESOLVED_REFERENCE', owner, path: 'parentVersionId', message: `parent revision not found: ${version.parentVersionId}` });
       const requirementAttachmentSet = new Set(attachmentList);
-      const frozen = create(FrozenDependencyContextSchema, { customers: snapshot.customers.filter((customer) => customer.name === customerName), attachments: snapshot.attachments.filter((attachment) => requirementAttachmentSet.has(attachment.name)) });
-      const revision = create(RequirementRevisionSchema, { name: revName, snapshot: canonical, previousRevision, versionLabel: version.version, createTime: timestamp(version.updatedAt), frozenDependencies: frozen });
+      const frozen = create(FrozenDependencyContextSchema, {
+        customers: snapshot.customers.filter((customer) => customer.name === customerName),
+        globalFields: selectFrozenGlobalFields(requirementVocabularyReferences(version), snapshot.globalFields, issues, owner),
+        attachments: snapshot.attachments.filter((attachment) => requirementAttachmentSet.has(attachment.name)),
+      });
+      const revision = create(RequirementRevisionSchema, { name: revName, snapshot: canonical, previousRevision, versionLabel: version.version, createTime: timestamp(version.updatedAt), frozenDependencies: frozen, sourceVersionId: version.versionId });
       register(revName, owner, [version.versionId ? `requirementRevision-id:${version.versionId}` : '']); recordFingerprints[owner] = fingerprintRecord(version, revision);
       return revision;
     });

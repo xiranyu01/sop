@@ -43,6 +43,7 @@ message Customer {
   google.protobuf.Timestamp create_time = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
   google.protobuf.Timestamp update_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
   string etag = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string source_id = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Attachment is immutable binary metadata. Retrieval URIs must remain stable.
@@ -87,6 +88,7 @@ message Attachment {
   ];
   google.protobuf.Timestamp create_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
   optional string storage_key = 9 [(buf.validate.field).string.max_len = 1024];
+  optional string source_id = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Material is a reusable catalog material. Task revisions freeze required attributes separately.
@@ -126,6 +128,7 @@ message Material {
   string etag = 12 [(google.api.field_behavior) = OUTPUT_ONLY];
   optional string size = 13 [(buf.validate.field).string.max_len = 128];
   optional string weight = 14 [(buf.validate.field).string.max_len = 128];
+  optional string source_id = 15 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // MaterialDescriptor freezes the exact scalar attributes selected for a task.
@@ -166,6 +169,7 @@ message Scene {
   google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
   google.protobuf.Timestamp update_time = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
   string etag = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string source_id = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // TopicBinding defines one stable robot topic and its collection constraints.
@@ -223,6 +227,7 @@ message RobotModel {
     (buf.validate.field).string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
   ];
   repeated TopicAdditionalRequirement extra_topic_requirements = 12;
+  optional string source_id = 13 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // RobotModelRevision is an immutable historical snapshot of robot configuration.
@@ -253,6 +258,7 @@ message RobotModelRevision {
     (buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
   ];
   google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string source_version_id = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // GlobalField is one persisted item in a shared editor vocabulary.
@@ -288,6 +294,7 @@ message GlobalField {
   }];
   google.protobuf.Timestamp update_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
   string etag = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string source_id = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // MaterialStateRule constrains the location/state vocabulary for one material type.
@@ -321,6 +328,7 @@ message MaterialStateRule {
   repeated string parameters = 12;
   google.protobuf.Timestamp update_time = 13 [(google.api.field_behavior) = OUTPUT_ONLY];
   string etag = 14 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string source_id = 15 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // FrozenDependencyContext is captured inside an immutable confirmed revision.

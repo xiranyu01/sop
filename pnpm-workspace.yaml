@@ -1,4 +1,5 @@
 allowBuilds:
+  '@bufbuild/buf': true
   esbuild: true
   sharp: true
   workerd: true

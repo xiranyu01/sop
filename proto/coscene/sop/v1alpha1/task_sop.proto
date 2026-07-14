@@ -1,0 +1,258 @@
+syntax = "proto3";
+
+package coscene.sop.v1alpha1;
+
+import "buf/validate/validate.proto";
+import "coscene/sop/v1alpha1/catalog.proto";
+import "coscene/sop/v1alpha1/common.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// TaskObject is a stable object within one TaskSop. Other task fields reference its local ID.
+message TaskObject {
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  optional string material = 3 [
+    (google.api.resource_reference).type = "sop.coscene.io/Material",
+    (buf.validate.field).string.pattern = "^materials/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  Quantity quantity = 4;
+  repeated string roles = 5;
+  repeated Attribute attributes = 6;
+  repeated string images = 7 [
+    (google.api.resource_reference).type = "sop.coscene.io/Attachment",
+    (buf.validate.field).repeated.items.string.pattern = "^attachments/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  MaterialDescriptor material_descriptor = 8;
+}
+
+// ReferenceRelation is one level in an ordered object-relative location path.
+message ReferenceRelation {
+  string object_id = 1 [(buf.validate.field).string.min_len = 1];
+  string relative_position = 2 [(buf.validate.field).string.min_len = 1];
+  uint32 level = 3 [(buf.validate.field).uint32.gt = 0];
+}
+
+// LocationConstraint describes one acceptable or required object placement.
+message LocationConstraint {
+  optional string display_name = 1 [(buf.validate.field).string.max_len = 256];
+  repeated ReferenceRelation reference_path = 2;
+  optional string support_surface = 3 [(buf.validate.field).string.max_len = 128];
+  repeated string regions = 4;
+  repeated string poses = 5;
+  repeated string forms = 6;
+  repeated Attribute parameters = 7;
+  repeated string constraints = 8;
+  optional string collector_instruction = 9 [(buf.validate.field).string.max_len = 4000];
+  repeated string example_images = 10 [
+    (google.api.resource_reference).type = "sop.coscene.io/Attachment",
+    (buf.validate.field).repeated.items.string.pattern = "^attachments/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+}
+
+// InitialObjectState lists all valid initial locations for one task object.
+message InitialObjectState {
+  string object_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated LocationConstraint allowed_locations = 2 [(buf.validate.field).repeated.min_items = 1];
+}
+
+// TargetObjectState specifies the required terminal state for one task object.
+message TargetObjectState {
+  string object_id = 1 [(buf.validate.field).string.min_len = 1];
+  LocationConstraint required_location = 2 [(buf.validate.field).required = true];
+}
+
+// ObjectStates separates permissible initial states from required target states.
+message ObjectStates {
+  repeated InitialObjectState initial = 1;
+  repeated TargetObjectState target = 2;
+}
+
+// RobotState records human-readable initial and target robot conditions.
+message RobotState {
+  string initial = 1 [(buf.validate.field).string.min_len = 1];
+  string target = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// RobotRandomization controls changes to robot initial state.
+message RobotRandomization {
+  option (buf.validate.message).cel = {
+    id: "robot_randomization.change_required_when_enabled"
+    message: "enabled robot randomization requires a change policy"
+    expression: "!this.enabled || has(this.change)"
+  };
+
+  bool enabled = 1;
+  ChangePolicy change = 2;
+  repeated RandomizedField fields = 3;
+}
+
+// ObjectRandomization controls changes to one or more task objects.
+message ObjectRandomization {
+  repeated string object_ids = 1 [(buf.validate.field).repeated.min_items = 1];
+  ChangePolicy change = 2 [(buf.validate.field).required = true];
+  repeated RandomizedField fields = 3 [(buf.validate.field).repeated.min_items = 1];
+  optional string collector_instruction = 4 [(buf.validate.field).string.max_len = 4000];
+  repeated string constraints = 5;
+  repeated string example_images = 6 [
+    (google.api.resource_reference).type = "sop.coscene.io/Attachment",
+    (buf.validate.field).repeated.items.string.pattern = "^attachments/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  repeated NamedValueSource locations = 7;
+  repeated NamedValueSource poses = 8;
+  repeated NamedValueSource forms = 9;
+}
+
+// Randomization contains all task randomization policies.
+message Randomization {
+  RobotRandomization robot_initial_state = 1;
+  repeated ObjectRandomization object_initial_states = 2;
+}
+
+// OperationPlan contains ordered steps and their policy.
+message OperationPlan {
+  option (buf.validate.message).cel = {
+    id: "operation_plan.randomization_range_in_bounds"
+    message: "step randomization must end within the operation step list"
+    expression: "!has(this.step_randomization) || !this.step_randomization.enabled || this.step_randomization.end_step_number <= uint(this.steps.size())"
+  };
+
+  repeated OperationStep steps = 1;
+  OperationPolicy policy = 2;
+  StepRandomization step_randomization = 3;
+  optional string step_order = 4 [(buf.validate.field).string.max_len = 4000];
+}
+
+// AnnotationPlan contains annotation-specific steps and policy.
+message AnnotationPlan {
+  option (buf.validate.message).cel = {
+    id: "annotation_plan.randomization_range_in_bounds"
+    message: "step randomization must end within the annotation step list"
+    expression: "!has(this.step_randomization) || !this.step_randomization.enabled || this.step_randomization.end_step_number <= uint(this.steps.size())"
+  };
+
+  repeated OperationStep steps = 1;
+  OperationPolicy policy = 2;
+  AnnotationReadiness readiness = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string note = 4 [(buf.validate.field).string.max_len = 4000];
+  repeated string action_tags = 5;
+  StepRandomization step_randomization = 6;
+}
+
+// TaskSopSpec is the complete desired task configuration.
+message TaskSopSpec {
+  repeated TaskObject objects = 1;
+  RobotState robot_state = 2;
+  ObjectStates object_states = 3;
+  Randomization randomization = 4;
+  OperationPlan collection = 5;
+  AnnotationPlan annotation = 6;
+  optional google.protobuf.Duration expected_duration = 7;
+  optional string robot_operation_requirements = 8 [(buf.validate.field).string.max_len = 4000];
+  repeated string robot_initial_randomization_requirements = 9;
+  optional string legacy_randomization_frequency = 10 [(buf.validate.field).string.max_len = 128];
+  repeated MaterialStateRule material_state_rules = 11;
+}
+
+// LegacyReferenceAttachment preserves existing externally managed reference metadata.
+message LegacyReferenceAttachment {
+  string file_token = 1 [(buf.validate.field).string.min_len = 1];
+  string filename = 2 [(buf.validate.field).string.min_len = 1];
+  int64 size_bytes = 3 [(buf.validate.field).int64.gte = 0];
+}
+
+// TaskSop is the current representation of a reusable task SOP.
+message TaskSop {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/TaskSop"
+    pattern: "taskSops/{task_sop}"
+    singular: "taskSop"
+    plural: "taskSops"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^taskSops/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  string display_name = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).string.min_len = 1
+  ];
+  optional string description = 4 [(buf.validate.field).string.max_len = 4000];
+  string scene = 5 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "sop.coscene.io/Scene",
+    (buf.validate.field).string.pattern = "^scenes/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  Lifecycle lifecycle = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  TaskSopSpec spec = 7 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true
+  ];
+  repeated string attachments = 8 [
+    (google.api.resource_reference).type = "sop.coscene.io/Attachment",
+    (buf.validate.field).repeated.items.string.pattern = "^attachments/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  string current_revision = 9 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference).type = "sop.coscene.io/TaskSopRevision",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^taskSops/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  google.protobuf.Timestamp create_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 12 [(google.api.field_behavior) = OUTPUT_ONLY];
+  repeated string reference_uris = 13 [(buf.validate.field).repeated.items.string.uri = true];
+  repeated LegacyReferenceAttachment reference_attachments = 14;
+  optional string legacy_scene_display_name = 15 [(buf.validate.field).string.max_len = 256];
+  optional string legacy_subscene_display_name = 16 [(buf.validate.field).string.max_len = 256];
+}
+
+// TaskSopRevision is an immutable historical snapshot of a TaskSop.
+message TaskSopRevision {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/TaskSopRevision"
+    pattern: "taskSops/{task_sop}/revisions/{revision}"
+    singular: "taskSopRevision"
+    plural: "taskSopRevisions"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^taskSops/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  TaskSop snapshot = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).required = true
+  ];
+  optional string previous_revision = 3 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference).type = "sop.coscene.io/TaskSopRevision",
+    (buf.validate.field).string.pattern = "^taskSops/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  string version_label = 4 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+  ];
+  google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  FrozenDependencyContext frozen_dependencies = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+}

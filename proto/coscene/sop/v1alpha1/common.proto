@@ -1,0 +1,195 @@
+syntax = "proto3";
+
+package coscene.sop.v1alpha1;
+
+import "buf/validate/validate.proto";
+
+// Lifecycle records the business-controlled maturity of a resource.
+enum Lifecycle {
+  LIFECYCLE_UNSPECIFIED = 0;
+  LIFECYCLE_DRAFT = 1;
+  LIFECYCLE_CONFIRMED = 2;
+  LIFECYCLE_ARCHIVED = 3;
+}
+
+// ChangeFrequency controls when randomized state must change.
+enum ChangeFrequency {
+  CHANGE_FREQUENCY_UNSPECIFIED = 0;
+  CHANGE_FREQUENCY_EVERY_RECORD = 1;
+  CHANGE_FREQUENCY_EVERY_N_RECORDS = 2;
+  CHANGE_FREQUENCY_PER_BATCH = 3;
+  CHANGE_FREQUENCY_FIXED = 4;
+}
+
+// Priority is the negotiated business priority of a requirement.
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_P0 = 1;
+  PRIORITY_P1 = 2;
+  PRIORITY_P2 = 3;
+  PRIORITY_P3 = 4;
+}
+
+// AnnotationReadiness records whether task-level annotation instructions are usable.
+enum AnnotationReadiness {
+  ANNOTATION_READINESS_UNSPECIFIED = 0;
+  ANNOTATION_READINESS_PENDING = 1;
+  ANNOTATION_READINESS_READY = 2;
+  ANNOTATION_READINESS_NOT_REQUIRED = 3;
+}
+
+// GlobalFieldStatus controls whether a shared vocabulary item is selectable.
+enum GlobalFieldStatus {
+  GLOBAL_FIELD_STATUS_UNSPECIFIED = 0;
+  GLOBAL_FIELD_STATUS_ACTIVE = 1;
+  GLOBAL_FIELD_STATUS_INACTIVE = 2;
+}
+
+// GlobalFieldGroup identifies every persisted shared-vocabulary namespace.
+enum GlobalFieldGroup {
+  GLOBAL_FIELD_GROUP_UNSPECIFIED = 0;
+  GLOBAL_FIELD_GROUP_ROBOT_STATE = 1;
+  GLOBAL_FIELD_GROUP_REFERENCE_OBJECT = 2;
+  GLOBAL_FIELD_GROUP_RELATIVE_POSITION = 3;
+  GLOBAL_FIELD_GROUP_SUPPORT_SURFACE = 4;
+  GLOBAL_FIELD_GROUP_REGION = 5;
+  GLOBAL_FIELD_GROUP_POSE = 6;
+  GLOBAL_FIELD_GROUP_FORM = 7;
+  GLOBAL_FIELD_GROUP_PARAMETER = 8;
+  GLOBAL_FIELD_GROUP_ALLOWED_OPERATION = 9;
+  GLOBAL_FIELD_GROUP_ACCEPTABLE_OPERATION = 10;
+  GLOBAL_FIELD_GROUP_FORBIDDEN_OPERATION = 11;
+  GLOBAL_FIELD_GROUP_ANNOTATION_ALLOWED_OPERATION = 12;
+  GLOBAL_FIELD_GROUP_ANNOTATION_FORBIDDEN_OPERATION = 13;
+  GLOBAL_FIELD_GROUP_RANDOM_FIELD = 14;
+  GLOBAL_FIELD_GROUP_ROBOT_RANDOM_FIELD = 15;
+  GLOBAL_FIELD_GROUP_MATERIAL_RANDOM_FIELD = 16;
+  GLOBAL_FIELD_GROUP_ANNOTATION_TYPE = 17;
+  GLOBAL_FIELD_GROUP_DELIVERY_FORMAT = 18;
+  GLOBAL_FIELD_GROUP_DELIVERY_LANGUAGE = 19;
+  GLOBAL_FIELD_GROUP_DELIVERY_METHOD = 20;
+  GLOBAL_FIELD_GROUP_SAMPLING_POLICY = 21;
+}
+
+// NumericRange is an inclusive numeric interval.
+message NumericRange {
+  option (buf.validate.message).cel = {
+    id: "numeric_range.ordered"
+    message: "min_value must not be greater than max_value"
+    expression: "this.min_value <= this.max_value"
+  };
+
+  double min_value = 1 [(buf.validate.field).double.gte = 0];
+  double max_value = 2 [(buf.validate.field).double.gte = 0];
+}
+
+// Quantity represents either one fixed amount or an inclusive range.
+message Quantity {
+  oneof amount {
+    option (buf.validate.oneof).required = true;
+
+    double fixed_value = 1 [(buf.validate.field).double.gt = 0];
+    NumericRange range = 2;
+  }
+
+  // Unit is a stable unit code, not localized display text.
+  string unit = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 32
+    pattern: "^[a-z][a-z0-9-]*$"
+  }];
+}
+
+// Attribute freezes task-specific object properties in a revision snapshot.
+message Attribute {
+  string key = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z][a-z0-9-]*$"
+  }];
+  repeated string values = 2 [(buf.validate.field).repeated.min_items = 1];
+}
+
+// OperationStep is one stable, addressable step in an ordered operation plan.
+message OperationStep {
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+  string description = 2 [(buf.validate.field).string.min_len = 1];
+  optional string atomic_skill = 3 [(buf.validate.field).string.max_len = 128];
+  uint32 order = 4 [(buf.validate.field).uint32.gt = 0];
+  optional string english_description = 5 [(buf.validate.field).string.max_len = 4000];
+  optional string english_atomic_skill = 6 [(buf.validate.field).string.max_len = 128];
+}
+
+// OperationRule is a stable rule used by collection and annotation policies.
+message OperationRule {
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+  string description = 2 [(buf.validate.field).string.min_len = 1];
+  optional string category = 3 [(buf.validate.field).string.max_len = 63];
+  optional string note = 4 [(buf.validate.field).string.max_len = 2000];
+}
+
+// OperationPolicy normalizes allowed, acceptable, and forbidden operations.
+message OperationPolicy {
+  repeated OperationRule allowed = 1;
+  repeated OperationRule acceptable = 2;
+  repeated OperationRule forbidden = 3;
+}
+
+// ChangePolicy describes how often randomized values must change.
+message ChangePolicy {
+  option (buf.validate.message).cel = {
+    id: "change_policy.frequency_required"
+    message: "frequency must be specified"
+    expression: "this.frequency != 0"
+  };
+  option (buf.validate.message).cel = {
+    id: "change_policy.interval_matches_frequency"
+    message: "interval_records must be set if and only if frequency is EVERY_N_RECORDS"
+    expression: "(this.frequency == 2) == has(this.interval_records)"
+  };
+
+  ChangeFrequency frequency = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional int32 interval_records = 2 [(buf.validate.field).int32.gt = 0];
+}
+
+// RandomizedField identifies one stable business field within its containing
+// robot-state or task-object randomization context.
+message RandomizedField {
+  string field_id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+  repeated string constraints = 2;
+  optional string display_name = 3 [(buf.validate.field).string.max_len = 256];
+}
+
+// NamedValueSource preserves a selectable randomization field and its source.
+message NamedValueSource {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  string value_source = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// StepRandomization selects an inclusive, one-based step range.
+message StepRandomization {
+  option (buf.validate.message).cel = {
+    id: "step_randomization.complete_range"
+    message: "enabled randomization requires an ordered step range; disabled randomization must omit it"
+    expression: "this.enabled ? (has(this.start_step_number) && has(this.end_step_number) && this.start_step_number <= this.end_step_number) : (!has(this.start_step_number) && !has(this.end_step_number))"
+  };
+
+  bool enabled = 1;
+  optional uint32 start_step_number = 2 [(buf.validate.field).uint32.gt = 0];
+  optional uint32 end_step_number = 3 [(buf.validate.field).uint32.gt = 0];
+}

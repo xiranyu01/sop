@@ -1,0 +1,335 @@
+syntax = "proto3";
+
+package coscene.sop.v1alpha1;
+
+import "buf/validate/validate.proto";
+import "coscene/sop/v1alpha1/common.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+
+// Contact is a human point of contact. Missing values are omitted.
+message Contact {
+  optional string display_name = 1 [(buf.validate.field).string.max_len = 128];
+  optional string phone = 2 [(buf.validate.field).string.max_len = 64];
+  optional string email = 3 [(buf.validate.field).string.email = true];
+}
+
+// Customer is the customer that owns a requirement.
+message Customer {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/Customer"
+    pattern: "customers/{customer}"
+    singular: "customer"
+    plural: "customers"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^customers/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  string display_name = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).string.min_len = 1
+  ];
+  Contact primary_contact = 4;
+  optional string notes = 5 [(buf.validate.field).string.max_len = 4000];
+  google.protobuf.Timestamp create_time = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Attachment is immutable binary metadata. Retrieval URIs must remain stable.
+message Attachment {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/Attachment"
+    pattern: "attachments/{attachment}"
+    singular: "attachment"
+    plural: "attachments"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^attachments/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  string filename = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).string.min_len = 1
+  ];
+  string media_type = 4 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).string.pattern = "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+  ];
+  int64 size_bytes = 5 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).int64.gte = 0
+  ];
+  string uri = 6 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uri = true
+  ];
+  optional string sha256 = 7 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.pattern = "^[a-f0-9]{64}$"
+  ];
+  google.protobuf.Timestamp create_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string storage_key = 9 [(buf.validate.field).string.max_len = 1024];
+}
+
+// Material is a reusable catalog material. Task revisions freeze required attributes separately.
+message Material {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/Material"
+    pattern: "materials/{material}"
+    singular: "material"
+    plural: "materials"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^materials/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  string display_name = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).string.min_len = 1
+  ];
+  optional string sku = 4 [(buf.validate.field).string.max_len = 128];
+  optional string category = 5 [(buf.validate.field).string.max_len = 128];
+  repeated string colors = 6;
+  repeated string compositions = 7;
+  optional string packaging = 8 [(buf.validate.field).string.max_len = 128];
+  repeated string images = 9 [
+    (google.api.resource_reference).type = "sop.coscene.io/Attachment",
+    (buf.validate.field).repeated.items.string.pattern = "^attachments/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  google.protobuf.Timestamp create_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 12 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string size = 13 [(buf.validate.field).string.max_len = 128];
+  optional string weight = 14 [(buf.validate.field).string.max_len = 128];
+}
+
+// MaterialDescriptor freezes the exact scalar attributes selected for a task.
+message MaterialDescriptor {
+  optional string sku = 1 [(buf.validate.field).string.max_len = 128];
+  optional string category = 2 [(buf.validate.field).string.max_len = 128];
+  optional string color = 3 [(buf.validate.field).string.max_len = 128];
+  optional string composition = 4 [(buf.validate.field).string.max_len = 128];
+  optional string packaging = 5 [(buf.validate.field).string.max_len = 128];
+  optional string size = 6 [(buf.validate.field).string.max_len = 128];
+  optional string weight = 7 [(buf.validate.field).string.max_len = 128];
+}
+
+// Scene is a stable environment identity. Task SOPs are independent resources.
+message Scene {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/Scene"
+    pattern: "scenes/{scene}"
+    singular: "scene"
+    plural: "scenes"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^scenes/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  string display_name = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).string.min_len = 1
+  ];
+  optional string description = 4 [(buf.validate.field).string.max_len = 4000];
+  google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// TopicBinding defines one stable robot topic and its collection constraints.
+message TopicBinding {
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+  string topic = 2 [(buf.validate.field).string.min_len = 1];
+  optional NumericRange frequency_hz = 3;
+  repeated string constraints = 4;
+}
+
+// TopicAdditionalRequirement preserves free-form requirements keyed by topic ID.
+message TopicAdditionalRequirement {
+  string topic_id = 1 [(buf.validate.field).string.min_len = 1];
+  string requirement = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// RobotModel is a reusable robot hardware and topic definition.
+message RobotModel {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/RobotModel"
+    pattern: "robotModels/{robot_model}"
+    singular: "robotModel"
+    plural: "robotModels"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  string display_name = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).string.min_len = 1
+  ];
+  optional string manufacturer = 4 [(buf.validate.field).string.max_len = 128];
+  optional string model_code = 5 [(buf.validate.field).string.max_len = 128];
+  optional string end_effector = 6 [(buf.validate.field).string.max_len = 128];
+  repeated TopicBinding topics = 7;
+  google.protobuf.Timestamp create_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string current_revision = 11 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference).type = "sop.coscene.io/RobotModelRevision",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  repeated TopicAdditionalRequirement extra_topic_requirements = 12;
+}
+
+// RobotModelRevision is an immutable historical snapshot of robot configuration.
+message RobotModelRevision {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/RobotModelRevision"
+    pattern: "robotModels/{robot_model}/revisions/{revision}"
+    singular: "robotModelRevision"
+    plural: "robotModelRevisions"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  RobotModel snapshot = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).required = true
+  ];
+  optional string previous_revision = 3 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference).type = "sop.coscene.io/RobotModelRevision",
+    (buf.validate.field).string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  string version_label = 4 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+  ];
+  google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// GlobalField is one persisted item in a shared editor vocabulary.
+message GlobalField {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/GlobalField"
+    pattern: "globalFields/{global_field}"
+    singular: "globalField"
+    plural: "globalFields"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^globalFields/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  GlobalFieldGroup group = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string label = 4 [(buf.validate.field).string.min_len = 1];
+  string value = 5 [(buf.validate.field).string.min_len = 1];
+  optional string category = 6 [(buf.validate.field).string.max_len = 128];
+  optional string description = 7 [(buf.validate.field).string.max_len = 4000];
+  GlobalFieldStatus status = 8 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  google.protobuf.Timestamp update_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// MaterialStateRule constrains the location/state vocabulary for one material type.
+message MaterialStateRule {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/MaterialStateRule"
+    pattern: "materialStateRules/{material_state_rule}"
+    singular: "materialStateRule"
+    plural: "materialStateRules"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^materialStateRules/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  string material_type = 3 [(buf.validate.field).string.min_len = 1];
+  repeated string primary_references = 4;
+  repeated string primary_relative_positions = 5;
+  repeated string support_surfaces = 6;
+  repeated string regions = 7;
+  repeated string secondary_references = 8;
+  repeated string secondary_relative_positions = 9;
+  repeated string poses = 10;
+  repeated string forms = 11;
+  repeated string parameters = 12;
+  google.protobuf.Timestamp update_time = 13 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 14 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// FrozenDependencyContext is captured inside an immutable confirmed revision.
+// Embedded values are never re-read from mutable catalogs during export.
+message FrozenDependencyContext {
+  repeated Customer customers = 1;
+  repeated Material materials = 2;
+  repeated Scene scenes = 3;
+  repeated GlobalField global_fields = 4;
+  repeated MaterialStateRule material_state_rules = 5;
+  repeated Attachment attachments = 6;
+}

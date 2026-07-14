@@ -1,10 +1,15 @@
 import cors from 'cors';
 import express from 'express';
 import { handleApiRequest } from './api';
-import { fileStore, localAttachmentPath } from './store';
+import { createFileStore } from './store';
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
+const fileStore = createFileStore({
+  dataDir: process.env.SOP_DATA_DIR,
+  uploadsDir: process.env.SOP_UPLOADS_DIR,
+  exportsDir: process.env.SOP_EXPORTS_DIR,
+});
 
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
   const arrayBuffer = new ArrayBuffer(buffer.byteLength);
@@ -36,7 +41,7 @@ app.get(/^\/api\/attachments\/(.+)$/, (req, res) => {
     res.status(401).json({ message: '访问密码无效或已过期' });
     return;
   }
-  res.download(localAttachmentPath(decodeURIComponent(req.params[0])));
+  res.download(fileStore.localAttachmentPath(decodeURIComponent(req.params[0])));
 });
 
 app.all('/api/*', async (req, res) => {

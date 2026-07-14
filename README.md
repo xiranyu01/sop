@@ -2,6 +2,8 @@
 
 一个轻量的 SOP 客户需求管理工具，用来管理客户、物料、机器型号、场景/任务 SOP 版本、全局字段和客户需求版本。需求可以导出为 `requirement_yaml_v0.11` YAML，任务 SOP 可以单独导出为 `task_sop_yaml_v0.5` YAML，两者都支持导出 PDF 便于沟通和归档。
 
+新的规范化领域模型正在 `proto/coscene/sop/v1alpha1/` 中定义。设计边界、资源名、revision 语义和后续运行时迁移范围见 [`docs/proto-v1alpha1.md`](docs/proto-v1alpha1.md)。当前应用仍运行旧的 TypeScript/JSON 模型，Proto 尚未接管运行时读写或 YAML 导出。
+
 线上主部署建议使用 Cloudflare Pages + Pages Functions + D1。GitHub Pages 只能托管静态页面，不能运行本项目的 `/api/*` 写入接口，也不能提供共享数据存储。
 
 ## 主要能力

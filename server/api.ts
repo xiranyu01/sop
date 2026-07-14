@@ -11,77 +11,9 @@ import type {
   Scene,
   SubsceneVersion,
 } from '../src/types';
+import type { LegacyApiStore, ApiRequest, ApiResponse } from '../shared/transport/restDto';
 import { buildRequirementYaml, buildTaskSopYaml } from './yamlExport';
 import { canEditStatus, createId, createShortId, nextPatchVersion, nowIso } from './versioning';
-
-export type AppStore = {
-  readData(): Promise<AppData>;
-  writeCustomers(customers: Customer[]): Promise<Customer[]>;
-  writeMaterials(materials: Material[]): Promise<Material[]>;
-  writeRobotModels(robotModels: RobotModel[]): Promise<RobotModel[]>;
-  writeScenes(scenes: Scene[]): Promise<Scene[]>;
-  writeRequirements(requirements: Requirement[]): Promise<Requirement[]>;
-  writeGlobalFields(globalFields: GlobalField[]): Promise<GlobalField[]>;
-  writeMaterialStateRules(materialStateRules: MaterialStateRule[]): Promise<MaterialStateRule[]>;
-  writeExport(requirementId: string, version: string, yaml: string): Promise<string>;
-  createAttachmentUpload?(input: AttachmentUploadInput): Promise<AttachmentUploadSession>;
-  uploadAttachmentPart?(input: AttachmentPartInput): Promise<AttachmentPartOutput>;
-  completeAttachmentUpload?(input: AttachmentCompleteInput): Promise<void>;
-  abortAttachmentUpload?(input: AttachmentAbortInput): Promise<void>;
-  deleteAttachment?(storageKey: string): Promise<void>;
-};
-
-export type ApiRequest = {
-  method: string;
-  pathname: string;
-  search?: string;
-  body?: unknown;
-  rawBody?: ArrayBuffer;
-  authorization?: string | null;
-  attachmentPublicBaseUrl?: string;
-  auth?: {
-    password?: string;
-    requireConfigured?: boolean;
-  };
-};
-
-export type ApiResponse = {
-  status: number;
-  body: unknown;
-  headers?: Record<string, string>;
-};
-
-export type AttachmentUploadInput = {
-  storageKey: string;
-  contentType: string;
-};
-
-export type AttachmentUploadSession = {
-  uploadId: string;
-  storageKey: string;
-};
-
-export type AttachmentPartInput = {
-  storageKey: string;
-  uploadId: string;
-  partNumber: number;
-  body: ArrayBuffer;
-};
-
-export type AttachmentPartOutput = {
-  etag: string;
-};
-
-export type AttachmentCompleteInput = {
-  storageKey: string;
-  uploadId: string;
-  parts: Array<{ partNumber: number; etag: string }>;
-};
-
-export type AttachmentAbortInput = {
-  storageKey: string;
-  uploadId: string;
-};
 
 const maxAttachmentSize = 1024 * 1024 * 1024;
 const attachmentPartSize = 16 * 1024 * 1024;
@@ -193,8 +125,8 @@ function attachmentStorageKey(scope: string, ownerId: string, version: string, a
   return `${scope}/${ownerId}/${version}/${attachmentId}-${safeName}`;
 }
 
-function requireAttachmentStore(store: AppStore): asserts store is AppStore &
-  Required<Pick<AppStore, 'createAttachmentUpload' | 'uploadAttachmentPart' | 'completeAttachmentUpload' | 'abortAttachmentUpload' | 'deleteAttachment'>> {
+function requireAttachmentStore(store: LegacyApiStore): asserts store is LegacyApiStore &
+  Required<Pick<LegacyApiStore, 'createAttachmentUpload' | 'uploadAttachmentPart' | 'completeAttachmentUpload' | 'abortAttachmentUpload' | 'deleteAttachment'>> {
   if (
     !store.createAttachmentUpload ||
     !store.uploadAttachmentPart ||
@@ -413,7 +345,7 @@ function assertAuthorized(request: ApiRequest): ApiResponse | undefined {
   return undefined;
 }
 
-export async function handleApiRequest(store: AppStore, request: ApiRequest): Promise<ApiResponse> {
+export async function handleApiRequest(store: LegacyApiStore, request: ApiRequest): Promise<ApiResponse> {
   const authError = assertAuthorized(request);
   if (authError) return authError;
 

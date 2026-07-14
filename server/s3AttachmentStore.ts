@@ -6,7 +6,7 @@ import type {
   AttachmentPartOutput,
   AttachmentUploadInput,
   AttachmentUploadSession,
-} from './api';
+} from './domain/attachmentObjectStore';
 import type { AttachmentObject, AttachmentStore } from './r2AttachmentStore';
 
 export type S3AttachmentConfig = {

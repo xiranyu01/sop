@@ -1,4 +1,12 @@
-import type { AttachmentAbortInput, AttachmentCompleteInput, AttachmentPartInput, AttachmentPartOutput, AttachmentUploadInput, AttachmentUploadSession, AppStore } from './api';
+import type {
+  AttachmentAbortInput,
+  AttachmentCompleteInput,
+  AttachmentObjectStore,
+  AttachmentPartInput,
+  AttachmentPartOutput,
+  AttachmentUploadInput,
+  AttachmentUploadSession,
+} from './domain/attachmentObjectStore';
 
 type R2MultipartUploadLike = {
   uploadId: string;
@@ -22,12 +30,7 @@ export type R2BucketLike = {
   delete(key: string): Promise<void>;
 };
 
-export type AttachmentStore = Partial<
-  Pick<
-    AppStore,
-    'createAttachmentUpload' | 'uploadAttachmentPart' | 'completeAttachmentUpload' | 'abortAttachmentUpload' | 'deleteAttachment'
-  >
->;
+export type AttachmentStore = Partial<AttachmentObjectStore>;
 
 function requireBucket(bucket?: R2BucketLike): R2BucketLike {
   if (!bucket) {

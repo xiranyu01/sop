@@ -7,12 +7,24 @@
     "dev": "concurrently \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
     "server": "tsx watch server/index.ts",
     "client": "vite --host 127.0.0.1",
-    "build": "tsc && vite build",
+    "build": "pnpm proto:check && tsc && vite build",
     "typecheck": "tsc --noEmit",
+    "proto:generate": "buf generate --clean",
+    "proto:format": "buf format -w",
+    "proto:check": "buf format -d --exit-code && buf lint && buf build",
+    "proto:lint": "buf lint",
+    "proto:build": "buf build",
+    "proto:drift": "node scripts/check-proto-drift.mjs",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:baseline": "playwright test",
     "pages:dev": "pnpm build && wrangler pages dev dist --d1 DB=sop-prod --binding APP_PASSWORD=dev-password --compatibility-date=2026-06-25",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "2.12.1",
+    "@bufbuild/protovalidate": "1.2.0",
     "@vitejs/plugin-react": "^4.3.4",
     "aws4fetch": "^1.0.20",
     "concurrently": "^9.1.2",
@@ -26,11 +38,15 @@
     "yaml": "^2.6.1"
   },
   "devDependencies": {
+    "@bufbuild/buf": "1.71.0",
+    "@bufbuild/protoc-gen-es": "2.12.1",
+    "@playwright/test": "1.51.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "vitest": "3.2.4",
     "wrangler": "^4.23.0"
   }
 }

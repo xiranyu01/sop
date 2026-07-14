@@ -9,3 +9,6 @@ uploads
 !.env.example
 .dev.vars
 .wrangler
+test-results
+playwright-report
+.pnpm-store

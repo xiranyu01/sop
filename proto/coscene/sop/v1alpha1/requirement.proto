@@ -1,0 +1,199 @@
+syntax = "proto3";
+
+package coscene.sop.v1alpha1;
+
+import "buf/validate/validate.proto";
+import "coscene/sop/v1alpha1/catalog.proto";
+import "coscene/sop/v1alpha1/common.proto";
+import "coscene/sop/v1alpha1/task_sop.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "google/type/date.proto";
+
+// TopicRequirement adds requirement-specific constraints to a robot topic binding.
+message TopicRequirement {
+  string topic_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated string constraints = 2 [(buf.validate.field).repeated.min_items = 1];
+}
+
+// GlobalRequirements apply to every production item in the requirement.
+message GlobalRequirements {
+  repeated TopicRequirement topics = 1;
+  optional string randomization_notes = 2 [(buf.validate.field).string.max_len = 4000];
+  optional string additional_notes = 3 [(buf.validate.field).string.max_len = 4000];
+  OperationPolicy collection_policy = 4;
+  OperationPolicy annotation_policy = 5;
+}
+
+// DeliveryRequirements describes the required delivery contract.
+message DeliveryRequirements {
+  repeated string formats = 1;
+  optional string method = 2 [(buf.validate.field).string.max_len = 128];
+  repeated DeliveryLanguage languages = 3;
+  optional string data_structure_uri = 4 [(buf.validate.field).string.uri = true];
+}
+
+// DeliveryLanguage retains both the interoperable code and persisted display name.
+message DeliveryLanguage {
+  string code = 1 [(buf.validate.field).string.min_len = 1];
+  optional string display_name = 2 [(buf.validate.field).string.max_len = 128];
+}
+
+// AnnotationRequirements describes whether and how delivered data is annotated.
+message AnnotationRequirements {
+  bool required = 1;
+  repeated string types = 2;
+}
+
+// QualityInspectionRequirements describes delivery inspection expectations.
+message QualityInspectionRequirements {
+  bool required = 1;
+  optional string sampling_policy = 2 [(buf.validate.field).string.max_len = 128];
+}
+
+// WorkloadTarget uses field presence to distinguish zero from an unspecified target.
+message WorkloadTarget {
+  option (buf.validate.message).cel = {
+    id: "workload_target.non_empty"
+    message: "at least one positive workload target must be set"
+    expression: "has(this.duration) || has(this.collection_count)"
+  };
+
+  google.protobuf.Duration duration = 1 [(buf.validate.field).duration.gt = {}];
+  optional int64 collection_count = 2 [(buf.validate.field).int64.gt = 0];
+}
+
+// ProductionItem pins one workload target to an immutable TaskSopRevision.
+message ProductionItem {
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  optional string description = 3 [(buf.validate.field).string.max_len = 4000];
+  string task_sop_revision = 4 [
+    (google.api.resource_reference).type = "sop.coscene.io/TaskSopRevision",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^taskSops/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  WorkloadTarget target = 5;
+  optional string legacy_scene_name = 6 [(buf.validate.field).string.max_len = 256];
+  optional string legacy_subscene_code = 7 [(buf.validate.field).string.max_len = 128];
+  optional string legacy_subscene_name = 8 [(buf.validate.field).string.max_len = 256];
+  optional string legacy_version_label = 9 [(buf.validate.field).string.max_len = 64];
+  optional string legacy_version_id = 10 [(buf.validate.field).string.max_len = 128];
+  optional string legacy_parent_version_id = 11 [(buf.validate.field).string.max_len = 128];
+  optional Lifecycle legacy_lifecycle = 12 [(buf.validate.field).enum.defined_only = true];
+}
+
+// RequirementSpec is the complete desired production requirement.
+message RequirementSpec {
+  string customer = 1 [
+    (google.api.resource_reference).type = "sop.coscene.io/Customer",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^customers/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string robot_model_revision = 2 [
+    (google.api.resource_reference).type = "sop.coscene.io/RobotModelRevision",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  optional string project_display_name = 3 [(buf.validate.field).string.max_len = 256];
+  string business_goal = 4 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.max_len = 4000
+  ];
+  google.type.Date deadline = 5;
+  optional string source_uri = 6 [(buf.validate.field).string.uri = true];
+  GlobalRequirements global_requirements = 7;
+  DeliveryRequirements delivery = 8;
+  AnnotationRequirements annotation = 9;
+  QualityInspectionRequirements quality_inspection = 10;
+  repeated ProductionItem production_items = 11;
+  Priority priority = 12 [(buf.validate.field).enum.defined_only = true];
+  WorkloadTarget aggregate_target = 13;
+  repeated string requested_scene_names = 14;
+  optional string attachment_notes = 15 [(buf.validate.field).string.max_len = 4000];
+  optional string extra_topic_requirements_text = 16 [(buf.validate.field).string.max_len = 4000];
+}
+
+// Requirement is the current representation of a customer production requirement.
+message Requirement {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/Requirement"
+    pattern: "requirements/{requirement}"
+    singular: "requirement"
+    plural: "requirements"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^requirements/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  string uid = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.uuid = true
+  ];
+  string display_name = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).string.min_len = 1
+  ];
+  optional string description = 4 [(buf.validate.field).string.max_len = 4000];
+  Lifecycle lifecycle = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  RequirementSpec spec = 6 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true
+  ];
+  repeated string attachments = 7 [
+    (google.api.resource_reference).type = "sop.coscene.io/Attachment",
+    (buf.validate.field).repeated.items.string.pattern = "^attachments/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  string current_revision = 8 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference).type = "sop.coscene.io/RequirementRevision",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^requirements/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  google.protobuf.Timestamp create_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// RequirementRevision is an immutable historical snapshot of a Requirement.
+message RequirementRevision {
+  option (google.api.resource) = {
+    type: "sop.coscene.io/RequirementRevision"
+    pattern: "requirements/{requirement}/revisions/{revision}"
+    singular: "requirementRevision"
+    plural: "requirementRevisions"
+  };
+
+  string name = 1 [
+    (google.api.field_behavior) = IDENTIFIER,
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^requirements/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  Requirement snapshot = 2 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).required = true
+  ];
+  optional string previous_revision = 3 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.resource_reference).type = "sop.coscene.io/RequirementRevision",
+    (buf.validate.field).string.pattern = "^requirements/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  string version_label = 4 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+  ];
+  google.protobuf.Timestamp create_time = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  FrozenDependencyContext frozen_dependencies = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+}

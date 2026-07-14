@@ -27,6 +27,8 @@ class PagesD1 implements D1DatabaseLike {
   readonly generations = new Map<string, GenerationRow>();
   readonly namespaces = new Map<string, NamespaceRow>();
   readonly meta = new Map<string, string>();
+  appDataReads = 0;
+  createTableRuns = 0;
 
   prepare(query: string): D1PreparedStatementLike {
     const sql = query.replace(/\s+/g, ' ').trim();
@@ -36,6 +38,7 @@ class PagesD1 implements D1DatabaseLike {
       bind(...values: unknown[]) { this.values = values; return this; }
       async first<T>(): Promise<T | null> {
         if (sql === 'SELECT value FROM app_data WHERE key = ?') {
+          db.appDataReads += 1;
           const value = db.appData.get(String(this.values[0]));
           return (value === undefined ? null : { value }) as T | null;
         }
@@ -46,6 +49,10 @@ class PagesD1 implements D1DatabaseLike {
         if (sql.includes("canonical_store_meta WHERE key = 'runtime_namespace'")) {
           const value = db.meta.get('runtime_namespace');
           return (value === undefined ? null : { value }) as T | null;
+        }
+        if (sql.includes("canonical_store_meta WHERE key LIKE 'writes_reopened:%'")) {
+          const key = [...db.meta.keys()].find((item) => item.startsWith('writes_reopened:'));
+          return (key ? { key } : null) as T | null;
         }
         if (sql.includes("canonical_store_meta WHERE key = 'active_namespace'")) {
           const value = db.meta.get('active_namespace');
@@ -60,7 +67,10 @@ class PagesD1 implements D1DatabaseLike {
         throw new Error(`Unsupported first: ${sql}`);
       }
       async run(): Promise<D1RunResult> {
-        if (sql.startsWith('CREATE TABLE')) return { meta: { changes: 0 } };
+        if (sql.startsWith('CREATE TABLE')) {
+          db.createTableRuns += 1;
+          return { meta: { changes: 0 } };
+        }
         if (sql.startsWith('INSERT OR IGNORE INTO canonical_migration_generations')) {
           const generationId = String(this.values[0]);
           if (db.generations.has(generationId)) return { meta: { changes: 0 } };
@@ -187,7 +197,12 @@ describe('Pages attachment authorization and cleanup', () => {
       request: new Request('https://sop.example.test/api/canonical-data', {
         headers: { authorization: 'Bearer test-password' },
       }),
-      env: { DB: db, ATTACHMENTS: r2.bucket, APP_PASSWORD: 'test-password' },
+      env: {
+        DB: db,
+        ATTACHMENTS: r2.bucket,
+        APP_PASSWORD: 'test-password',
+        CANONICAL_ROLLBACK_LEASE_DAYS: '14',
+      },
     });
 
     expect(response.status).toBe(503);
@@ -196,6 +211,69 @@ describe('Pages attachment authorization and cleanup', () => {
     expect(db.meta.has('runtime_namespace')).toBe(false);
     expect(db.generations.get(result.candidateNamespace)?.lifecycle).toBe('VALIDATED');
     expect(db.namespaces.get(result.candidateNamespace)?.writable).toBe(0);
+    const lease = JSON.parse(db.meta.get(`rollback_attachment_lease:${result.candidateNamespace}`)!) as {
+      createdAt: string;
+      expiresAt: string;
+    };
+    expect(new Date(lease.expiresAt).getTime() - new Date(lease.createdAt).getTime()).toBe(14 * 24 * 60 * 60_000);
+  });
+
+  it('opens the published namespace without rereading legacy data or migration metadata', async () => {
+    const db = new PagesD1();
+    const r2 = fakeR2();
+    let request = pagesRequest(db, r2.bucket, '/api/canonical-data');
+    expect((await request.response).status).toBe(200);
+    await Promise.all(request.pending);
+    const readsAfterBootstrap = db.appDataReads;
+    const tableCreatesAfterBootstrap = db.createTableRuns;
+    const namespace = db.meta.get('runtime_namespace')!;
+    db.generations.get(namespace)!.report_json = '{corrupt';
+
+    request = pagesRequest(db, r2.bucket, '/api/canonical-data');
+    expect((await request.response).status).toBe(200);
+    await Promise.all(request.pending);
+    expect(db.appDataReads).toBe(readsAfterBootstrap);
+    expect(db.createTableRuns).toBe(tableCreatesAfterBootstrap);
+  });
+
+  it('keeps a published candidate read-only until the explicit reopen fence is recorded', async () => {
+    const db = new PagesD1();
+    const r2 = fakeR2();
+    const headers = { authorization: 'Bearer test-password', 'content-type': 'application/json' };
+    const prepared = await onRequest({
+      request: new Request('https://sop.example.test/api/canonical-data', { headers }),
+      env: { DB: db, ATTACHMENTS: r2.bucket, APP_PASSWORD: 'test-password' },
+    });
+    const { candidateNamespace } = await prepared.json() as { candidateNamespace: string };
+    db.meta.set('runtime_namespace', candidateNamespace);
+
+    const readable = await onRequest({
+      request: new Request('https://sop.example.test/api/canonical-data', { headers }),
+      env: { DB: db, ATTACHMENTS: r2.bucket, APP_PASSWORD: 'test-password' },
+    });
+    expect(readable.status).toBe(200);
+
+    const mutation = () => onRequest({
+      request: new Request('https://sop.example.test/api/customers', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ...seedData.customers[0], name: 'reopened customer' }),
+      }),
+      env: { DB: db, ATTACHMENTS: r2.bucket, APP_PASSWORD: 'test-password' },
+    });
+    expect((await mutation()).status).toBe(423);
+
+    db.meta.set(`writes_reopened:${candidateNamespace}`, new Date().toISOString());
+    const namespace = db.namespaces.get(candidateNamespace)!;
+    namespace.epoch += 1;
+    namespace.writable = 1;
+    expect((await mutation()).status).toBe(200);
+
+    db.meta.delete('runtime_namespace');
+    await expect(onRequest({
+      request: new Request('https://sop.example.test/api/canonical-data', { headers }),
+      env: { DB: db, ATTACHMENTS: r2.bucket, APP_PASSWORD: 'test-password' },
+    })).rejects.toThrow('forward recovery is required');
   });
 
   it('authorizes R2 downloads from canonical reachability and never fetches removed or external keys', async () => {

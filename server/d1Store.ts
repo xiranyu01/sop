@@ -43,6 +43,7 @@ type CanonicalD1Row = {
 export type CanonicalD1StoreOptions = {
   defaultNamespace?: string;
   bootstrap?: { namespace: string; snapshot: CanonicalSnapshot; writable?: boolean };
+  assumeInitialized?: boolean;
   faultInjection?: (point: 'before-atomic-update') => void | Promise<void>;
 };
 
@@ -85,8 +86,9 @@ function changed(result: D1RunResult): boolean | undefined {
 
 export function createCanonicalD1AppStore(db: D1DatabaseLike, options: CanonicalD1StoreOptions = {}): AppStore {
   const defaultNamespace = options.defaultNamespace ?? 'v1alpha1-default';
+  let initialization: Promise<void> | undefined = options.assumeInitialized ? Promise.resolve() : undefined;
 
-  async function initialize(): Promise<void> {
+  async function initializeStore(): Promise<void> {
     await ensureCanonicalTables(db, defaultNamespace);
     if (options.bootstrap && options.bootstrap.namespace !== defaultNamespace) {
       await db.prepare(`INSERT OR IGNORE INTO canonical_namespaces
@@ -99,6 +101,17 @@ export function createCanonicalD1AppStore(db: D1DatabaseLike, options: Canonical
           new Date().toISOString(),
         ).run();
     }
+  }
+
+  function initialize(): Promise<void> {
+    if (!initialization) {
+      const pending = initializeStore();
+      initialization = pending;
+      void pending.catch(() => {
+        if (initialization === pending) initialization = undefined;
+      });
+    }
+    return initialization;
   }
 
   async function diagnoseRejectedMutation(pin: StorePin): Promise<never> {
@@ -133,12 +146,22 @@ export function createCanonicalD1AppStore(db: D1DatabaseLike, options: Canonical
       if (Number(before.generation) !== pin.generation) throw new AtomicCommitError(`Canonical D1 generation changed for ${pin.namespace}`);
       const snapshot = await mutation(decodeCanonicalSnapshot(before.snapshot_json));
       const encoded = encodeCanonicalSnapshot(snapshot);
+      if (encoded === before.snapshot_json) {
+        return { pin: rowPin(before), snapshot: decodeCanonicalSnapshot(encoded) };
+      }
       await options.faultInjection?.('before-atomic-update');
       const result = await db.prepare(`UPDATE canonical_namespaces
         SET snapshot_json = ?, generation = generation + 1, updated_at = ?
         WHERE namespace = ? AND epoch = ? AND generation = ? AND writable = 1`)
         .bind(encoded, new Date().toISOString(), pin.namespace, pin.epoch, pin.generation).run();
-      if (changed(result) === false) return diagnoseRejectedMutation(pin);
+      const didChange = changed(result);
+      if (didChange === false) return diagnoseRejectedMutation(pin);
+      if (didChange === true) {
+        return {
+          pin: { ...pin, generation: pin.generation + 1 },
+          snapshot: decodeCanonicalSnapshot(encoded),
+        };
+      }
       const after = await canonicalRow(db, pin.namespace);
       if (after.snapshot_json !== encoded || Number(after.generation) !== pin.generation + 1) return diagnoseRejectedMutation(pin);
       return { pin: rowPin(after), snapshot: decodeCanonicalSnapshot(encoded) };
@@ -149,7 +172,9 @@ export function createCanonicalD1AppStore(db: D1DatabaseLike, options: Canonical
         SET epoch = epoch + 1, writable = ?, updated_at = ?
         WHERE namespace = ? AND epoch = ?`)
         .bind(writable ? 1 : 0, new Date().toISOString(), pin.namespace, pin.epoch).run();
-      if (changed(result) === false) return diagnoseRejectedMutation(pin);
+      const didChange = changed(result);
+      if (didChange === false) return diagnoseRejectedMutation(pin);
+      if (didChange === true) return { ...pin, epoch: pin.epoch + 1, writable };
       const after = await canonicalRow(db, pin.namespace);
       if (Number(after.epoch) !== pin.epoch + 1 || Boolean(after.writable) !== writable) return diagnoseRejectedMutation(pin);
       return rowPin(after);

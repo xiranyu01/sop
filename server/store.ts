@@ -165,9 +165,13 @@ export function createCanonicalFileAppStore(options: CanonicalFileStoreOptions):
         if (manifest.generation !== pin.generation) {
           throw new AtomicCommitError(`Canonical file generation changed for ${pin.namespace}`);
         }
-        const current = decodeCanonicalSnapshot(await readFile(generationFile(pin.namespace, pin.generation), 'utf-8'));
+        const currentEncoded = await readFile(generationFile(pin.namespace, pin.generation), 'utf-8');
+        const current = decodeCanonicalSnapshot(currentEncoded);
         const next = await mutation(current);
         const encoded = encodeCanonicalSnapshot(next);
+        if (encoded === currentEncoded) {
+          return { pin, snapshot: decodeCanonicalSnapshot(encoded) };
+        }
         const generation = manifest.generation + 1;
         try {
           await options.faultInjection?.('before-generation-publish');

@@ -63,7 +63,7 @@ pnpm test:e2e:pages
 3. 构建命令使用 `pnpm build`，输出目录为 `dist`，Node 使用 22。
 4. 严格按照[生产切换手册](docs/storage-migration-v1alpha1.md)准备 generation、核验、显式激活、只读烟测和 reopen。
 
-生产环境不要设置 `CANONICAL_BOOTSTRAP_MODE=auto`。默认行为是只构建、校验并冻结候选 namespace，返回 `503` 和 `candidateNamespace`，由操作员完成受控切换。`auto` 只用于本地 `pnpm pages:dev` 和隔离 CI E2E。
+生产环境不要设置 `CANONICAL_BOOTSTRAP_MODE=auto`。默认行为是只构建、校验并冻结候选 namespace，返回 `503` 和 `candidateNamespace`，由操作员完成受控切换。`auto` 只用于本地 `pnpm pages:dev` 和隔离 CI E2E。回滚附件租约默认从候选准备时起保留 7 天；若“准备 + 审批 + 观察 + 回滚窗口”更长，应在首次准备前设置正整数 `CANONICAL_ROLLBACK_LEASE_DAYS`。
 
 本地模拟 Pages Functions：
 

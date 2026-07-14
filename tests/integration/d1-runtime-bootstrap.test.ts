@@ -37,6 +37,10 @@ class RuntimeD1 implements D1DatabaseLike {
           const value = db.meta.get('runtime_namespace');
           return (value ? { value } : null) as T | null;
         }
+        if (sql.includes("canonical_store_meta WHERE key LIKE 'writes_reopened:%'")) {
+          const key = [...db.meta.keys()].find((item) => item.startsWith('writes_reopened:'));
+          return (key ? { key } : null) as T | null;
+        }
         if (sql.includes('FROM canonical_migration_generations WHERE generation_id = ?')) {
           return (db.generations.get(String(this.values[0])) ?? null) as T | null;
         }

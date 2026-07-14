@@ -1,9 +1,11 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import YAML from 'yaml';
 import type { Requirement } from '../../shared/transport/restDto';
-import { apiJson, authHeaders, openAuthenticated } from './helpers/app';
+import { apiJson, authHeaders, installPrintObserver, openAuthenticated, waitForPrintedDocument } from './helpers/app';
 
-test('Requirement create → update → confirm → patch draft → delete and TaskSop navigation remain stable', async ({ page, request }, testInfo) => {
+test('Requirement create → update → confirm → export → patch draft → delete and TaskSop navigation remain stable', async ({ page, request }, testInfo) => {
+  await installPrintObserver(page);
   const title = `E2E 关联需求 R${testInfo.retry}`;
   let requirements = await apiJson<Requirement[]>(request, 'POST', '/api/requirements', {
     title,
@@ -24,28 +26,67 @@ test('Requirement create → update → confirm → patch draft → delete and T
   });
   expect(requirements.find((item) => item.id === requirement.id)?.versions[0].businessGoal).toBe('更新后的业务目标');
 
-  requirements = await apiJson<Requirement[]>(request, 'POST', `/api/requirements/${requirement.id}/confirm`, { version: '0.0.1' });
-  expect(requirements.find((item) => item.id === requirement.id)?.versions[0].status).toBe('confirmed');
-  const exported = await apiJson<{ yaml: string }>(request, 'POST', `/api/requirements/${requirement.id}/export-yaml`, { version: '0.0.1' });
-  const exportedDocument = YAML.parse(exported.yaml);
+  await openAuthenticated(page);
+  await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
+  await page.getByRole('button', { name: new RegExp(title) }).first().click();
+
+  const confirmResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`/api/requirements/${requirement.id}/confirm`) && response.request().method() === 'POST');
+  await page.getByRole('button', { name: '确认版本' }).click();
+  expect((await confirmResponse).ok()).toBeTruthy();
+  await expect(page.getByText('客户需求版本已确认')).toBeVisible();
+  await expect(page.getByText('当前版本已确认')).toBeVisible();
+
+  await page.reload();
+  await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
+  await page.getByRole('button', { name: new RegExp(title) }).first().click();
+  await expect(page.getByText('当前版本已确认')).toBeVisible();
+
+  await page.getByRole('button', { name: '导出' }).click();
+  const yamlDownloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出 YAML' }).click();
+  const yamlDownload = await yamlDownloadPromise;
+  expect(yamlDownload.suggestedFilename()).toMatch(/E2E.*0\.0\.1\.yaml/);
+  const yamlPath = await yamlDownload.path();
+  expect(yamlPath).toBeTruthy();
+  const exportedDocument = YAML.parse(await readFile(yamlPath!, 'utf8'));
   expect(exportedDocument).toEqual(expect.objectContaining({
     format: 'coscene.sop.export', schema_version: '1.0.0', root: expect.objectContaining({ kind: 'requirement' }),
   }));
   expect(exportedDocument.requirements[0].spec.production_items[0].target.collection_count).toBe('2');
   expect(exportedDocument.task_sops).toHaveLength(1);
 
-  await openAuthenticated(page);
-  await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
-  await page.getByRole('button', { name: new RegExp(title) }).first().click();
+  await page.getByRole('button', { name: '导出' }).click();
+  await page.getByRole('button', { name: '导出 PDF' }).click();
+  const pdfFrame = page.frameLocator('iframe[title$="-0.0.1.pdf"]');
+  await expect(pdfFrame.locator('body')).toContainText(title);
+  await expect(pdfFrame.locator('body')).toContainText('0.0.1');
+  expect((await waitForPrintedDocument(page, title)).text).toContain('0.0.1');
+
   await page.getByRole('button', { name: '查看' }).last().click();
   await expect(page.getByRole('button', { name: '返回需求页' })).toBeVisible();
   await page.getByRole('button', { name: '返回需求页' }).click();
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
-  requirements = await apiJson<Requirement[]>(request, 'PUT', `/api/requirements/${requirement.id}`, { baseVersion: '0.0.1' });
-  expect(requirements.find((item) => item.id === requirement.id)?.versions.at(-1)?.status).toBe('draft');
-  requirements = await apiJson<Requirement[]>(request, 'DELETE', `/api/requirements/${requirement.id}/versions/0.0.2`);
-  expect(requirements.find((item) => item.id === requirement.id)?.versions).toHaveLength(1);
+  const createDraftResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`/api/requirements/${requirement.id}`) && response.request().method() === 'PUT');
+  await page.getByRole('button', { name: '编辑为草稿' }).click();
+  expect((await createDraftResponse).ok()).toBeTruthy();
+  await expect(page.getByText('已创建草稿版本')).toBeVisible();
+  await expect(page.getByLabel('版本')).toHaveValue('0.0.2');
+
+  const deleteDraftResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`/api/requirements/${requirement.id}/versions/0.0.2`) && response.request().method() === 'DELETE');
+  await page.getByRole('button', { name: '删除草稿' }).click();
+  expect((await deleteDraftResponse).ok()).toBeTruthy();
+  await expect(page.getByText('草稿版本已删除')).toBeVisible();
+  await expect(page.getByLabel('版本')).toHaveValue('0.0.1');
+
+  await page.reload();
+  await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
+  await page.getByRole('button', { name: new RegExp(title) }).first().click();
+  await expect(page.getByLabel('版本').locator('option')).toHaveCount(1);
+  await expect(page.getByText('当前版本已确认')).toBeVisible();
 });
 
 test('draft Requirement YAML is rejected by the confirmed-only export contract', async ({ request }, testInfo) => {

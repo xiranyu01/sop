@@ -20,9 +20,9 @@
     "migration": "tsx server/migrations/cli.ts",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:e2e": "playwright test",
-    "test:e2e:baseline": "playwright test",
-    "test:e2e:pages": "pnpm build && playwright test --config playwright.pages.config.ts",
+    "test:e2e": "playwright test --fail-on-flaky-tests",
+    "test:e2e:baseline": "playwright test --fail-on-flaky-tests",
+    "test:e2e:pages": "pnpm build && playwright test --fail-on-flaky-tests --config playwright.pages.config.ts",
     "verify": "pnpm proto:check && pnpm proto:drift && pnpm typecheck && pnpm test:unit && pnpm test:integration && pnpm build",
     "pages:dev": "pnpm build && wrangler pages dev dist --d1 DB=21d042f0-61d8-4344-b9eb-73b43c3c870d --binding APP_PASSWORD=dev-password --binding CANONICAL_BOOTSTRAP_MODE=auto --compatibility-date=2026-06-25",
     "preview": "vite preview --host 127.0.0.1"

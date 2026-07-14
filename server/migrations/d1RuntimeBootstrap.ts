@@ -51,6 +51,25 @@ async function runtimeNamespace(db: D1DatabaseLike): Promise<string | undefined>
   return row?.value;
 }
 
+async function reopenedNamespace(db: D1DatabaseLike): Promise<string | undefined> {
+  const row = await db.prepare("SELECT key FROM canonical_store_meta WHERE key LIKE 'writes_reopened:%' LIMIT 1").first<{ key: string }>();
+  return row?.key.slice('writes_reopened:'.length);
+}
+
+export async function readPublishedD1Runtime(db: D1DatabaseLike) {
+  let namespace: string | undefined;
+  try {
+    namespace = await runtimeNamespace(db);
+  } catch {
+    await ensureRuntimeTables(db);
+    namespace = await runtimeNamespace(db);
+  }
+  if (!namespace) return undefined;
+  const store = createCanonicalD1AppStore(db, { assumeInitialized: true });
+  const pin = await store.pin(namespace);
+  return { generationId: namespace, snapshot: await store.readSnapshot(pin), activated: true as const, writable: pin.writable, store };
+}
+
 const defaultRollbackAttachmentLeaseMs = 7 * 24 * 60 * 60_000;
 
 type RollbackLeaseAnchor = {
@@ -208,7 +227,15 @@ export async function bootstrapValidatedD1Generation(
   const clock = options.clock ?? (() => new Date());
   await ensureRuntimeTables(db);
   const anchored = await runtimeNamespace(db);
-  if (anchored) return { ...(await prepareRuntimeGeneration(db, anchored, rollbackLeaseMs, clock)), activated: true };
+  if (anchored) {
+    const prepared = await prepareRuntimeGeneration(db, anchored, rollbackLeaseMs, clock);
+    const pin = await createCanonicalD1AppStore(db).pin(anchored);
+    return { ...prepared, activated: true, writable: pin.writable };
+  }
+  const reopened = await reopenedNamespace(db);
+  if (reopened) {
+    throw new Error(`Canonical runtime marker is missing after writes reopened for ${reopened}; forward recovery is required`);
+  }
 
   const data = typeof source === 'function' ? await source() : source;
   const conversion = convertLegacyToV1alpha1(data);
@@ -268,11 +295,13 @@ export async function bootstrapValidatedD1Generation(
     const store = createCanonicalD1AppStore(db);
     const pin = await store.pin(generationId);
     if (pin.writable) await store.setWriteState(pin, false);
-    return { ...prepared, activated: false };
+    return { ...prepared, activated: false, writable: false };
   }
   await db.prepare("INSERT OR IGNORE INTO canonical_store_meta (key, value) VALUES ('runtime_namespace', ?)")
     .bind(generationId).run();
   const selected = await runtimeNamespace(db);
   if (!selected) throw new Error('Canonical runtime namespace marker was not published');
-  return { ...(selected === generationId ? prepared : await prepareRuntimeGeneration(db, selected, rollbackLeaseMs, clock)), activated: true };
+  const selectedGeneration = selected === generationId ? prepared : await prepareRuntimeGeneration(db, selected, rollbackLeaseMs, clock);
+  const pin = await createCanonicalD1AppStore(db).pin(selected);
+  return { ...selectedGeneration, activated: true, writable: pin.writable };
 }

@@ -16,7 +16,7 @@ import { buildRequirementYaml, buildTaskSopYaml } from './yamlExport';
 import { canEditStatus, createId, createShortId, nextPatchVersion, nowIso } from './versioning';
 import { isCanonicalApiStore } from './domain/services/runtime';
 import { publicAttachmentUri } from './domain/attachmentReachability';
-import { CanonicalDataError, ExportNotFoundError, StaleStoreEpochError } from './domain/errors';
+import { CanonicalDataError, ExportNotFoundError, StaleStoreEpochError, WriteFrozenError } from './domain/errors';
 import { resourceName, stableJson } from './migrations/identity';
 
 const maxAttachmentSize = 1024 * 1024 * 1024;
@@ -1267,6 +1267,7 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
     if (error instanceof ExportNotFoundError) return json(404, normalizeError(error));
     if (error instanceof CanonicalDataError) return json(400, normalizeError(error));
     if (error instanceof StaleStoreEpochError) return json(409, normalizeError(error));
+    if (error instanceof WriteFrozenError) return json(423, normalizeError(error));
     return json(500, normalizeError(error));
   }
 }

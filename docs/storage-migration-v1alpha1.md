@@ -39,7 +39,7 @@ pnpm exec wrangler d1 migrations apply sop-prod --remote
 
 ## 2. 部署 prepare-only 候选
 
-部署候选应用，保留 `DB`、附件 binding/secrets 和 `APP_PASSWORD`。不要配置 `CANONICAL_BOOTSTRAP_MODE`，也不要将其设为 `auto`。
+部署候选应用，保留 `DB`、附件 binding/secrets 和 `APP_PASSWORD`。不要配置 `CANONICAL_BOOTSTRAP_MODE`，也不要将其设为 `auto`。根据“准备 + 审批 + 观察 + 回滚窗口”的最长耗时，在首次准备前按需设置正整数 `CANONICAL_ROLLBACK_LEASE_DAYS`；未设置时默认 7 天。
 
 用授权请求访问任一业务 API，例如：
 
@@ -73,7 +73,7 @@ pnpm exec wrangler d1 execute sop-prod --remote --command "SELECT key, value FRO
 - namespace 恰好一行且 `writable = 0`；
 - 尚无 `runtime_namespace`；若已有，必须先确认它是否来自先前已完成的切换；
 - generation 的 schema/converter/identity 版本和候选构建一致；
-- rollback attachment lease 存在且过期时间覆盖批准的回滚窗口。
+- rollback attachment lease 存在，且其 `expiresAt` 覆盖“候选准备开始到预计 reopen 后回滚窗口结束”的完整时段。默认租约从准备时开始计时；若部署审批或观察期可能超过 7 天，必须在准备前提高租约时长并重新生成候选，不能依赖 reopen 自动续期。
 
 还应读取 `report_json` 并确认 `ok = true`，不存在 identity collision、缺失/歧义引用、坏时间或不可达托管附件。
 
@@ -102,14 +102,16 @@ namespace 仍为冻结状态。验证：
 
 ## 6. Reopen 写入
 
-先从上一步查询记录期望的 `<epoch>`，再执行 compare-and-swap：
+先从上一步查询记录期望的 `<epoch>`。第一条语句持久化不可逆的 reopen 证据；第二条语句只有在该证据存在且 namespace 仍处于预期冻结 epoch 时才执行 compare-and-swap：
 
 ```bash
-pnpm exec wrangler d1 execute sop-prod --remote --command "UPDATE canonical_namespaces SET epoch = epoch + 1, writable = 1, updated_at = datetime('now') WHERE namespace = '<candidate>' AND epoch = <epoch> AND writable = 0"
+pnpm exec wrangler d1 execute sop-prod --remote --command "INSERT OR IGNORE INTO canonical_store_meta (key, value) SELECT 'writes_reopened:<candidate>', datetime('now') FROM canonical_namespaces WHERE namespace = '<candidate>' AND epoch = <epoch> AND writable = 0"
+pnpm exec wrangler d1 execute sop-prod --remote --command "UPDATE canonical_namespaces SET epoch = epoch + 1, writable = 1, updated_at = datetime('now') WHERE namespace = '<candidate>' AND epoch = <epoch> AND writable = 0 AND EXISTS (SELECT 1 FROM canonical_store_meta WHERE key = 'writes_reopened:<candidate>')"
 pnpm exec wrangler d1 execute sop-prod --remote --command "SELECT namespace, epoch, writable, generation, updated_at FROM canonical_namespaces WHERE namespace = '<candidate>'"
+pnpm exec wrangler d1 execute sop-prod --remote --command "SELECT key, value FROM canonical_store_meta WHERE key = 'writes_reopened:<candidate>'"
 ```
 
-更新必须恰好影响一行，并且新状态为 `epoch = <epoch> + 1`、`writable = 1`。否则停止，不得无条件重试。
+reopen marker 必须存在；更新必须恰好影响一行，并且新状态为 `epoch = <epoch> + 1`、`writable = 1`。若 marker 已写入但 UPDATE 未生效，系统保持只读并禁止 marker 回滚，必须调查 epoch 竞争后向前恢复，不得删除 reopen marker 或无条件重试。
 
 从这一刻开始禁止通过删除或改写 `runtime_namespace` 回切旧模型，因为 canonical 写入可能已经发生。故障处理必须冻结当前 namespace、修复并向前迁移。
 
@@ -126,8 +128,10 @@ pnpm exec wrangler d1 execute sop-prod --remote --command "SELECT namespace, epo
 1. 用条件语句删除 marker：
 
    ```bash
-   pnpm exec wrangler d1 execute sop-prod --remote --command "DELETE FROM canonical_store_meta WHERE key = 'runtime_namespace' AND value = '<candidate>'"
+   pnpm exec wrangler d1 execute sop-prod --remote --command "DELETE FROM canonical_store_meta WHERE key = 'runtime_namespace' AND value = '<candidate>' AND NOT EXISTS (SELECT 1 FROM canonical_store_meta WHERE key = 'writes_reopened:<candidate>') AND EXISTS (SELECT 1 FROM canonical_namespaces WHERE namespace = '<candidate>' AND writable = 0)"
    ```
+
+   删除后必须确认 changes = 1。若为 0，说明 namespace 已 reopen、已不再冻结或 marker 已变化；此时禁止 marker 回滚，只能向前恢复。
 
 2. 重新部署已记录的 known-good deployment。
 3. 仅在 expand-only 迁移之外确有 D1 数据损坏时，按步骤 1 的 bookmark 使用 D1 Time Travel；不要为了删除空的新表而恢复整个数据库。

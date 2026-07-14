@@ -68,6 +68,7 @@ describe('durable attachment cleanup', () => {
     }];
     snapshot.operational.cleanupIntents = [deletionIntent('managed/race.bin')];
     const store = await storeWith(snapshot);
+    const before = await store.pin('validated');
     let deletes = 0;
     expect(await runAttachmentCleanup(store, {
       async deleteAttachment() { deletes += 1; },
@@ -75,6 +76,7 @@ describe('durable attachment cleanup', () => {
     }, { namespace: 'validated', clock: () => new Date('2026-07-14T00:00:00.000Z') }))
       .toEqual({ deleted: 0, aborted: 0, failed: 0 });
     expect(deletes).toBe(0);
+    expect((await store.pin('validated')).generation).toBe(before.generation);
   });
 
   it('removes an expired upload atomically after its TTL abort succeeds', async () => {

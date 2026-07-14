@@ -22,6 +22,8 @@ type Row = { namespace: string; epoch: number; writable: number; generation: num
 class MemoryD1 implements D1DatabaseLike {
   readonly rows = new Map<string, Row>();
   readonly meta = new Map<string, string>();
+  createTableRuns = 0;
+  afterSnapshotUpdate?: (row: Row) => void;
 
   prepare(query: string): D1PreparedStatementLike {
     const sql = query.replace(/\s+/g, ' ').trim();
@@ -38,7 +40,10 @@ class MemoryD1 implements D1DatabaseLike {
         throw new Error(`Unsupported first: ${sql}`);
       }
       async run(): Promise<D1RunResult> {
-        if (sql.startsWith('CREATE TABLE')) return { meta: { changes: 0 } };
+        if (sql.startsWith('CREATE TABLE')) {
+          db.createTableRuns += 1;
+          return { meta: { changes: 0 } };
+        }
         if (sql.startsWith('INSERT OR IGNORE INTO canonical_namespaces')) {
           const namespace = String(this.values[0]);
           if (db.rows.has(namespace)) return { meta: { changes: 0 } };
@@ -62,6 +67,7 @@ class MemoryD1 implements D1DatabaseLike {
           const row = db.rows.get(String(namespace));
           if (!row || row.epoch !== Number(epoch) || row.generation !== Number(generation) || !row.writable) return { meta: { changes: 0 } };
           row.snapshot_json = String(snapshot); row.generation += 1;
+          db.afterSnapshotUpdate?.(row);
           return { meta: { changes: 1 } };
         }
         if (sql.startsWith('UPDATE canonical_namespaces SET epoch')) {
@@ -151,6 +157,23 @@ describe('canonical repository atomicity', () => {
     const visiblePin = await store.pin();
     expect(visiblePin.generation).toBe(0);
     expect((await store.readSnapshot(visiblePin)).customers).toEqual([]);
+  });
+
+  it('initializes once and reports a successful CAS even when a later writer advances the row', async () => {
+    const db = new MemoryD1();
+    const store = createCanonicalD1AppStore(db);
+    const pin = await store.pin();
+    await store.readSnapshot(pin);
+    expect(db.createTableRuns).toBe(2);
+
+    db.afterSnapshotUpdate = (row) => {
+      db.afterSnapshotUpdate = undefined;
+      row.generation += 1;
+    };
+    const committed = await store.commit(pin, (snapshot) => ({ ...snapshot, customers: [customer] }));
+    expect(committed.pin.generation).toBe(pin.generation + 1);
+    expect(db.rows.get(pin.namespace)?.generation).toBe(pin.generation + 2);
+    expect(db.createTableRuns).toBe(2);
   });
 
   it('replays a concurrent whole API mutation against the winning generation for file and D1 parity', async () => {

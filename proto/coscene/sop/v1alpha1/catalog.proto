@@ -88,6 +88,7 @@ message Attachment {
   google.protobuf.Timestamp create_time = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
   optional string storage_key = 9 [(buf.validate.field).string.max_len = 1024];
   optional string source_id = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string etag = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Material is a reusable catalog material. Task revisions freeze required attributes separately.

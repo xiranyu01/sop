@@ -10,7 +10,7 @@ Local, preview, and production must use different Cloudflare resources:
 
 | Environment | D1 | R2 | secrets | bootstrap marker |
 | --- | --- | --- | --- | --- |
-| Local/E2E | isolated Wrangler persistence directory | isolated test bucket | ignored `.dev.vars` or CI store | local database only |
+| Local/E2E | `.wrangler/local` or isolated E2E temp directory | isolated local/test bucket | ignored `.dev.vars` or CI store | local database only |
 | Preview | preview database | preview bucket | Cloudflare preview secrets | preview database only |
 | Production | production database | production bucket | Cloudflare production secrets | production database only |
 
@@ -23,6 +23,21 @@ and production. The bootstrap operator uses
 `CF_API_TOKEN`), and the target database UUID through `--database-id` or
 `SOP_D1_DATABASE_ID`. Keep the API token in the operator's secret store. Do not
 put credentials in a command line, tracked env file, log, or support bundle.
+
+Local initialization is deliberately separate from runtime startup:
+
+```bash
+cp .dev.vars.example .dev.vars
+pnpm dev:init
+pnpm dev:status
+pnpm dev
+```
+
+`dev:init` always targets the fixed local `.wrangler/local` state with `--local`, validates the
+release fixture manifest before applying migrations, and then runs the same repository bootstrap
+and readiness audit used by E2E. It is safe to rerun for the same release: a ready repository is a
+no-op and edited application data is not overwritten. It never accepts remote flags or Cloudflare
+operator credentials. Do not reuse `.wrangler/local` for preview or production.
 
 Before the first preview release, provision the resources declared under
 `env.preview` and let Wrangler record the generated D1 UUID in that section:

@@ -30,7 +30,8 @@ lifecycle、etag、revision pointer 等查询列，读取/readiness 会重新投
 Cloudflare Pages Functions/Wrangler 是唯一 API runtime。本地、preview 和 production
 各自使用隔离 D1、R2、secret、migration history 和 bootstrap marker。
 
-本地先复制忽略的环境变量模板，并把附件 origin 改成实际可访问的 HTTPS 地址：
+本地先复制忽略的环境变量模板，设置至少 8 位且仅供本机使用的 `APP_PASSWORD`，并把
+附件 origin 改成实际可访问的 HTTPS 地址：
 
 ```bash
 cp .dev.vars.example .dev.vars
@@ -38,10 +39,24 @@ cp .dev.vars.example .dev.vars
 
 ```bash
 pnpm install
-pnpm pages:dev
+pnpm dev:init
+pnpm dev:status
+pnpm dev
 ```
 
-新数据库必须由 operator 显式初始化：
+`dev:init` 是显式的本地 operator 步骤；同一 release 下幂等，已就绪时不会覆盖页面数据。
+它固定使用 `.wrangler/local`，在任何写入前校验 release manifest，然后对同一 D1
+identity 依次执行 migration、fixture bootstrap 和完整 readiness 审计。命令会移除
+Cloudflare account/token 环境变量并固定
+使用 `--local`，不会误操作 preview/production。`dev` 和 `pages:dev` 不会隐式迁移或
+bootstrap；缺少 `.dev.vars`、数据库或完成 marker 时会拒绝启动并提示先运行
+`pnpm dev:init`。修改 UI/API 后重启 `pnpm dev` 不会清空 `.wrangler/local`。
+
+如果浏览器仍显示“服务端访问凭据未配置”，请先停止旧的 `pnpm dev` 进程，确认项目根目录
+的 `.dev.vars` 含有至少 8 位、且不是 `changeme` 等示例值的 `APP_PASSWORD`，再重新运行
+`pnpm dev`。Wrangler 只在进程启动时读取该文件，修改 `.dev.vars` 后必须重启服务。
+
+preview/production 新数据库必须由 operator 显式初始化：
 
 ```bash
 pnpm exec tsx server/bootstrap/cli.ts manifest --fixture-dir data

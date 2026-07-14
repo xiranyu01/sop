@@ -92,6 +92,23 @@ describe('explicit repository bootstrap', () => {
     db.close();
   });
 
+  it('rejects a semantically equivalent but noncanonical complete marker', async () => {
+    const { db, repository, data } = await harness();
+    await bootstrapRepository(repository, data);
+    const marker = await repository.getMeta(repositoryBootstrapMetaKey);
+    const noncanonical = JSON.stringify(JSON.parse(marker!.value), null, 2);
+    expect(noncanonical).not.toBe(marker!.value);
+    expect(await repository.compareAndSetMeta({
+      key: repositoryBootstrapMetaKey,
+      expectedValue: marker!.value,
+      nextValue: noncanonical,
+    })).toBe(true);
+
+    await expect(bootstrapRepository(repository, data))
+      .rejects.toThrow('Repository bootstrap marker is not canonical');
+    db.close();
+  });
+
   it('lets concurrent same-digest operators converge on one complete marker', async () => {
     const { db, repository, data } = await harness();
     const results = await Promise.all([

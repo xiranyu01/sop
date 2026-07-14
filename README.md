@@ -29,7 +29,10 @@ revision identity 和来源 ID，便于外部系统追踪。
 
 ```bash
 pnpm install
-pnpm pages:dev
+cp .dev.vars.example .dev.vars
+# 编辑 .dev.vars，设置至少 8 位且仅供本机使用的 APP_PASSWORD
+pnpm dev:init
+pnpm dev
 ```
 
 本地、preview、production 必须使用隔离的 D1、R2、migration history、secret 和
@@ -37,6 +40,15 @@ bootstrap marker。密码放在忽略的 `.dev.vars`、CI secret store 或 Cloud
 binding 中，不能提交到仓库。可从 `.dev.vars.example` 复制本地模板；
 `R2_PUBLIC_BASE_URL` 应配置为当前环境公开可访问的 R2 自定义域名或 `r2.dev` HTTPS
 origin，新上传附件会在该 origin 下记录稳定 object URL。
+
+`pnpm dev:init` 只操作 `.wrangler/local` 中的本地 D1：先校验当前 release fixture
+manifest，再执行本地 migration、幂等 bootstrap 和 readiness 审计。它不会连接远程
+Cloudflare，也不会启动服务；同一 release 可以安全重跑，已就绪时会直接结束且不会覆盖
+页面中修改过的数据。
+日常重启无需重复初始化，`pnpm dev:status` 可单独检查状态，
+`pnpm dev`/`pnpm pages:dev` 只启动已初始化的 Pages runtime，默认地址为
+`http://localhost:8788`。如果缺少 `.dev.vars` 或本地仓库未就绪，启动命令会直接给出
+修复提示，而不会打开可编辑的空页面。
 
 新环境严格按以下顺序初始化：
 

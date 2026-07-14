@@ -196,6 +196,26 @@ async function verifyPreparedData(repository: ResourceRepository, data: Prepared
   await repository.auditProjectionParity();
 }
 
+export async function verifyPreparedDataPresence(
+  repository: ResourceRepository,
+  data: PreparedRepositoryData,
+): Promise<void> {
+  for (const item of data.catalogs) {
+    if (!await repository.getCatalog(item.name)) throw new TypeError(`Bootstrap baseline identity is missing: ${item.name}`);
+  }
+  for (const item of data.currents) {
+    if (!await repository.getCurrent(item.name)) throw new TypeError(`Bootstrap baseline identity is missing: ${item.name}`);
+  }
+  for (const item of data.revisions) {
+    if (!await repository.getRevision(item.name)) throw new TypeError(`Bootstrap baseline identity is missing: ${item.name}`);
+  }
+  for (const item of data.bundles) {
+    if (!await repository.getExportBundle(item.rootRevisionName)) {
+      throw new TypeError(`Bootstrap baseline identity is missing: ${item.rootRevisionName}`);
+    }
+  }
+}
+
 export async function bootstrapRepository(
   repository: ResourceRepository,
   data: PreparedRepositoryData,
@@ -214,6 +234,7 @@ export async function bootstrapRepository(
     const marker = parseRepositoryBootstrapMarker(before.value);
     if (!markerMatches(marker, data)) throw new TypeError('Repository bootstrap is owned by a different version or dataset digest');
     if (marker.state === 'COMPLETE') {
+      if (before.value !== complete) throw new TypeError('Repository bootstrap marker is not canonical');
       await verifyPreparedData(repository, data);
       return { state: 'COMPLETE', idempotent: true, recovered: false };
     }

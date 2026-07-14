@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm pages:dev",
+    "dev:init": "tsx server/bootstrap/localDev.ts init",
+    "dev:status": "tsx server/bootstrap/localDev.ts status",
     "build": "pnpm proto:check && tsc && vite build",
     "typecheck": "tsc --noEmit",
     "proto:generate": "buf generate --clean",
@@ -25,7 +27,7 @@
     "test:e2e:baseline": "pnpm test:e2e",
     "test:e2e:pages": "pnpm build && playwright test --fail-on-flaky-tests --config playwright.pages.config.ts",
     "verify": "pnpm proto:check && pnpm proto:drift && pnpm check:architecture && pnpm check:tracked-secrets && pnpm typecheck && pnpm test:unit && pnpm test:integration && pnpm build",
-    "pages:dev": "pnpm build && wrangler pages dev dist --d1 DB --r2 ATTACHMENTS --compatibility-date=2026-06-25",
+    "pages:dev": "pnpm build && tsx server/bootstrap/localDev.ts serve",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

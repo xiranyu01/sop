@@ -1,9 +1,6 @@
-export type SaveWarning = {
-  kind: 'row_size';
-  resourceName: string;
-  measuredBytes: number;
-  limitBytes: number;
-};
+import type { SaveWarning } from '../../shared/transport/resourceDto';
+
+export type { SaveWarning } from '../../shared/transport/resourceDto';
 
 export type QueueFailure<T> =
   | { kind: 'retryable'; message: string; unknownOutcome?: boolean }
@@ -25,4 +22,3 @@ export type ResourceSaveState<T> =
   };
 
 export type SaveSuccess = { etag: string; warning?: SaveWarning };
-

@@ -1,5 +1,15 @@
 import { Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
-import type { CanonicalSnapshot } from '../domain/appStore';
+import type {
+  Attachment,
+  Customer,
+  GlobalField,
+  Material,
+  MaterialStateRule,
+  RobotModelRevision,
+  Scene,
+} from '../../gen/coscene/sop/v1alpha1/catalog_pb';
+import type { RequirementRevision } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
+import type { TaskSopRevision } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import { CanonicalDataError } from '../domain/errors';
 import { compareStable, stableHash, stableJson } from '../migrations/identity';
 
@@ -10,15 +20,26 @@ export type ExportRoot =
 export type ExportClosure = {
   root: ExportRoot;
   rootRef: string;
-  requirements: CanonicalSnapshot['requirementRevisions'];
-  taskSops: CanonicalSnapshot['taskSopRevisions'];
-  robotModelRevisions: CanonicalSnapshot['robotModelRevisions'];
-  customers: CanonicalSnapshot['customers'];
-  materials: CanonicalSnapshot['materials'];
-  scenes: CanonicalSnapshot['scenes'];
-  globalFields: CanonicalSnapshot['globalFields'];
-  materialStateRules: CanonicalSnapshot['materialStateRules'];
-  attachments: CanonicalSnapshot['attachments'];
+  requirements: RequirementRevision[];
+  taskSops: TaskSopRevision[];
+  robotModelRevisions: RobotModelRevision[];
+  customers: Customer[];
+  materials: Material[];
+  scenes: Scene[];
+  globalFields: GlobalField[];
+  materialStateRules: MaterialStateRule[];
+  attachments: Attachment[];
+};
+
+/**
+ * Candidate records used to resolve one root's frozen export closure. Runtime
+ * callers supply only the selected root and its direct/pinned dependencies;
+ * the bootstrap converter may supply its deterministic repository records.
+ */
+export type ExportClosureSource = {
+  requirementRevisions: RequirementRevision[];
+  taskSopRevisions: TaskSopRevision[];
+  robotModelRevisions: RobotModelRevision[];
 };
 
 export function bundleRef(kind: string, sourceName: string): string {
@@ -54,7 +75,7 @@ function addFrozen<T extends { name: string }>(target: Map<string, T>, values: T
 }
 
 function requireConfirmed(
-  revision: CanonicalSnapshot['requirementRevisions'][number] | CanonicalSnapshot['taskSopRevisions'][number],
+  revision: RequirementRevision | TaskSopRevision,
 ): void {
   if (!revision.snapshot || revision.snapshot.lifecycle !== Lifecycle.CONFIRMED) {
     throw new CanonicalDataError(`仅支持导出已确认版本：${revision.name}`);
@@ -89,7 +110,7 @@ function uniqueIndex<T extends { name: string }>(values: T[], kind: string): Map
   return result;
 }
 
-function referencedAttachments(task: CanonicalSnapshot['taskSopRevisions'][number]['snapshot']): Set<string> {
+function referencedAttachments(task: TaskSopRevision['snapshot']): Set<string> {
   const result = new Set(task?.attachments ?? []);
   const spec = task?.spec;
   for (const object of spec?.objects ?? []) {
@@ -107,20 +128,20 @@ function referencedAttachments(task: CanonicalSnapshot['taskSopRevisions'][numbe
   return result;
 }
 
-export function resolveExportClosure(snapshot: CanonicalSnapshot, root: ExportRoot): ExportClosure {
-  const taskByName = uniqueIndex(snapshot.taskSopRevisions, '任务 SOP 版本');
-  const robotByName = uniqueIndex(snapshot.robotModelRevisions, '机器人版本');
-  const requirements = new Map<string, CanonicalSnapshot['requirementRevisions'][number]>();
-  const taskSops = new Map<string, CanonicalSnapshot['taskSopRevisions'][number]>();
-  const robots = new Map<string, CanonicalSnapshot['robotModelRevisions'][number]>();
-  const customers = new Map<string, CanonicalSnapshot['customers'][number]>();
-  const materials = new Map<string, CanonicalSnapshot['materials'][number]>();
-  const scenes = new Map<string, CanonicalSnapshot['scenes'][number]>();
-  const globalFields = new Map<string, CanonicalSnapshot['globalFields'][number]>();
-  const rules = new Map<string, CanonicalSnapshot['materialStateRules'][number]>();
-  const attachments = new Map<string, CanonicalSnapshot['attachments'][number]>();
+export function resolveExportClosure(sourceRecords: ExportClosureSource, root: ExportRoot): ExportClosure {
+  const taskByName = uniqueIndex(sourceRecords.taskSopRevisions, '任务 SOP 版本');
+  const robotByName = uniqueIndex(sourceRecords.robotModelRevisions, '机器人版本');
+  const requirements = new Map<string, RequirementRevision>();
+  const taskSops = new Map<string, TaskSopRevision>();
+  const robots = new Map<string, RobotModelRevision>();
+  const customers = new Map<string, Customer>();
+  const materials = new Map<string, Material>();
+  const scenes = new Map<string, Scene>();
+  const globalFields = new Map<string, GlobalField>();
+  const rules = new Map<string, MaterialStateRule>();
+  const attachments = new Map<string, Attachment>();
 
-  const addTask = (revision: CanonicalSnapshot['taskSopRevisions'][number]): void => {
+  const addTask = (revision: TaskSopRevision): void => {
     if (taskSops.has(revision.name)) return;
     requireConfirmed(revision);
     const task = revision.snapshot!;
@@ -149,7 +170,7 @@ export function resolveExportClosure(snapshot: CanonicalSnapshot, root: ExportRo
 
   let rootRef: string;
   if (root.kind === 'requirement') {
-    const candidates = snapshot.requirementRevisions.filter((value) =>
+    const candidates = sourceRecords.requirementRevisions.filter((value) =>
       sourceId(value.snapshot ?? { name: '' }) === root.sourceId && value.versionLabel === root.versionLabel);
     if (candidates.length > 1) throw new CanonicalDataError(`客户需求版本定位不唯一：${root.sourceId} v${root.versionLabel}`);
     const revision = candidates[0];
@@ -172,7 +193,7 @@ export function resolveExportClosure(snapshot: CanonicalSnapshot, root: ExportRo
       addTask(requireByName([...taskByName.values()], item.taskSopRevision, '任务 SOP 版本'));
     }
   } else {
-    const candidates = snapshot.taskSopRevisions.filter((value) =>
+    const candidates = sourceRecords.taskSopRevisions.filter((value) =>
       sourceId(value.snapshot ?? { name: '' }) === root.sourceId && value.versionLabel === root.versionLabel);
     if (candidates.length > 1) throw new CanonicalDataError(`任务 SOP 版本定位不唯一：${root.sourceId} v${root.versionLabel}`);
     const revision = candidates[0];

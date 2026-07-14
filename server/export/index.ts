@@ -1,7 +1,6 @@
-import type { CanonicalSnapshot } from '../domain/appStore';
 import { ExportNotFoundError } from '../domain/errors';
 import { buildExportBundle } from './bundle';
-import { resolveExportClosure } from './closure';
+import { resolveExportClosure, type ExportClosureSource } from './closure';
 import { serializeExportBundleYaml } from './yaml';
 
 export {
@@ -12,22 +11,22 @@ export {
   verifyExportBundle,
 } from './codec';
 
-export function exportRequirementYaml(snapshot: CanonicalSnapshot, sourceId: string, versionLabel: string): string {
-  const exists = snapshot.requirementRevisions.some((revision) =>
+export function exportRequirementYaml(sourceRecords: ExportClosureSource, sourceId: string, versionLabel: string): string {
+  const exists = sourceRecords.requirementRevisions.some((revision) =>
     revision.snapshot?.sourceId === sourceId && revision.versionLabel === versionLabel);
   if (!exists) throw new ExportNotFoundError(`找不到客户需求版本：${sourceId} v${versionLabel}`);
-  return serializeExportBundleYaml(buildExportBundle(resolveExportClosure(snapshot, {
+  return serializeExportBundleYaml(buildExportBundle(resolveExportClosure(sourceRecords, {
     kind: 'requirement', sourceId, versionLabel,
   })));
 }
 
 export function exportTaskSopYaml(
-  snapshot: CanonicalSnapshot,
+  sourceRecords: ExportClosureSource,
   sceneSourceId: string,
   subsceneCode: string,
   versionLabel: string,
 ): string {
-  const candidates = snapshot.taskSopRevisions.filter((revision) => {
+  const candidates = sourceRecords.taskSopRevisions.filter((revision) => {
     if (revision.versionLabel !== versionLabel || !revision.snapshot) return false;
     if (revision.snapshot.sourceId === `${sceneSourceId}-${subsceneCode}`) return true;
     if (revision.snapshot.legacySubsceneCode !== subsceneCode) return false;
@@ -38,7 +37,7 @@ export function exportTaskSopYaml(
     throw new ExportNotFoundError(`任务 SOP 版本定位不唯一：${sceneSourceId}/${subsceneCode} v${versionLabel}`);
   }
   const sourceId = candidates[0].snapshot!.sourceId || candidates[0].snapshot!.name.split('/').at(-1)!;
-  return serializeExportBundleYaml(buildExportBundle(resolveExportClosure(snapshot, {
+  return serializeExportBundleYaml(buildExportBundle(resolveExportClosure(sourceRecords, {
     kind: 'task_sop', sourceId, versionLabel,
   })));
 }

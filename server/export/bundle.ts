@@ -7,7 +7,7 @@ import {
   type FrozenExportContent,
   type SourceIdentity,
 } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
-import type { CanonicalSnapshot } from '../domain/appStore';
+import type { TaskSop } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import { CanonicalDataError } from '../domain/errors';
 import { bundleRef, type ExportClosure } from './closure';
 import {
@@ -77,7 +77,7 @@ function workload(value?: { duration?: { seconds: bigint; nanos: number }; colle
 }
 
 function taskSpec(
-  spec: NonNullable<CanonicalSnapshot['taskSopRevisions'][number]['snapshot']>['spec'],
+  spec: TaskSop['spec'],
   refs: Map<string, string>,
 ) {
   const location = (value: NonNullable<NonNullable<typeof spec>['objectStates']>['initial'][number]['allowedLocations'][number]) => ({

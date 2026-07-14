@@ -27,8 +27,8 @@ function taskSections(view: ExportBundleView): PdfSection[] {
     },
     {
       id: 'steps', heading: '采集步骤',
-      items: (spec?.collection?.steps ?? [])
-        .toSorted((left, right) => left.order - right.order)
+      items: [...(spec?.collection?.steps ?? [])]
+        .sort((left, right) => left.order - right.order)
         .map((item) => `${item.order}. ${item.description}`),
     },
     { id: 'attachments', heading: '附件', items: view.attachmentNames },
@@ -85,4 +85,3 @@ export function renderPdfModelV1(view: ExportBundleView): PdfDocumentModel {
     sections: view.rootKind === 'task_sop' ? taskSections(view) : requirementSections(view),
   };
 }
-

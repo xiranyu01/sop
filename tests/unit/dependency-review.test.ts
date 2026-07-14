@@ -15,7 +15,7 @@ describe('direct dependency review', () => {
       { kind: DependencyKind.MATERIAL, resourceName: 'materials/cup', token: 'e-cup' },
     ];
     const first = buildDependencyReviewProposal('taskSops/place-cup', 'root-e1', dependencies);
-    const second = buildDependencyReviewProposal('taskSops/place-cup', 'root-e1', dependencies.toReversed());
+    const second = buildDependencyReviewProposal('taskSops/place-cup', 'root-e1', [...dependencies].reverse());
     expect(first.dependencies.map((value) => value.resourceName)).toEqual(['materials/cup', 'scenes/kitchen']);
     expect(dependencyProposalDigest(first)).toBe(dependencyProposalDigest(second));
     const nextRoot = buildDependencyReviewProposal('taskSops/place-cup', 'root-e2', dependencies);

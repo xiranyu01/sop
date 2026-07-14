@@ -22,7 +22,7 @@ import { exportRequirementYaml, exportTaskSopYaml } from '../../export';
 import { convertLegacyToV1alpha1 } from '../../migrations/legacyToV1alpha1';
 import { canonicalId, deterministicUid, revisionName, stableJson } from '../../migrations/identity';
 import { createId, nextPatchVersion } from '../../versioning';
-import type { AppStore, AttachmentUploadState, CanonicalSnapshot, StorePin } from '../appStore';
+import { encodeCanonicalSnapshot, type AppStore, type AttachmentUploadState, type CanonicalSnapshot, type StorePin } from '../appStore';
 import { runAttachmentCleanup } from '../attachmentCleanup';
 import { findReachableManagedAttachment } from '../attachmentReachability';
 import type { AttachmentObjectStore } from '../attachmentObjectStore';
@@ -55,6 +55,7 @@ export type CanonicalRuntimeOptions = {
 type CanonicalLegacyApiStore = LegacyApiStore & {
   readonly canonical: true;
   beginRequest(): Promise<CanonicalLegacyApiStore>;
+  readCanonicalData(): Promise<unknown>;
   saveRobotModel(model: Partial<RobotModel>): Promise<RobotModel[]>;
   bindAttachmentUpload(input: NewAttachmentUpload): Promise<void>;
   attachmentUpload(input: Pick<AttachmentUploadState, 'uploadId' | 'scope' | 'ownerId' | 'version'> & { attachmentId?: string; allowExpired?: boolean }): Promise<AttachmentUploadState>;
@@ -686,6 +687,9 @@ export function createCanonicalApiStore(appStore: AppStore, options: CanonicalRu
       return createCanonicalApiStore(appStore, { ...options, requestPin });
     },
     async readData() { return (await runtime.read()).data; },
+    async readCanonicalData() {
+      return JSON.parse(encodeCanonicalSnapshot((await runtime.read()).snapshot)) as unknown;
+    },
     async writeCustomers(values: Customer[]) { return runtime.replaceCatalog('customers', values); },
     async writeMaterials(values: Material[]) { return runtime.replaceCatalog('materials', values); },
     async writeRobotModels(values: RobotModel[]) {

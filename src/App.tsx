@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { defaultAppMetadata } from './schemaVersions';
 import type {
-  AppData,
-  AttachmentUploadInit,
-  AttachmentUploadPart,
+  AppViewModel,
   Customer,
   EntityStatus,
-  ExportResult,
   GlobalField,
   GlobalFieldGroup,
   GlobalFieldStatus,
@@ -21,7 +17,9 @@ import type {
   Subscene,
   SubsceneVersion,
   TextItem,
-} from './types';
+} from './domain/viewModels';
+import { createEmptyAppViewModel, decodeAppViewModel } from './domain/viewModels';
+import type { AttachmentUploadInit, AttachmentUploadPart, ExportResult } from '../shared/transport/restDto';
 
 type Page = 'requirements' | 'scenes' | 'globalFields' | 'customers' | 'materials' | 'robots';
 
@@ -230,48 +228,63 @@ const fallbackMaterialRandomOptions: Option[] = [
 ];
 const defaultAttachmentStorageStatus: AttachmentStorageStatus = { enabled: true, message: '' };
 
+type AppCollectionKey = Exclude<keyof AppViewModel, 'metadata'>;
+
+async function fetchCanonicalData(): Promise<AppViewModel> {
+  return decodeAppViewModel(await fetchJson<unknown>('/api/canonical-data'));
+}
+
+async function mutateAndReadCollection<K extends AppCollectionKey>(
+  key: K,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<AppViewModel[K]> {
+  await fetchJson<unknown>(input, init);
+  return (await fetchCanonicalData())[key];
+}
+
 const api = {
-  async data(): Promise<AppData> {
-    return fetchJson<AppData>('/api/data');
+  async data(): Promise<AppViewModel> {
+    return fetchCanonicalData();
   },
   async storageStatus(): Promise<{ attachments: AttachmentStorageStatus }> {
     return fetchJson<{ attachments: AttachmentStorageStatus }>('/api/storage-status');
   },
   async saveCustomer(customer: Customer): Promise<Customer[]> {
-    return fetchJson<Customer[]>('/api/customers', postJson(customer));
+    return mutateAndReadCollection('customers', '/api/customers', postJson(customer));
   },
   async saveMaterial(material: Material): Promise<Material[]> {
-    return fetchJson<Material[]>('/api/materials', postJson(material));
+    return mutateAndReadCollection('materials', '/api/materials', postJson(material));
   },
   async saveRobot(robot: RobotModel): Promise<RobotModel[]> {
-    return fetchJson<RobotModel[]>('/api/robot-models', postJson(robot));
+    return mutateAndReadCollection('robotModels', '/api/robot-models', postJson(robot));
   },
   async saveScene(scene: Scene): Promise<Scene[]> {
-    return fetchJson<Scene[]>('/api/scenes', postJson(scene));
+    return mutateAndReadCollection('scenes', '/api/scenes', postJson(scene));
   },
   async saveGlobalField(field: GlobalField): Promise<GlobalField[]> {
-    return fetchJson<GlobalField[]>('/api/global-fields', postJson(field));
+    return mutateAndReadCollection('globalFields', '/api/global-fields', postJson(field));
   },
   async saveRequirement(id: string, version: VersionPatch<RequirementVersion>): Promise<Requirement[]> {
-    return fetchJson<Requirement[]>(`/api/requirements/${id}`, putJson(version));
+    return mutateAndReadCollection('requirements', `/api/requirements/${id}`, putJson(version));
   },
   async deleteRequirementVersion(id: string, version: string): Promise<Requirement[]> {
-    return fetchJson<Requirement[]>(`/api/requirements/${id}/versions/${version}`, { method: 'DELETE' });
+    return mutateAndReadCollection('requirements', `/api/requirements/${id}/versions/${version}`, { method: 'DELETE' });
   },
   async createRequirement(version: Partial<RequirementVersion>): Promise<Requirement[]> {
-    return fetchJson<Requirement[]>('/api/requirements', postJson(version));
+    return mutateAndReadCollection('requirements', '/api/requirements', postJson(version));
   },
   async confirmRequirement(id: string, version: string): Promise<Requirement[]> {
-    return fetchJson<Requirement[]>(`/api/requirements/${id}/confirm`, postJson({ version }));
+    return mutateAndReadCollection('requirements', `/api/requirements/${id}/confirm`, postJson({ version }));
   },
   async saveSubscene(sceneId: string, code: string, version: VersionPatch<SubsceneVersion>): Promise<Scene[]> {
-    return fetchJson<Scene[]>(`/api/scenes/${sceneId}/subscenes/${code}/versions`, postJson(version));
+    return mutateAndReadCollection('scenes', `/api/scenes/${sceneId}/subscenes/${code}/versions`, postJson(version));
   },
   async deleteSubsceneVersion(sceneId: string, code: string, version: string): Promise<Scene[]> {
-    return fetchJson<Scene[]>(`/api/scenes/${sceneId}/subscenes/${code}/versions/${version}`, { method: 'DELETE' });
+    return mutateAndReadCollection('scenes', `/api/scenes/${sceneId}/subscenes/${code}/versions/${version}`, { method: 'DELETE' });
   },
   async confirmSubscene(sceneId: string, code: string, version: string): Promise<Scene[]> {
-    return fetchJson<Scene[]>(`/api/scenes/${sceneId}/subscenes/${code}/confirm`, postJson({ version }));
+    return mutateAndReadCollection('scenes', `/api/scenes/${sceneId}/subscenes/${code}/confirm`, postJson({ version }));
   },
   async exportSubsceneYaml(sceneId: string, code: string, version: string): Promise<ExportResult> {
     return fetchJson<ExportResult>(`/api/scenes/${sceneId}/subscenes/${code}/export-yaml`, postJson({ version }));
@@ -320,7 +333,8 @@ const api = {
     );
   },
   async deleteAttachment(id: string, version: string, attachmentId: string): Promise<Requirement[]> {
-    return fetchJson<Requirement[]>(
+    return mutateAndReadCollection(
+      'requirements',
       `/api/requirements/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/attachments/${encodeURIComponent(attachmentId)}`,
       { method: 'DELETE' },
     );
@@ -372,7 +386,8 @@ const api = {
     );
   },
   async deleteSubsceneAttachment(sceneId: string, code: string, version: string, attachmentId: string): Promise<Scene[]> {
-    return fetchJson<Scene[]>(
+    return mutateAndReadCollection(
+      'scenes',
       `/api/scenes/${encodeURIComponent(sceneId)}/subscenes/${encodeURIComponent(code)}/versions/${encodeURIComponent(
         version,
       )}/attachments/${encodeURIComponent(attachmentId)}`,
@@ -416,7 +431,11 @@ const api = {
     );
   },
   async deleteMaterialImage(materialId: string, attachmentId: string): Promise<Material[]> {
-    return fetchJson<Material[]>(`/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(attachmentId)}`, { method: 'DELETE' });
+    return mutateAndReadCollection(
+      'materials',
+      `/api/materials/${encodeURIComponent(materialId)}/images/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE' },
+    );
   },
 };
 
@@ -498,16 +517,7 @@ async function fetchBinaryJson<T>(input: RequestInfo | URL, body: Blob): Promise
   return assertJson<T>(res);
 }
 
-const emptyData: AppData = {
-  metadata: defaultAppMetadata,
-  customers: [],
-  materials: [],
-  robotModels: [],
-  scenes: [],
-  requirements: [],
-  globalFields: [],
-  materialStateRules: [],
-};
+const emptyData = createEmptyAppViewModel();
 
 function initialPage(): Page {
   if (typeof window === 'undefined') return 'requirements';
@@ -1107,7 +1117,7 @@ function selectedSubscenesReport(
   });
 }
 
-function buildRequirementPdfReport(data: AppData, requirement: Requirement, version: RequirementVersion, publicBaseUrl?: string): PrintableReport {
+function buildRequirementPdfReport(data: AppViewModel, requirement: Requirement, version: RequirementVersion, publicBaseUrl?: string): PrintableReport {
   const customer = data.customers.find((item) => item.id === version.customerId);
   const robot = data.robotModels.find((item) => item.id === version.robotModelId);
   const selectedDurationTotal = version.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0);
@@ -1189,44 +1199,6 @@ function nextReadableId(values: string[], prefix: string): string {
     return Number.isNaN(parsed) ? max : Math.max(max, parsed);
   }, 0);
   return `${prefix}${maxNumber + 1}`;
-}
-
-function stableHash(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36).padStart(6, '0').slice(0, 8);
-}
-
-function versionId(objectId: string | undefined, version: string | undefined): string {
-  if (!objectId || !version) return '';
-  return `sopv_${stableHash(`${objectId}:${version}`)}`;
-}
-
-function versionRank(value: string): number[] {
-  return value.split('.').map((part) => Number.parseInt(part, 10) || 0);
-}
-
-function parentVersionId(objectId: string | undefined, versions: Array<{ version: string }>, currentVersion: string | undefined): string {
-  if (!objectId || !currentVersion) return '';
-  const sortedVersions = [...versions].sort((left, right) => {
-    const leftRank = versionRank(left.version);
-    const rightRank = versionRank(right.version);
-    for (let index = 0; index < Math.max(leftRank.length, rightRank.length); index += 1) {
-      const diff = (leftRank[index] || 0) - (rightRank[index] || 0);
-      if (diff !== 0) return diff;
-    }
-    return left.version.localeCompare(right.version);
-  });
-  const index = sortedVersions.findIndex((item) => item.version === currentVersion);
-  if (index <= 0) return '';
-  return versionId(objectId, sortedVersions[index - 1].version);
-}
-
-function taskSopObjectIdFromParts(sceneId: string, taskSopName: string): string {
-  return `sop_${stableHash(`${sceneId}:${taskSopName}`)}`;
 }
 
 function sceneLatestUpdated(scene: Scene): string {
@@ -1323,13 +1295,12 @@ function taskSopStatus(item: RequirementVersion['selectedSubscenes'][number]): E
 }
 
 function candidateTaskSopReference(candidate: CandidateSubsceneOption) {
-  const sopId = taskSopObjectIdFromParts(candidate.sceneId, candidate.name);
   return {
     sceneName: candidate.sceneName,
     title: candidate.selectedVersion.title || candidate.name,
     version: candidate.selectedVersion.version,
-    versionId: versionId(sopId, candidate.selectedVersion.version),
-    parentVersionId: parentVersionId(sopId, candidate.versions, candidate.selectedVersion.version),
+    versionId: candidate.selectedVersion.versionId,
+    parentVersionId: candidate.selectedVersion.parentVersionId,
     status: candidate.selectedVersion.status,
   };
 }
@@ -1356,7 +1327,7 @@ function stripSelectedTaskSopCode(selected: RequirementVersion['selectedSubscene
 }
 
 export default function App() {
-  const [data, setData] = useState<AppData>(emptyData);
+  const [data, setData] = useState<AppViewModel>(emptyData);
   const [page, setPageState] = useState<Page>(initialPage);
   const [loading, setLoading] = useState(true);
   const [locked, setLocked] = useState(false);
@@ -2311,7 +2282,7 @@ function RequirementPage({
   onRequirementsChange,
   onOpenSubscene,
 }: {
-  data: AppData;
+  data: AppViewModel;
   globalFields: GlobalField[];
   selectedRequirement?: Requirement;
   selectedVersion?: RequirementVersion;
@@ -2751,12 +2722,9 @@ function RequirementPage({
 
   function addProductionRequirementItem() {
     if (!selectedVersion || readonly) return;
-    const usedIds = selectedVersion.selectedSubscenes.map((item) => (item.id || '').replace(/^pri_/i, '')).filter(Boolean);
-    const id = `pri_${randomShortCode(usedIds, 6).toLowerCase()}`;
     const nextItems = [
       ...selectedVersion.selectedSubscenes,
       {
-        id,
         title: `生产需求项 ${selectedVersion.selectedSubscenes.length + 1}`,
         description: '',
         sceneName: '',

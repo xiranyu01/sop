@@ -413,6 +413,11 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       return json(200, await store.readData());
     }
 
+    if (method === 'GET' && path === '/api/canonical-data') {
+      if (!isCanonicalApiStore(store)) return json(404, { message: 'Canonical data is unavailable' });
+      return json(200, await store.readCanonicalData());
+    }
+
     if (method === 'POST' && path === '/api/customers') {
       const data = await store.readData();
       const item = { ...(request.body as Partial<Customer>), id: (request.body as Partial<Customer>)?.id || createId('cus') } as Customer;

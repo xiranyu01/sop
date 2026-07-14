@@ -17,6 +17,12 @@ describe('canonical resource API', () => {
     const appStore = createCanonicalFileAppStore({ rootDir: root, bootstrap: { namespace, snapshot } });
     const apiStore = createCanonicalApiStore(appStore, { namespace });
 
+    const canonical = await handleApiRequest(apiStore, { method: 'GET', pathname: '/api/canonical-data' });
+    expect(canonical).toMatchObject({
+      status: 200,
+      body: { schemaVersion: 'coscene.sop.v1alpha1', resources: { customers: expect.any(Array) } },
+    });
+
     const response = await handleApiRequest(apiStore, {
       method: 'POST', pathname: '/api/customers',
       body: { id: 'cus-inactive', name: 'Inactive generation customer', contact: { name: '', phone: '', email: '' } },

@@ -37,6 +37,9 @@ describe('legacy REST compatibility boundary', () => {
 
   it('preserves existing auth, validation and not-found error shapes', async () => {
     const store = memoryLegacyStore(seedData);
+    expect(await handleApiRequest(store, { method: 'GET', pathname: '/api/canonical-data' })).toEqual({
+      status: 404, body: { message: 'Canonical data is unavailable' },
+    });
     expect(await handleApiRequest(store, {
       method: 'GET', pathname: '/api/data', authorization: 'Bearer wrong', auth: { password: 'secret' },
     })).toEqual({ status: 401, body: { message: '访问密码无效或已过期' } });
@@ -48,4 +51,3 @@ describe('legacy REST compatibility boundary', () => {
     });
   });
 });
-

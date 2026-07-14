@@ -1,4 +1,4 @@
-import type { AppMetadata } from './types';
+import type { AppMetadata } from '../shared/transport/restDto';
 
 export const appDataSchemaVersion = 'app_data_v0.1';
 export const requirementYamlSchemaVersion = 'requirement_yaml_v0.11';

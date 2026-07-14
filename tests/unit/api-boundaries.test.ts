@@ -35,7 +35,7 @@ describe('resource API boundaries', () => {
     }), { status: 409, headers: { 'content-type': 'application/json' } }));
     const client = new ApiClient({ baseUrl: 'https://sop.test', getPassword: () => 'secret', fetch: requestFetch });
     await expect(client.update('materials', 'materials/cup', { displayName: 'Cup' }, 'e1')).rejects.toMatchObject({
-      status: 409, body: { error: { kind: 'STALE_RESOURCE' } },
+      status: 409, body: { error: { kind: 'STALE_RESOURCE', message: 'stale' } },
     } satisfies Partial<ApiClientError>);
     const [url, init] = requestFetch.mock.calls[0];
     expect(url).toBe('https://sop.test/api/resources/materials/materials%2Fcup');

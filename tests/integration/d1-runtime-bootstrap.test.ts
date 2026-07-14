@@ -111,12 +111,25 @@ describe('Pages canonical inactive-generation boot', () => {
   it('prepares and freezes a validated namespace without publishing the runtime marker', async () => {
     const db = new RuntimeD1();
     const prepared = await bootstrapValidatedD1Generation(db, structuredClone(seedData), {
-      publishRuntimeNamespace: false,
+      mode: 'prepare',
     });
 
     expect(prepared.activated).toBe(false);
     expect(db.meta.has('runtime_namespace')).toBe(false);
     expect(db.namespaces.get(prepared.generationId)).toMatchObject({ writable: 0, epoch: 2 });
+  });
+
+  it('does not reload the legacy source after a runtime namespace is active', async () => {
+    const db = new RuntimeD1();
+    const first = await bootstrapValidatedD1Generation(db, structuredClone(seedData));
+    let reads = 0;
+    const second = await bootstrapValidatedD1Generation(db, async () => {
+      reads += 1;
+      return structuredClone(seedData);
+    });
+
+    expect(second.generationId).toBe(first.generationId);
+    expect(reads).toBe(0);
   });
 
   it('anchors the first validated generation and ignores later legacy changes without touching active_namespace', async () => {

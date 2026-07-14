@@ -114,9 +114,8 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
 
   const objects = attachmentStore(context.env);
   const legacyStore = createD1Store(context.env.DB, objects);
-  const legacyData = await legacyStore.readData();
-  const migration = await bootstrapValidatedD1Generation(context.env.DB, legacyData, {
-    publishRuntimeNamespace: context.env.CANONICAL_BOOTSTRAP_MODE === 'auto',
+  const migration = await bootstrapValidatedD1Generation(context.env.DB, () => legacyStore.readData(), {
+    mode: context.env.CANONICAL_BOOTSTRAP_MODE === 'auto' ? 'publish' : 'prepare',
   });
   if (!migration.activated) {
     return Response.json({

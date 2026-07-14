@@ -200,8 +200,8 @@ async function prepareRuntimeGeneration(
  */
 export async function bootstrapValidatedD1Generation(
   db: D1DatabaseLike,
-  data: AppData,
-  options: { rollbackAttachmentLeaseMs?: number; clock?: () => Date; publishRuntimeNamespace?: boolean } = {},
+  source: AppData | (() => Promise<AppData>),
+  options: { rollbackAttachmentLeaseMs?: number; clock?: () => Date; mode?: 'prepare' | 'publish' } = {},
 ) {
   const rollbackLeaseMs = options.rollbackAttachmentLeaseMs ?? defaultRollbackAttachmentLeaseMs;
   if (!Number.isSafeInteger(rollbackLeaseMs) || rollbackLeaseMs < 0) throw new Error('Invalid rollback attachment lease duration');
@@ -210,6 +210,7 @@ export async function bootstrapValidatedD1Generation(
   const anchored = await runtimeNamespace(db);
   if (anchored) return { ...(await prepareRuntimeGeneration(db, anchored, rollbackLeaseMs, clock)), activated: true };
 
+  const data = typeof source === 'function' ? await source() : source;
   const conversion = convertLegacyToV1alpha1(data);
   if (!conversion.report.ok) {
     throw new Error(`Canonical D1 bootstrap validation failed: ${conversion.report.issues.map((item) => item.message).join('; ')}`);
@@ -262,13 +263,12 @@ export async function bootstrapValidatedD1Generation(
       now,
       now,
     ).run();
-  await loadValidatedGeneration(db, generationId);
   const prepared = await prepareRuntimeGeneration(db, generationId, rollbackLeaseMs, clock);
-  if (options.publishRuntimeNamespace === false) {
+  if (options.mode === 'prepare') {
     const store = createCanonicalD1AppStore(db);
-    let pin = await store.pin(generationId);
-    if (pin.writable) pin = await store.setWriteState(pin, false);
-    return { ...prepared, snapshot: await store.readSnapshot(pin), activated: false };
+    const pin = await store.pin(generationId);
+    if (pin.writable) await store.setWriteState(pin, false);
+    return { ...prepared, activated: false };
   }
   await db.prepare("INSERT OR IGNORE INTO canonical_store_meta (key, value) VALUES ('runtime_namespace', ?)")
     .bind(generationId).run();

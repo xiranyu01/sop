@@ -1,0 +1,59 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { describe, expect, it } from 'vitest';
+
+const execFileAsync = promisify(execFile);
+const cwd = resolve(import.meta.dirname, '../..');
+
+async function run(script: string, args: string[]) {
+  try {
+    const result = await execFileAsync(process.execPath, [resolve(cwd, script), ...args], { cwd });
+    return { status: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failed = error as { code: number; stdout: string; stderr: string };
+    return { status: failed.code, stdout: failed.stdout, stderr: failed.stderr };
+  }
+}
+
+describe('architecture regression guards', () => {
+  it('rejects known global authority terms', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'sop-snapshot-'));
+    await writeFile(join(fixture, 'authority.ts'), 'export const row = { snapshot_json: "{}" };\n');
+    const result = await run('scripts/check-no-global-snapshot.mjs', [fixture]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('snapshot_json');
+  });
+
+  it('rejects an aliased whole-site mutation even without forbidden snapshot words', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'sop-contract-'));
+    const manifest = {
+      version: 1,
+      routes: [{ method: 'PUT', path: '/api/universe', scope: 'resource', operation: 'universe.replace' }],
+      repositoryMutations: [{ operation: 'universe.replace', scope: 'resource' }],
+    };
+    const path = join(fixture, 'manifest.json');
+    await writeFile(path, JSON.stringify(manifest));
+    const result = await run('scripts/check-mutation-contract.mjs', [path]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('must name one resource');
+  });
+
+  it('accepts the production mutation manifest', async () => {
+    const result = await run('scripts/check-mutation-contract.mjs', [resolve(cwd, 'server/http/mutation-contract.json')]);
+    expect(result).toMatchObject({ status: 0 });
+  });
+
+  it('rejects secret files and credential assignments while allowing examples', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'sop-secrets-'));
+    await mkdir(join(fixture, 'config'));
+    await writeFile(join(fixture, '.dev.vars'), 'APP_PASSWORD=real-secret\n');
+    await writeFile(join(fixture, 'config', '.dev.vars.example'), 'APP_PASSWORD=<set-locally>\n');
+    const result = await run('scripts/check-tracked-secrets.mjs', [fixture, '--all-files']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('tracked local secret file');
+    expect(result.stderr).not.toContain('.dev.vars.example:');
+  });
+});

@@ -251,7 +251,13 @@ describe('generated Proto runtime', () => {
     const checkpoint = create(TaskSopRevisionSchema, {
       ...taskRevision,
       uid: '00000000-0000-4000-8000-000000000013',
-      snapshot: { ...task, lifecycle: Lifecycle.DRAFT },
+      snapshot: {
+        ...task,
+        lifecycle: Lifecycle.DRAFT,
+        candidateVersionSequence: 2n,
+        candidateVersionLabel: '1.0.1',
+        candidateSourceVersionId: 'legacy-draft-2',
+      },
       origin: RevisionOrigin.IMPORTED_DRAFT_CHECKPOINT,
       exportEligible: false,
     });

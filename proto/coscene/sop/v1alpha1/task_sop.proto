@@ -233,6 +233,12 @@ message LegacyReferenceAttachment {
 
 // TaskSop is the current representation of a reusable task SOP.
 message TaskSop {
+  option (buf.validate.message).cel = {
+    id: "task_sop.candidate_matches_lifecycle"
+    message: "draft TaskSops require candidate version identity; non-drafts must omit it"
+    expression: "this.lifecycle == 1 ? (has(this.candidate_version_sequence) && has(this.candidate_version_label)) : (!has(this.candidate_version_sequence) && !has(this.candidate_version_label) && !has(this.candidate_source_version_id))"
+  };
+
   option (google.api.resource) = {
     type: "sop.coscene.io/TaskSop"
     pattern: "taskSops/{task_sop}"
@@ -287,6 +293,19 @@ message TaskSop {
   optional string legacy_subscene_display_name = 16 [(buf.validate.field).string.max_len = 256];
   optional string legacy_subscene_code = 17 [(buf.validate.field).string.max_len = 128];
   optional string source_id = 18 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional uint64 candidate_version_sequence = 19 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  optional string candidate_version_label = 20 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+  ];
+  optional string candidate_source_version_id = 21 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string reviewed_dependency_digest = 22 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.pattern = "^[a-f0-9]{64}$"
+  ];
 }
 
 // TaskSopRevision is an immutable historical snapshot of a TaskSop.

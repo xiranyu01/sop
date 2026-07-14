@@ -122,6 +122,12 @@ message RequirementSpec {
 
 // Requirement is the current representation of a customer production requirement.
 message Requirement {
+  option (buf.validate.message).cel = {
+    id: "requirement.candidate_matches_lifecycle"
+    message: "draft Requirements require candidate version identity; non-drafts must omit it"
+    expression: "this.lifecycle == 1 ? (has(this.candidate_version_sequence) && has(this.candidate_version_label)) : (!has(this.candidate_version_sequence) && !has(this.candidate_version_label) && !has(this.candidate_source_version_id))"
+  };
+
   option (google.api.resource) = {
     type: "sop.coscene.io/Requirement"
     pattern: "requirements/{requirement}"
@@ -166,6 +172,19 @@ message Requirement {
   google.protobuf.Timestamp update_time = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
   string etag = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
   optional string source_id = 12 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional uint64 candidate_version_sequence = 13 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).uint64.gt = 0
+  ];
+  optional string candidate_version_label = 14 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.pattern = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+  ];
+  optional string candidate_source_version_id = 15 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string reviewed_dependency_digest = 16 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (buf.validate.field).string.pattern = "^[a-f0-9]{64}$"
+  ];
 }
 
 // RequirementRevision is an immutable historical snapshot of a Requirement.

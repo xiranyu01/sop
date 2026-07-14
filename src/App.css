@@ -321,11 +321,13 @@ summary:focus-visible,
 
 .page-stack {
   display: grid;
+  min-width: 0;
   gap: 18px;
 }
 
 .detail-page {
   display: grid;
+  min-width: 0;
   gap: 12px;
 }
 
@@ -966,6 +968,7 @@ summary:focus-visible,
 
 .embedded-table {
   margin: 16px 18px;
+  min-width: 0;
   border: 1px solid var(--color-border-muted);
   border-radius: var(--primer-radius-medium);
   overflow: hidden;
@@ -1883,10 +1886,21 @@ summary:focus-visible,
 
 .subscene-group-list {
   display: grid;
+  min-width: 0;
 }
 
 .subscene-group {
+  min-width: 0;
   border-top: 1px solid var(--color-border-subtle);
+}
+
+.subscene-group .data-table-scroll {
+  overflow-x: scroll;
+  padding-bottom: 6px;
+}
+
+.subscene-group .data-table {
+  min-width: 1320px;
 }
 
 .subscene-group:first-child {

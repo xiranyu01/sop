@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bootstrapValidatedD1Generation } from '../../server/migrations/d1RuntimeBootstrap';
 import type { D1DatabaseLike, D1PreparedStatementLike, D1RunResult } from '../../server/d1Store';
+import { decodeCanonicalSnapshot, encodeCanonicalSnapshot } from '../../server/domain/appStore';
 import { seedData } from '../e2e/fixtures/seed';
 
 type GenerationRow = {
@@ -19,6 +20,7 @@ type GenerationRow = {
 class RuntimeD1 implements D1DatabaseLike {
   readonly generations = new Map<string, GenerationRow>();
   readonly meta = new Map<string, string>([['active_namespace', 'previous-active']]);
+  readonly namespaces = new Map<string, { namespace: string; epoch: number; writable: number; generation: number; snapshot_json: string }>();
 
   prepare(query: string): D1PreparedStatementLike {
     const sql = query.replace(/\s+/g, ' ').trim();
@@ -27,12 +29,19 @@ class RuntimeD1 implements D1DatabaseLike {
       values: unknown[] = [];
       bind(...values: unknown[]) { this.values = values; return this; }
       async first<T>(): Promise<T | null> {
+        if (sql === 'SELECT value FROM canonical_store_meta WHERE key = ?') {
+          const value = db.meta.get(String(this.values[0]));
+          return (value ? { value } : null) as T | null;
+        }
         if (sql.includes("canonical_store_meta WHERE key = 'runtime_namespace'")) {
           const value = db.meta.get('runtime_namespace');
           return (value ? { value } : null) as T | null;
         }
         if (sql.includes('FROM canonical_migration_generations WHERE generation_id = ?')) {
           return (db.generations.get(String(this.values[0])) ?? null) as T | null;
+        }
+        if (sql.startsWith('SELECT namespace, epoch')) {
+          return (db.namespaces.get(String(this.values[0])) ?? null) as T | null;
         }
         throw new Error(`Unsupported first: ${sql}`);
       }
@@ -55,9 +64,33 @@ class RuntimeD1 implements D1DatabaseLike {
           });
           return { meta: { changes: 1 } };
         }
+        if (sql.startsWith('INSERT OR IGNORE INTO canonical_namespaces')) {
+          const namespace = String(this.values[0]);
+          if (db.namespaces.has(namespace)) return { meta: { changes: 0 } };
+          const namedBootstrap = this.values.length === 4;
+          db.namespaces.set(namespace, {
+            namespace,
+            epoch: 1,
+            writable: namedBootstrap ? Number(this.values[1]) : 1,
+            generation: 0,
+            snapshot_json: String(namedBootstrap ? this.values[2] : this.values[1]),
+          });
+          return { meta: { changes: 1 } };
+        }
         if (sql.startsWith('INSERT OR IGNORE INTO canonical_store_meta')) {
-          if (db.meta.has('runtime_namespace')) return { meta: { changes: 0 } };
-          db.meta.set('runtime_namespace', String(this.values[0]));
+          const parameterizedKey = this.values.length === 2;
+          const key = parameterizedKey ? String(this.values[0]) : sql.includes("'active_namespace'") ? 'active_namespace' : 'runtime_namespace';
+          const value = String(this.values[parameterizedKey ? 1 : 0]);
+          if (db.meta.has(key)) return { meta: { changes: 0 } };
+          db.meta.set(key, value);
+          return { meta: { changes: 1 } };
+        }
+        if (sql.startsWith('UPDATE canonical_namespaces SET snapshot_json')) {
+          const [snapshot, , namespace, epoch, generation] = this.values;
+          const row = db.namespaces.get(String(namespace));
+          if (!row || row.epoch !== Number(epoch) || row.generation !== Number(generation) || !row.writable) return { meta: { changes: 0 } };
+          row.snapshot_json = String(snapshot);
+          row.generation += 1;
           return { meta: { changes: 1 } };
         }
         throw new Error(`Unsupported run: ${sql}`);
@@ -78,6 +111,45 @@ describe('Pages canonical inactive-generation boot', () => {
     expect(second.snapshot.customers[0].displayName).toBe(seedData.customers[0].name);
     expect(db.meta.get('runtime_namespace')).toBe(first.generationId);
     expect(db.meta.get('active_namespace')).toBe('previous-active');
+  });
+
+  it('persists rollback leases into an existing canonical namespace once, anchored to upgrade time', async () => {
+    const db = new RuntimeD1();
+    const legacy = structuredClone(seedData);
+    legacy.materials[0].images = [{
+      id: 'lease-image', name: 'lease.png', size: 4, contentType: 'image/png',
+      storageKey: 'managed/lease.png', uploadedAt: '2025-01-01T00:00:00.000Z',
+    }];
+    const installed = await bootstrapValidatedD1Generation(db, legacy, {
+      clock: () => new Date('2025-01-01T00:00:00.000Z'), rollbackAttachmentLeaseMs: 60_000,
+    });
+    const row = db.namespaces.get(installed.generationId)!;
+    const preUpgrade = decodeCanonicalSnapshot(row.snapshot_json);
+    preUpgrade.materials = preUpgrade.materials.map((material) => ({ ...material, images: [] }));
+    preUpgrade.attachments = [];
+    preUpgrade.operational.leases = [];
+    row.snapshot_json = encodeCanonicalSnapshot(preUpgrade);
+    db.meta.delete(`rollback_attachment_lease:${installed.generationId}`);
+
+    const first = await bootstrapValidatedD1Generation(db, legacy, {
+      clock: () => new Date('2026-07-14T10:00:00.000Z'), rollbackAttachmentLeaseMs: 60_000,
+    });
+    const afterFirst = decodeCanonicalSnapshot(row.snapshot_json);
+    expect(afterFirst.operational.leases).toContainEqual({
+      storageKey: 'managed/lease.png', generationId: first.generationId, expiresAt: '2026-07-14T10:01:00.000Z',
+    });
+    const generationAfterFirst = row.generation;
+
+    // A restart must neither extend the lease nor write a new canonical generation.
+    const second = await bootstrapValidatedD1Generation(db, legacy, {
+      clock: () => new Date('2026-07-20T00:00:00.000Z'), rollbackAttachmentLeaseMs: 60_000,
+    });
+    expect(second.snapshot.operational.leases).toEqual(afterFirst.operational.leases);
+    expect(row.generation).toBe(generationAfterFirst);
+    expect(db.meta.get(`rollback_attachment_lease:${first.generationId}`)).toContain('2026-07-14T10:00:00.000Z');
+
+    // Characterize that persistence, not only the returned bootstrap value, is authoritative.
+    expect(encodeCanonicalSnapshot(second.snapshot)).toBe(row.snapshot_json);
   });
 
   it('rejects an anchored BUILDING generation', async () => {

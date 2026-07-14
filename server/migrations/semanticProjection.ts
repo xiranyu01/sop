@@ -10,7 +10,8 @@ export function fingerprintRecord(source: unknown, canonical: unknown): string {
 }
 
 export function canonicalSemanticDigest(snapshot: CanonicalSnapshot): string {
-  return stableHash(stableJson(snapshot));
+  const { operational: _operational, ...domain } = snapshot;
+  return stableHash(stableJson(domain));
 }
 
 export function canonicalCardinalities(snapshot: CanonicalSnapshot): Record<string, number> {

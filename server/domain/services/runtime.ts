@@ -21,8 +21,23 @@ import type { LegacyApiStore } from '../../../shared/transport/restDto';
 import { convertLegacyToV1alpha1 } from '../../migrations/legacyToV1alpha1';
 import { canonicalId, deterministicUid, revisionName, stableJson } from '../../migrations/identity';
 import { createId, nextPatchVersion } from '../../versioning';
-import type { AppStore, CanonicalSnapshot, StorePin } from '../appStore';
+import type { AppStore, AttachmentUploadState, CanonicalSnapshot, StorePin } from '../appStore';
+import { runAttachmentCleanup } from '../attachmentCleanup';
+import { findReachableManagedAttachment } from '../attachmentReachability';
 import type { AttachmentObjectStore } from '../attachmentObjectStore';
+import {
+  abandonAttachmentUpload,
+  assertAttachmentUploadsComplete,
+  bindAttachmentUpload,
+  finishAttachmentUpload,
+  prepareAttachmentCompletion,
+  reconcileAttachmentOperations,
+  recordAttachmentObjectMetadata,
+  recordAttachmentPart,
+  recordUnboundAttachmentAbort,
+  requireAttachmentUpload,
+  type NewAttachmentUpload,
+} from '../attachmentService';
 import { AtomicCommitError, CanonicalDataError, StaleStoreEpochError } from '../errors';
 import { projectCanonicalToRest } from './projection';
 
@@ -31,12 +46,30 @@ export type CanonicalRuntimeOptions = {
   attachments?: Partial<AttachmentObjectStore>;
   writeExport?: LegacyApiStore['writeExport'];
   requestPin?: StorePin;
+  clock?: () => Date;
+  attachmentRetentionMs?: number;
+  attachmentUploadTtlMs?: number;
 };
 
 type CanonicalLegacyApiStore = LegacyApiStore & {
   readonly canonical: true;
   beginRequest(): Promise<CanonicalLegacyApiStore>;
   saveRobotModel(model: Partial<RobotModel>): Promise<RobotModel[]>;
+  bindAttachmentUpload(input: NewAttachmentUpload): Promise<void>;
+  attachmentUpload(input: Pick<AttachmentUploadState, 'uploadId' | 'scope' | 'ownerId' | 'version'> & { attachmentId?: string; allowExpired?: boolean }): Promise<AttachmentUploadState>;
+  recordAttachmentPart(uploadId: string, part: AttachmentUploadState['parts'][number]): Promise<void>;
+  recordAttachmentObjectMetadata(uploadId: string, sha256?: string): Promise<void>;
+  recordUnboundAttachmentAbort(input: { storageKey: string; uploadId: string }): Promise<void>;
+  prepareAttachmentCompletion(uploadId: string): Promise<AttachmentUploadState>;
+  abandonAttachmentUpload(uploadId: string): Promise<void>;
+  writeMaterialsAndFinishUpload(values: Material[], uploadId: string): Promise<Material[]>;
+  writeScenesAndFinishUpload(values: Scene[], uploadId: string): Promise<Scene[]>;
+  writeRequirementsAndFinishUpload(values: Requirement[], uploadId: string): Promise<Requirement[]>;
+  writeMaterialsForAttachmentDelete(values: Material[]): Promise<Material[]>;
+  writeScenesForAttachmentDelete(values: Scene[]): Promise<Scene[]>;
+  writeRequirementsForAttachmentDelete(values: Requirement[]): Promise<Requirement[]>;
+  cleanupAttachments(maxItems?: number): Promise<{ deleted: number; aborted: number; failed: number }>;
+  resolveAttachment(storageKey: string): Promise<CanonicalSnapshot['attachments'][number] | undefined>;
 };
 
 function converted(data: AppData): CanonicalSnapshot {
@@ -72,6 +105,46 @@ function reconcileById<T extends { id: string }>(current: T[], baseline: T[], de
   return merged;
 }
 
+type AttachmentEdge = { owner: string; resource: string; attachments: unknown[] };
+
+function attachmentEdges(data: AppData): AttachmentEdge[] {
+  return [
+    ...data.materials.map((material) => ({
+      owner: `material:${material.id}`,
+      resource: `material:${material.id}`,
+      attachments: material.images ?? [],
+    })),
+    ...data.requirements.flatMap((requirement) => requirement.versions.map((version) => ({
+      owner: `requirement:${requirement.id}:${version.version}`,
+      resource: `requirement:${requirement.id}`,
+      attachments: version.attachments ?? [],
+    }))),
+    ...data.scenes.flatMap((scene) => scene.subscenes.flatMap((subscene) => subscene.versions.map((version) => ({
+      owner: `task_sop:${scene.id}:${subscene.code}:${version.version}`,
+      resource: `task_sop:${scene.id}:${subscene.code}`,
+      attachments: version.attachments ?? [],
+    })))),
+  ];
+}
+
+function assertNoDirectAttachmentMutation(current: AppData, next: AppData): void {
+  const currentEdges = attachmentEdges(current);
+  const currentByOwner = new Map(currentEdges.map((edge) => [edge.owner, edge]));
+  for (const edge of attachmentEdges(next)) {
+    const previous = currentByOwner.get(edge.owner);
+    if (previous) {
+      if (stableJson(previous.attachments) !== stableJson(edge.attachments)) {
+        throw new CanonicalDataError('附件只能通过专用上传或删除接口修改');
+      }
+      continue;
+    }
+    if (edge.attachments.length > 0 && !currentEdges.some((candidate) =>
+      candidate.resource === edge.resource && stableJson(candidate.attachments) === stableJson(edge.attachments))) {
+      throw new CanonicalDataError('新版本只能继承同一资源已有的附件');
+    }
+  }
+}
+
 function sourceVersionId(revision: { sourceVersionId?: string; name: string }): string {
   return revision.sourceVersionId || revision.name.split('/').at(-1) || revision.name;
 }
@@ -101,16 +174,21 @@ function preserveTaskCanonicalOnly(
   spec.objects = spec.objects.map((object, index) => {
     const prior = previous.objects.find((item) => item.id === object.id) ?? previous.objects[index];
     if (!prior) return object;
+    const materialDescriptor = object.materialDescriptor
+      ? { ...object.materialDescriptor }
+      : prior.materialDescriptor;
+    if (materialDescriptor) {
+      if (prior.materialDescriptor?.size !== undefined) materialDescriptor.size = prior.materialDescriptor.size;
+      else delete materialDescriptor.size;
+      if (prior.materialDescriptor?.weight !== undefined) materialDescriptor.weight = prior.materialDescriptor.weight;
+      else delete materialDescriptor.weight;
+    }
     return {
       ...object,
       roles: prior.roles,
       attributes: prior.attributes,
       images: prior.images,
-      materialDescriptor: object.materialDescriptor ? {
-        ...object.materialDescriptor,
-        size: prior.materialDescriptor?.size,
-        weight: prior.materialDescriptor?.weight,
-      } : prior.materialDescriptor,
+      materialDescriptor,
     };
   });
 
@@ -198,6 +276,9 @@ function mergeTaskSops(current: CanonicalSnapshot, candidate: CanonicalSnapshot)
       return previous;
     }
     if (next.snapshot?.lifecycle === Lifecycle.CONFIRMED) {
+      assertAttachmentUploadsComplete(current, {
+        scope: 'task_sop', ownerId: next.snapshot.sourceId || next.snapshot.name, version: candidateRevision.versionLabel,
+      });
       const state = next.snapshot.spec?.robotState;
       if (!state?.initial.trim() || !state.target.trim()) {
         throw new CanonicalDataError('机器人初始状态和目标状态不能为空，不能确认任务 SOP');
@@ -242,6 +323,9 @@ function mergeRequirements(current: CanonicalSnapshot, candidate: CanonicalSnaps
       return previous;
     }
     if (next.snapshot?.lifecycle === Lifecycle.CONFIRMED) {
+      assertAttachmentUploadsComplete(current, {
+        scope: 'requirement', ownerId: next.snapshot.sourceId || next.snapshot.name, version: next.versionLabel,
+      });
       const spec = next.snapshot.spec;
       if (!spec?.customer || !candidate.customers.some((item) => item.name === spec.customer)) {
         throw new CanonicalDataError('客户不存在，不能确认需求');
@@ -290,7 +374,12 @@ export class CanonicalRuntime {
     let pin = await this.pin();
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const result = await this.store.commit(pin, (snapshot) => mutator(snapshot, projectCanonicalToRest(snapshot)));
+        const result = await this.store.commit(pin, (snapshot) => reconcileAttachmentOperations(
+          snapshot,
+          mutator(snapshot, projectCanonicalToRest(snapshot)),
+          this.options.clock?.() ?? new Date(),
+          this.options.attachmentRetentionMs ?? 24 * 60 * 60_000,
+        ));
         if (this.requestPin) this.requestPin = result.pin;
         const data = projectCanonicalToRest(result.snapshot);
         this.requestBaseline = structuredClone(data);
@@ -307,7 +396,12 @@ export class CanonicalRuntime {
     throw new AtomicCommitError(`Canonical mutation retry exhausted for ${pin.namespace}`);
   }
 
-  async replaceCatalog<K extends 'customers' | 'materials' | 'globalFields' | 'materialStateRules'>(key: K, values: AppData[K]): Promise<AppData[K]> {
+  async replaceCatalog<K extends 'customers' | 'materials' | 'globalFields' | 'materialStateRules'>(
+    key: K,
+    values: AppData[K],
+    finishUploadId?: string,
+    allowAttachmentDelete = false,
+  ): Promise<AppData[K]> {
     let baseline = this.requestBaseline?.[key] as AppData[K] | undefined;
     const data = await this.mutate((current, legacy) => {
       baseline ??= structuredClone(legacy[key]) as AppData[K];
@@ -316,7 +410,16 @@ export class CanonicalRuntime {
         baseline as Array<{ id: string }>,
         values as Array<{ id: string }>,
       ) as AppData[K];
+      if (key === 'materials' && !finishUploadId && !allowAttachmentDelete) {
+        assertNoDirectAttachmentMutation(legacy, { ...legacy, materials: intended as Material[] });
+      }
       const candidate = converted({ ...legacy, [key]: intended });
+      if (finishUploadId) {
+        const upload = current.operational.uploads.find((item) => item.uploadId === finishUploadId);
+        const attachment = candidate.attachments.find((item) => item.sourceId === upload?.attachmentId);
+        if (attachment && upload?.publicUri) attachment.uri = upload.publicUri;
+        if (attachment && upload?.sha256) attachment.sha256 = upload.sha256;
+      }
       if (key === 'customers') {
         const retained = new Set(candidate.customers.map((item) => item.name));
         const referenced = new Set([
@@ -360,11 +463,13 @@ export class CanonicalRuntime {
           };
         }) as typeof candidate[K];
       }
-      return {
+      const next = {
         ...current,
         [key]: resources,
         ...(key === 'materials' ? { attachments: mergeAttachments(current, candidate) } : {}),
       };
+      if (finishUploadId) finishAttachmentUpload(next, finishUploadId);
+      return next;
     });
     return data[key];
   }
@@ -417,22 +522,40 @@ export class CanonicalRuntime {
     return data.robotModels;
   }
 
-  async replaceScenes(values: Scene[]): Promise<Scene[]> {
+  async replaceScenes(values: Scene[], finishUploadId?: string, allowAttachmentDelete = false): Promise<Scene[]> {
     let baseline = this.requestBaseline?.scenes;
     const data = await this.mutate((current, legacy) => {
       baseline ??= structuredClone(legacy.scenes);
-      const candidate = converted({ ...legacy, scenes: reconcileById(legacy.scenes, baseline, values) });
+      const intended = reconcileById(legacy.scenes, baseline, values);
+      if (!finishUploadId && !allowAttachmentDelete) assertNoDirectAttachmentMutation(legacy, { ...legacy, scenes: intended });
+      const candidate = converted({ ...legacy, scenes: intended });
+      if (finishUploadId) {
+        const upload = current.operational.uploads.find((item) => item.uploadId === finishUploadId);
+        const attachment = candidate.attachments.find((item) => item.sourceId === upload?.attachmentId);
+        if (attachment && upload?.publicUri) attachment.uri = upload.publicUri;
+        if (attachment && upload?.sha256) attachment.sha256 = upload.sha256;
+      }
       const merged = mergeTaskSops(current, candidate);
-      return { ...current, ...merged };
+      const next = { ...current, ...merged };
+      if (finishUploadId) finishAttachmentUpload(next, finishUploadId);
+      return next;
     });
     return data.scenes;
   }
 
-  async replaceRequirements(values: Requirement[]): Promise<Requirement[]> {
+  async replaceRequirements(values: Requirement[], finishUploadId?: string, allowAttachmentDelete = false): Promise<Requirement[]> {
     let baseline = this.requestBaseline?.requirements;
     const data = await this.mutate((current, legacy) => {
       baseline ??= structuredClone(legacy.requirements);
-      const candidate = converted({ ...legacy, requirements: reconcileById(legacy.requirements, baseline, values) });
+      const intended = reconcileById(legacy.requirements, baseline, values);
+      if (!finishUploadId && !allowAttachmentDelete) assertNoDirectAttachmentMutation(legacy, { ...legacy, requirements: intended });
+      const candidate = converted({ ...legacy, requirements: intended });
+      if (finishUploadId) {
+        const upload = current.operational.uploads.find((item) => item.uploadId === finishUploadId);
+        const attachment = candidate.attachments.find((item) => item.sourceId === upload?.attachmentId);
+        if (attachment && upload?.publicUri) attachment.uri = upload.publicUri;
+        if (attachment && upload?.sha256) attachment.sha256 = upload.sha256;
+      }
       // Preserve an existing exact pin when the selected source robot is unchanged;
       // otherwise pin the selected robot's current immutable revision. Candidate
       // `/current` revisions belong only to the conversion boundary.
@@ -458,15 +581,79 @@ export class CanonicalRuntime {
       }
       candidate.robotModelRevisions = current.robotModelRevisions;
       const merged = mergeRequirements(current, candidate);
-      return { ...current, ...merged };
+      const next = { ...current, ...merged };
+      if (finishUploadId) finishAttachmentUpload(next, finishUploadId);
+      return next;
     });
     return data.requirements;
+  }
+
+  async bindAttachmentUpload(input: NewAttachmentUpload): Promise<void> {
+    await this.mutate((current) => {
+      const next = structuredClone(current);
+      bindAttachmentUpload(next, input, this.options.clock?.() ?? new Date(), this.options.attachmentUploadTtlMs ?? 24 * 60 * 60_000);
+      return next;
+    });
+  }
+
+  async attachmentUpload(input: Pick<AttachmentUploadState, 'uploadId' | 'scope' | 'ownerId' | 'version'> & { attachmentId?: string; allowExpired?: boolean }): Promise<AttachmentUploadState> {
+    const pin = await this.pin();
+    return requireAttachmentUpload(
+      await this.store.readSnapshot(pin),
+      input,
+      input.allowExpired ? undefined : (this.options.clock?.() ?? new Date()),
+    );
+  }
+
+  async recordAttachmentPart(uploadId: string, part: AttachmentUploadState['parts'][number]): Promise<void> {
+    await this.mutate((current) => {
+      const next = structuredClone(current); recordAttachmentPart(next, uploadId, part); return next;
+    });
+  }
+
+  async recordAttachmentObjectMetadata(uploadId: string, sha256?: string): Promise<void> {
+    await this.mutate((current) => {
+      const next = structuredClone(current); recordAttachmentObjectMetadata(next, uploadId, sha256); return next;
+    });
+  }
+
+  async recordUnboundAttachmentAbort(input: { storageKey: string; uploadId: string }): Promise<void> {
+    await this.mutate((current) => {
+      const next = structuredClone(current);
+      recordUnboundAttachmentAbort(next, input, this.options.clock?.() ?? new Date());
+      return next;
+    });
+  }
+
+  async prepareAttachmentCompletion(uploadId: string): Promise<AttachmentUploadState> {
+    let upload: AttachmentUploadState | undefined;
+    await this.mutate((current) => {
+      const next = structuredClone(current);
+      upload = prepareAttachmentCompletion(next, uploadId, this.options.clock?.() ?? new Date());
+      return next;
+    });
+    return upload!;
+  }
+
+  async abandonAttachmentUpload(uploadId: string): Promise<void> {
+    await this.mutate((current) => {
+      const next = structuredClone(current); abandonAttachmentUpload(next, uploadId, this.options.clock?.() ?? new Date()); return next;
+    });
   }
 }
 
 export function createCanonicalApiStore(appStore: AppStore, options: CanonicalRuntimeOptions = {}): CanonicalLegacyApiStore {
   const runtime = new CanonicalRuntime(appStore, options);
   const attachment = options.attachments ?? {};
+  const objectStore: Partial<AttachmentObjectStore> = {};
+  if (attachment.createAttachmentUpload) objectStore.createAttachmentUpload = (input) => attachment.createAttachmentUpload!(input);
+  if (attachment.uploadAttachmentPart) objectStore.uploadAttachmentPart = (input) => attachment.uploadAttachmentPart!(input);
+  if (attachment.completeAttachmentUpload) objectStore.completeAttachmentUpload = (input) => attachment.completeAttachmentUpload!(input);
+  if (attachment.abortAttachmentUpload) objectStore.abortAttachmentUpload = (input) => attachment.abortAttachmentUpload!(input);
+  if (attachment.deleteAttachment) objectStore.deleteAttachment = (storageKey) => attachment.deleteAttachment!(storageKey);
+  if (attachment.getAttachment) objectStore.getAttachment = (storageKey) => attachment.getAttachment!(storageKey);
+  if (attachment.headAttachment) objectStore.headAttachment = (storageKey) => attachment.headAttachment!(storageKey);
+  if (attachment.attachmentExists) objectStore.attachmentExists = (storageKey) => attachment.attachmentExists!(storageKey);
   return {
     canonical: true,
     async beginRequest() {
@@ -480,6 +667,30 @@ export function createCanonicalApiStore(appStore: AppStore, options: CanonicalRu
       throw new AtomicCommitError(`Canonical robot saves require saveRobotModel; received ${values.length} models`);
     },
     async saveRobotModel(value) { return runtime.saveRobotModel(value); },
+    async bindAttachmentUpload(input) { return runtime.bindAttachmentUpload(input); },
+    async attachmentUpload(input) { return runtime.attachmentUpload(input); },
+    async recordAttachmentPart(uploadId, part) { return runtime.recordAttachmentPart(uploadId, part); },
+    async recordAttachmentObjectMetadata(uploadId, sha256) { return runtime.recordAttachmentObjectMetadata(uploadId, sha256); },
+    async recordUnboundAttachmentAbort(input) { return runtime.recordUnboundAttachmentAbort(input); },
+    async prepareAttachmentCompletion(uploadId) { return runtime.prepareAttachmentCompletion(uploadId); },
+    async abandonAttachmentUpload(uploadId) { return runtime.abandonAttachmentUpload(uploadId); },
+    async writeMaterialsAndFinishUpload(values, uploadId) { return runtime.replaceCatalog('materials', values, uploadId); },
+    async writeScenesAndFinishUpload(values, uploadId) { return runtime.replaceScenes(values, uploadId); },
+    async writeRequirementsAndFinishUpload(values, uploadId) { return runtime.replaceRequirements(values, uploadId); },
+    async writeMaterialsForAttachmentDelete(values) { return runtime.replaceCatalog('materials', values, undefined, true); },
+    async writeScenesForAttachmentDelete(values) { return runtime.replaceScenes(values, undefined, true); },
+    async writeRequirementsForAttachmentDelete(values) { return runtime.replaceRequirements(values, undefined, true); },
+    async cleanupAttachments(maxItems) {
+      if (!attachment.deleteAttachment || !attachment.abortAttachmentUpload) throw new Error('附件存储未配置');
+      return runAttachmentCleanup(appStore, {
+        deleteAttachment: attachment.deleteAttachment.bind(attachment),
+        abortAttachmentUpload: attachment.abortAttachmentUpload.bind(attachment),
+      }, { namespace: options.namespace, clock: options.clock, maxItems });
+    },
+    async resolveAttachment(storageKey) {
+      const pin = await appStore.pin(options.namespace);
+      return findReachableManagedAttachment(await appStore.readSnapshot(pin), storageKey);
+    },
     async writeScenes(values: Scene[]) { return runtime.replaceScenes(values); },
     async writeRequirements(values: Requirement[]) { return runtime.replaceRequirements(values); },
     async writeGlobalFields(values: GlobalField[]) { return runtime.replaceCatalog('globalFields', values); },
@@ -487,7 +698,7 @@ export function createCanonicalApiStore(appStore: AppStore, options: CanonicalRu
     async writeExport(requirementId, version, yaml) {
       return options.writeExport ? options.writeExport(requirementId, version, yaml) : `/exports/requirements/${canonicalId(requirementId, requirementId)}/${version}.yaml`;
     },
-    ...attachment,
+    ...objectStore,
   };
 }
 

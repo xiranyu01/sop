@@ -45,7 +45,10 @@ test('tiny multipart upload completes, downloads through a real browser trigger,
   })).toBe('deterministic tiny attachment');
 
   const data = await apiJson<AppData>(request, 'GET', '/api/data');
-  expect(data.requirements[0].versions[0].attachments?.some((item) => item.id === init.attachmentId)).toBe(true);
+  expect(
+    data.requirements[0].versions[0].attachments?.some((item) => item.id === init.attachmentId),
+    JSON.stringify({ expectedAttachmentId: init.attachmentId, attachments: data.requirements[0].versions[0].attachments }),
+  ).toBe(true);
   await apiJson(request, 'DELETE', `/api/requirements/REQ001/versions/0.0.1/attachments/${init.attachmentId}`);
   const missing = await request.get(`/api/attachments/${encodeURIComponent(init.storageKey)}`, { headers: authHeaders });
   expect(missing.status()).toBe(404);

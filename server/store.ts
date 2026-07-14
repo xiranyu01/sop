@@ -1,9 +1,18 @@
-import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { defaultAppMetadata } from '../src/schemaVersions';
 import type { AppData, AppMetadata, Customer, GlobalField, Material, MaterialStateRule, Requirement, RobotModel, Scene } from '../src/types';
 import type { LegacyApiStore } from '../shared/transport/restDto';
+import type { AttachmentObjectStore, AttachmentObjectMetadata } from './domain/attachmentObjectStore';
+import {
+  assertExpectedObjectSize,
+  normalizeAttachmentComplete,
+  validateAttachmentPart,
+  validateAttachmentUpload,
+  validateStorageKey,
+  validateUploadSession,
+} from './domain/attachmentObjectStore';
 import {
   decodeCanonicalSnapshot,
   emptyCanonicalSnapshot,
@@ -27,7 +36,7 @@ export type CanonicalFileStoreOptions = {
   faultInjection?: (point: 'before-generation-publish' | 'before-manifest-publish') => void | Promise<void>;
 };
 
-export type LocalFileStore = LegacyApiStore & {
+export type LocalFileStore = LegacyApiStore & AttachmentObjectStore & {
   localAttachmentPath(storageKey: string): string;
 };
 
@@ -221,6 +230,59 @@ export function createFileStore(options: FileStoreOptions = {}): LocalFileStore 
     return containedPath(path.join(uploadsDir, '.parts'), path.join(uploadId, `${partNumber}-${path.basename(storageKey)}.part`));
   }
 
+  type LocalUploadSession = { storageKey: string; contentType: string };
+  type LocalCompletionReceipt = {
+    storageKey: string;
+    parts: Array<{ partNumber: number; etag: string }>;
+    metadata: AttachmentObjectMetadata;
+  };
+
+  function uploadSessionRoot(uploadId: string): string {
+    return containedPath(path.join(uploadsDir, '.parts'), uploadId);
+  }
+
+  function uploadSessionFile(uploadId: string): string {
+    return path.join(uploadSessionRoot(uploadId), 'session.json');
+  }
+
+  function completionReceiptFile(uploadId: string): string {
+    return containedPath(path.join(uploadsDir, '.completed'), `${uploadId}.json`);
+  }
+
+  function objectMetadataFile(storageKey: string): string {
+    return `${safeUploadPath(storageKey)}.object-metadata.json`;
+  }
+
+  async function optionalJson<T>(file: string): Promise<T | null> {
+    try {
+      return JSON.parse(await readFile(file, 'utf-8')) as T;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  async function localHeadAttachment(storageKey: string): Promise<AttachmentObjectMetadata | null> {
+    validateStorageKey(storageKey);
+    const file = safeUploadPath(storageKey);
+    try {
+      const actual = await stat(file);
+      const saved = await optionalJson<AttachmentObjectMetadata>(objectMetadataFile(storageKey));
+      if (saved && saved.storageKey !== storageKey) throw new Error('local attachment metadata key mismatch');
+      const sha256 = saved?.sha256 ?? createHash('sha256').update(await readFile(file)).digest('hex');
+      return {
+        storageKey,
+        sizeBytes: actual.size,
+        contentType: saved?.contentType,
+        etag: saved?.etag,
+        sha256,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
   const store: LocalFileStore = {
     async readData() {
       const [metadata, customers, materials, robotModels, scenes, requirements, globalFields, materialStateRules] = await Promise.all([
@@ -271,31 +333,96 @@ export function createFileStore(options: FileStoreOptions = {}): LocalFileStore 
     },
     localAttachmentPath: safeUploadPath,
     async createAttachmentUpload(input) {
-      const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      validateAttachmentUpload(input);
+      const uploadId = randomUUID();
       await mkdir(path.dirname(safeUploadPath(input.storageKey)), { recursive: true });
-      await mkdir(containedPath(path.join(uploadsDir, '.parts'), uploadId), { recursive: true });
+      await mkdir(uploadSessionRoot(uploadId), { recursive: true });
+      await atomicWrite(uploadSessionFile(uploadId), JSON.stringify({ storageKey: input.storageKey, contentType: input.contentType } satisfies LocalUploadSession));
       return { uploadId, storageKey: input.storageKey };
     },
     async uploadAttachmentPart(input) {
+      validateAttachmentPart(input);
+      const session = await optionalJson<LocalUploadSession>(uploadSessionFile(input.uploadId));
+      if (!session || session.storageKey !== input.storageKey) throw new Error('multipart upload session does not match storage key');
       const file = uploadPartPath(input.storageKey, input.uploadId, input.partNumber);
       await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, Buffer.from(input.body));
-      return { etag: `${input.partNumber}-${input.body.byteLength}` };
+      const body = Buffer.from(input.body);
+      await writeFile(file, body);
+      return { etag: `${input.partNumber}-${body.byteLength}-${createHash('sha256').update(body).digest('hex').slice(0, 16)}` };
     },
     async completeAttachmentUpload(input) {
+      const parts = normalizeAttachmentComplete(input);
+      const receipt = await optionalJson<LocalCompletionReceipt>(completionReceiptFile(input.uploadId));
+      if (receipt) {
+        if (receipt.storageKey !== input.storageKey || JSON.stringify(receipt.parts) !== JSON.stringify(parts)) {
+          throw new Error('completed multipart receipt does not match retry request');
+        }
+        assertExpectedObjectSize(await localHeadAttachment(input.storageKey), input.expectedSizeBytes);
+        return;
+      }
+      const session = await optionalJson<LocalUploadSession>(uploadSessionFile(input.uploadId));
+      if (!session || session.storageKey !== input.storageKey) throw new Error('multipart upload session does not match storage key');
       const target = safeUploadPath(input.storageKey);
       await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, Buffer.alloc(0));
-      for (const part of input.parts.slice().sort((a, b) => a.partNumber - b.partNumber)) {
-        await appendFile(target, await readFile(uploadPartPath(input.storageKey, input.uploadId, part.partNumber)));
+      const temporary = `${target}.${input.uploadId}.tmp`;
+      const hash = createHash('sha256');
+      let sizeBytes = 0;
+      await writeFile(temporary, Buffer.alloc(0));
+      for (const part of parts) {
+        const body = await readFile(uploadPartPath(input.storageKey, input.uploadId, part.partNumber));
+        const actualEtag = `${part.partNumber}-${body.byteLength}-${createHash('sha256').update(body).digest('hex').slice(0, 16)}`;
+        if (part.etag !== actualEtag) {
+          await rm(temporary, { force: true });
+          throw new Error(`multipart part ${part.partNumber} ETag does not match uploaded bytes`);
+        }
+        sizeBytes += body.byteLength;
+        hash.update(body);
+        await appendFile(temporary, body);
       }
-      await rm(containedPath(path.join(uploadsDir, '.parts'), input.uploadId), { recursive: true, force: true });
+      if (input.expectedSizeBytes !== undefined && sizeBytes !== input.expectedSizeBytes) {
+        await rm(temporary, { force: true });
+        throw new Error(`completed attachment size ${sizeBytes} does not match expected size ${input.expectedSizeBytes}`);
+      }
+      const sha256 = hash.digest('hex');
+      await rename(temporary, target);
+      const metadata: AttachmentObjectMetadata = {
+        storageKey: input.storageKey,
+        sizeBytes,
+        contentType: session.contentType,
+        etag: sha256,
+        sha256,
+      };
+      await atomicWrite(objectMetadataFile(input.storageKey), JSON.stringify(metadata));
+      await atomicWrite(completionReceiptFile(input.uploadId), JSON.stringify({ storageKey: input.storageKey, parts, metadata } satisfies LocalCompletionReceipt));
+      await rm(uploadSessionRoot(input.uploadId), { recursive: true, force: true });
     },
     async abortAttachmentUpload(input) {
-      await rm(containedPath(path.join(uploadsDir, '.parts'), input.uploadId), { recursive: true, force: true });
+      validateUploadSession(input);
+      const receipt = await optionalJson<LocalCompletionReceipt>(completionReceiptFile(input.uploadId));
+      if (receipt) {
+        if (receipt.storageKey !== input.storageKey) throw new Error('completed multipart receipt does not match abort request');
+        return;
+      }
+      await rm(uploadSessionRoot(input.uploadId), { recursive: true, force: true });
     },
     async deleteAttachment(storageKey) {
+      validateStorageKey(storageKey);
       await rm(safeUploadPath(storageKey), { force: true });
+      await rm(objectMetadataFile(storageKey), { force: true });
+    },
+    async getAttachment(storageKey) {
+      const metadata = await localHeadAttachment(storageKey);
+      if (!metadata) return null;
+      const body = await readFile(safeUploadPath(storageKey));
+      return {
+        body: new Blob([body]).stream(),
+        metadata,
+        httpMetadata: { contentType: metadata.contentType },
+      };
+    },
+    headAttachment: localHeadAttachment,
+    async attachmentExists(storageKey) {
+      return (await localHeadAttachment(storageKey)) !== null;
     },
   };
 

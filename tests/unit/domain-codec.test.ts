@@ -53,4 +53,21 @@ describe('canonical domain codec', () => {
     malformed.resources.materials.push({ displayName: 'Cup', unknownField: true });
     expect(() => decodeCanonicalSnapshot(JSON.stringify(malformed))).toThrow(CanonicalDataError);
   });
+
+  it('keeps pre-operational empty snapshots byte-stable and round-trips versioned attachment operations', () => {
+    const oldEnvelope = encodeCanonicalSnapshot(emptyCanonicalSnapshot());
+    expect(oldEnvelope).not.toContain('operational');
+    expect(encodeCanonicalSnapshot(decodeCanonicalSnapshot(oldEnvelope))).toBe(oldEnvelope);
+
+    const withOperations = emptyCanonicalSnapshot();
+    withOperations.operational.leases.push({
+      storageKey: 'managed/held.bin', generationId: 'rollback-generation', expiresAt: '2026-07-21T00:00:00.000Z',
+    });
+    expect(decodeCanonicalSnapshot(encodeCanonicalSnapshot(withOperations)).operational).toEqual(withOperations.operational);
+    const malformedLease = JSON.parse(encodeCanonicalSnapshot(withOperations)) as {
+      operational: { leases: Array<{ expiresAt?: string }> };
+    };
+    malformedLease.operational.leases[0].expiresAt = 'not-an-iso-time';
+    expect(() => decodeCanonicalSnapshot(JSON.stringify(malformedLease))).toThrow(CanonicalDataError);
+  });
 });

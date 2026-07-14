@@ -26,6 +26,14 @@ const fileStore = createCanonicalApiStore(canonicalStore, {
   attachments: legacyFileStore,
   writeExport: legacyFileStore.writeExport.bind(legacyFileStore),
 });
+const attachmentCleanupIntervalMs = Number(process.env.SOP_ATTACHMENT_CLEANUP_INTERVAL_MS ?? 60_000);
+if (Number.isSafeInteger(attachmentCleanupIntervalMs) && attachmentCleanupIntervalMs > 0) {
+  const cleanup = () => fileStore.cleanupAttachments(32).catch((error) => {
+    console.error('Attachment cleanup failed; it will be retried.', error instanceof Error ? error.message : String(error));
+  });
+  void cleanup();
+  setInterval(cleanup, attachmentCleanupIntervalMs).unref();
+}
 
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
   const arrayBuffer = new ArrayBuffer(buffer.byteLength);
@@ -51,13 +59,21 @@ app.get('/api/storage-status', (req, res) => {
   res.json({ attachments: { enabled: true, message: '', publicBaseUrl: process.env.R2_PUBLIC_BASE_URL || '' } });
 });
 
-app.get(/^\/api\/attachments\/(.+)$/, (req, res) => {
+app.get(/^\/api\/attachments\/(.+)$/, async (req, res) => {
   const password = process.env.APP_PASSWORD;
   if (password && req.header('authorization') !== `Bearer ${password}`) {
     res.status(401).json({ message: '访问密码无效或已过期' });
     return;
   }
-  res.download(legacyFileStore.localAttachmentPath(decodeURIComponent(req.params[0])));
+  const storageKey = decodeURIComponent(req.params[0]);
+  const attachment = await fileStore.resolveAttachment(storageKey);
+  if (!attachment) {
+    res.status(404).json({ message: '附件不存在或不再可访问' });
+    return;
+  }
+  res.download(legacyFileStore.localAttachmentPath(storageKey), attachment.filename, (error) => {
+    if (error && !res.headersSent) res.status(404).json({ message: '附件对象不存在' });
+  });
 });
 
 app.all('/api/*', async (req, res) => {

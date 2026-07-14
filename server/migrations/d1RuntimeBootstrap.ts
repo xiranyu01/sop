@@ -1,6 +1,9 @@
 import type { AppData } from '../../src/types';
-import type { D1DatabaseLike } from '../d1Store';
-import { canonicalSchemaVersion, encodeCanonicalSnapshot } from '../domain/appStore';
+import { createCanonicalD1AppStore, type D1DatabaseLike } from '../d1Store';
+import { canonicalSchemaVersion, encodeCanonicalSnapshot, type CanonicalSnapshot } from '../domain/appStore';
+import { referencedManagedStorageKeys } from '../domain/attachmentReachability';
+import { addRollbackAttachmentLeases } from '../domain/attachmentService';
+import { AtomicCommitError } from '../domain/errors';
 import { convertLegacyToV1alpha1 } from './legacyToV1alpha1';
 import { identityVersion, stableHash, stableJson } from './identity';
 import { converterVersion, migrationFormatVersion, migrationGenerationId, storageSchemaVersion, type MigrationManifest } from './manifest';
@@ -48,6 +51,81 @@ async function runtimeNamespace(db: D1DatabaseLike): Promise<string | undefined>
   return row?.value;
 }
 
+const defaultRollbackAttachmentLeaseMs = 7 * 24 * 60 * 60_000;
+
+type RollbackLeaseAnchor = {
+  generationId: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+function leaseMetaKey(generationId: string): string {
+  return `rollback_attachment_lease:${generationId}`;
+}
+
+function decodeLeaseAnchor(value: string, generationId: string): RollbackLeaseAnchor {
+  let anchor: Partial<RollbackLeaseAnchor>;
+  try { anchor = JSON.parse(value) as Partial<RollbackLeaseAnchor>; } catch (error) {
+    throw new Error(`Canonical runtime attachment lease anchor is malformed: ${generationId}`, { cause: error });
+  }
+  if (anchor.generationId !== generationId || typeof anchor.createdAt !== 'string' || typeof anchor.expiresAt !== 'string' ||
+    Number.isNaN(new Date(anchor.createdAt).getTime()) || Number.isNaN(new Date(anchor.expiresAt).getTime())) {
+    throw new Error(`Canonical runtime attachment lease anchor is malformed: ${generationId}`);
+  }
+  return anchor as RollbackLeaseAnchor;
+}
+
+async function rollbackLeaseAnchor(
+  db: D1DatabaseLike,
+  generationId: string,
+  rollbackLeaseMs: number,
+  clock: () => Date,
+): Promise<RollbackLeaseAnchor> {
+  const key = leaseMetaKey(generationId);
+  const existing = await db.prepare('SELECT value FROM canonical_store_meta WHERE key = ?').bind(key).first<{ value: string }>();
+  if (existing) return decodeLeaseAnchor(existing.value, generationId);
+  const created = clock();
+  if (Number.isNaN(created.getTime())) throw new Error('Invalid rollback attachment lease clock');
+  const anchor: RollbackLeaseAnchor = {
+    generationId,
+    createdAt: created.toISOString(),
+    expiresAt: new Date(created.getTime() + rollbackLeaseMs).toISOString(),
+  };
+  await db.prepare('INSERT OR IGNORE INTO canonical_store_meta (key, value) VALUES (?, ?)')
+    .bind(key, stableJson(anchor)).run();
+  const selected = await db.prepare('SELECT value FROM canonical_store_meta WHERE key = ?').bind(key).first<{ value: string }>();
+  if (!selected) throw new Error(`Canonical runtime attachment lease anchor was not published: ${generationId}`);
+  return decodeLeaseAnchor(selected.value, generationId);
+}
+
+function managedStorageKeys(snapshot: CanonicalSnapshot): Set<string> {
+  return new Set([
+    ...snapshot.attachments.flatMap((attachment) => attachment.storageKey ? [attachment.storageKey] : []),
+    ...referencedManagedStorageKeys(snapshot),
+  ]);
+}
+
+function generationLeases(
+  snapshot: CanonicalSnapshot,
+  generationId: string,
+  expiresAt: string,
+  rollbackSnapshot: CanonicalSnapshot = snapshot,
+): CanonicalSnapshot {
+  const next = addRollbackAttachmentLeases(snapshot, generationId, expiresAt);
+  const managed = new Set([
+    ...managedStorageKeys(next),
+    ...managedStorageKeys(rollbackSnapshot),
+  ]);
+  const existing = new Set(next.operational.leases.map((lease) => `${lease.generationId}:${lease.storageKey}`));
+  for (const storageKey of managed) {
+    const key = `${generationId}:${storageKey}`;
+    if (!existing.has(key)) next.operational.leases.push({ storageKey, generationId, expiresAt });
+  }
+  next.operational.leases = next.operational.leases.map((lease) =>
+    lease.generationId === generationId && managed.has(lease.storageKey) ? { ...lease, expiresAt } : lease);
+  return next;
+}
+
 async function loadValidatedGeneration(db: D1DatabaseLike, generationId: string) {
   const row = await db.prepare(`SELECT generation_id, lifecycle, source_fingerprint, converter_version, storage_schema_version,
       canonical_schema_version, identity_version, manifest_json, snapshot_json, report_json
@@ -65,7 +143,7 @@ async function loadValidatedGeneration(db: D1DatabaseLike, generationId: string)
   } catch (error) {
     throw new Error(`Canonical runtime generation metadata is malformed: ${generationId}`, { cause: error });
   }
-  return reconcileValidatedRuntimeGeneration({
+  const validated = reconcileValidatedRuntimeGeneration({
     generationId,
     lifecycle: row.lifecycle,
     sourceFingerprint: row.source_fingerprint,
@@ -79,15 +157,58 @@ async function loadValidatedGeneration(db: D1DatabaseLike, generationId: string)
     report,
     encodedSnapshot: row.snapshot_json,
   });
+  return validated;
+}
+
+async function persistRollbackLeases(
+  db: D1DatabaseLike,
+  generation: Awaited<ReturnType<typeof loadValidatedGeneration>>,
+  anchor: RollbackLeaseAnchor,
+) {
+  const bootstrapSnapshot = generationLeases(generation.snapshot, generation.generationId, anchor.expiresAt);
+  const store = createCanonicalD1AppStore(db, {
+    bootstrap: { namespace: generation.generationId, snapshot: bootstrapSnapshot },
+  });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const pin = await store.pin(generation.generationId);
+    const current = await store.readSnapshot(pin);
+    const next = generationLeases(current, generation.generationId, anchor.expiresAt, generation.snapshot);
+    if (encodeCanonicalSnapshot(current) === encodeCanonicalSnapshot(next)) return { ...generation, snapshot: current };
+    try {
+      const committed = await store.commit(pin, () => next);
+      return { ...generation, snapshot: committed.snapshot };
+    } catch (error) {
+      if (!(error instanceof AtomicCommitError) || attempt === 4) throw error;
+    }
+  }
+  throw new AtomicCommitError(`Rollback attachment lease persistence exhausted: ${generation.generationId}`);
+}
+
+async function prepareRuntimeGeneration(
+  db: D1DatabaseLike,
+  generationId: string,
+  rollbackLeaseMs: number,
+  clock: () => Date,
+) {
+  const generation = await loadValidatedGeneration(db, generationId);
+  const anchor = await rollbackLeaseAnchor(db, generationId, rollbackLeaseMs, clock);
+  return persistRollbackLeases(db, generation, anchor);
 }
 
 /** Worker-safe inactive-generation installer used by the Pages runtime.
  * It deliberately has no dependency on the file migration runner or Node APIs.
  */
-export async function bootstrapValidatedD1Generation(db: D1DatabaseLike, data: AppData) {
+export async function bootstrapValidatedD1Generation(
+  db: D1DatabaseLike,
+  data: AppData,
+  options: { rollbackAttachmentLeaseMs?: number; clock?: () => Date } = {},
+) {
+  const rollbackLeaseMs = options.rollbackAttachmentLeaseMs ?? defaultRollbackAttachmentLeaseMs;
+  if (!Number.isSafeInteger(rollbackLeaseMs) || rollbackLeaseMs < 0) throw new Error('Invalid rollback attachment lease duration');
+  const clock = options.clock ?? (() => new Date());
   await ensureRuntimeTables(db);
   const anchored = await runtimeNamespace(db);
-  if (anchored) return loadValidatedGeneration(db, anchored);
+  if (anchored) return prepareRuntimeGeneration(db, anchored, rollbackLeaseMs, clock);
 
   const conversion = convertLegacyToV1alpha1(data);
   if (!conversion.report.ok) {
@@ -96,7 +217,9 @@ export async function bootstrapValidatedD1Generation(db: D1DatabaseLike, data: A
   const versions = { converterVersion, storageSchemaVersion, canonicalSchemaVersion, identityVersion };
   const generationId = migrationGenerationId(conversion.report.sourceFingerprint, versions);
   conversion.report.generationId = generationId;
-  const now = new Date().toISOString();
+  const nowValue = clock();
+  if (Number.isNaN(nowValue.getTime())) throw new Error('Invalid canonical runtime bootstrap clock');
+  const now = nowValue.toISOString();
   const recordCount = Object.keys(conversion.report.recordFingerprints).length;
   const snapshotCount = Object.values(conversion.report.cardinalities).reduce((sum, count) => sum + count, 0);
   const manifest = {
@@ -144,5 +267,5 @@ export async function bootstrapValidatedD1Generation(db: D1DatabaseLike, data: A
     .bind(generationId).run();
   const selected = await runtimeNamespace(db);
   if (!selected) throw new Error('Canonical runtime namespace marker was not published');
-  return loadValidatedGeneration(db, selected);
+  return prepareRuntimeGeneration(db, selected, rollbackLeaseMs, clock);
 }

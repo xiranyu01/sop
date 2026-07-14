@@ -19,7 +19,10 @@ type Env = {
 type PagesContext = {
   request: Request;
   env: Env;
+  waitUntil?: (promise: Promise<unknown>) => void;
 };
+
+const attachmentCleanupBatchSize = 4;
 
 function s3Config(env: Env): S3AttachmentConfig {
   return {
@@ -41,6 +44,11 @@ function attachmentStorageEnabled(env: Env): boolean {
   return Boolean(env.ATTACHMENTS) || hasS3AttachmentConfig(s3Config(env));
 }
 
+function isAuthorized(context: PagesContext): boolean {
+  return Boolean(context.env.APP_PASSWORD) &&
+    context.request.headers.get('authorization') === `Bearer ${context.env.APP_PASSWORD}`;
+}
+
 async function getAttachmentObject(env: Env, storageKey: string) {
   if (env.ATTACHMENTS) {
     return env.ATTACHMENTS.get(storageKey);
@@ -49,6 +57,18 @@ async function getAttachmentObject(env: Env, storageKey: string) {
     return getS3Attachment(s3Config(env), storageKey);
   }
   return null;
+}
+
+async function scheduleAttachmentCleanup(context: PagesContext, cleanup: () => Promise<unknown>): Promise<void> {
+  if (!attachmentStorageEnabled(context.env)) return;
+  const work = cleanup().catch((error) => {
+    console.error('Attachment cleanup failed; it will be retried.', error instanceof Error ? error.message : String(error));
+  });
+  if (context.waitUntil) {
+    context.waitUntil(work);
+    return;
+  }
+  await work;
 }
 
 export const onRequest = async (context: PagesContext): Promise<Response> => {
@@ -69,28 +89,11 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
     });
   }
 
-  const attachmentDownload = url.pathname.match(/^\/api\/attachments\/(.+)$/);
-  if (context.request.method === 'GET' && attachmentDownload) {
-    if (!context.env.APP_PASSWORD) {
-      return Response.json({ message: '服务端未配置 APP_PASSWORD' }, { status: 500 });
-    }
-    if (context.request.headers.get('authorization') !== `Bearer ${context.env.APP_PASSWORD}`) {
-      return Response.json({ message: '访问密码无效或已过期' }, { status: 401 });
-    }
-    if (!attachmentStorageEnabled(context.env)) {
-      return Response.json({ message: '附件存储未配置：请绑定 ATTACHMENTS，或配置 R2 S3 访问参数。' }, { status: 500 });
-    }
-    const storageKey = decodeURIComponent(attachmentDownload[1]);
-    const object = await getAttachmentObject(context.env, storageKey);
-    if (!object) {
-      return Response.json({ message: '找不到附件' }, { status: 404 });
-    }
-    return new Response(object.body, {
-      headers: {
-        'content-type': object.httpMetadata?.contentType || 'application/octet-stream',
-        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(storageKey.split('/').at(-1) || 'attachment')}`,
-      },
-    });
+  if (!context.env.APP_PASSWORD) {
+    return Response.json({ message: '服务端未配置 APP_PASSWORD' }, { status: 500 });
+  }
+  if (!isAuthorized(context)) {
+    return Response.json({ message: '访问密码无效或已过期' }, { status: 401 });
   }
 
   let body: unknown;
@@ -120,6 +123,27 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
     attachments: objects,
     writeExport: legacyStore.writeExport.bind(legacyStore),
   });
+  const attachmentDownload = url.pathname.match(/^\/api\/attachments\/(.+)$/);
+  if (context.request.method === 'GET' && attachmentDownload) {
+    if (!attachmentStorageEnabled(context.env)) {
+      return Response.json({ message: '附件存储未配置：请绑定 ATTACHMENTS，或配置 R2 S3 访问参数。' }, { status: 500 });
+    }
+    let storageKey: string;
+    try { storageKey = decodeURIComponent(attachmentDownload[1]); } catch {
+      return Response.json({ message: '附件路径编码无效' }, { status: 400 });
+    }
+    const attachment = await apiStore.resolveAttachment(storageKey);
+    if (!attachment) return Response.json({ message: '附件不存在或不再可访问' }, { status: 404 });
+    const object = await getAttachmentObject(context.env, storageKey);
+    if (!object) return Response.json({ message: '找不到附件对象' }, { status: 404 });
+    await scheduleAttachmentCleanup(context, () => apiStore.cleanupAttachments(attachmentCleanupBatchSize));
+    return new Response(object.body, {
+      headers: {
+        'content-type': object.httpMetadata?.contentType || attachment.mediaType,
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
+      },
+    });
+  }
   const result = await handleApiRequest(apiStore, {
     method: context.request.method,
     pathname: url.pathname,
@@ -135,7 +159,9 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
   });
 
   if (result.status === 302 && result.headers?.Location) {
+    if (isAuthorized(context)) await scheduleAttachmentCleanup(context, () => apiStore.cleanupAttachments(attachmentCleanupBatchSize));
     return Response.redirect(result.headers.Location, 302);
   }
+  if (isAuthorized(context)) await scheduleAttachmentCleanup(context, () => apiStore.cleanupAttachments(attachmentCleanupBatchSize));
   return Response.json(result.body, { status: result.status });
 };

@@ -2,22 +2,34 @@ import { AwsClient } from 'aws4fetch';
 import type {
   AttachmentAbortInput,
   AttachmentCompleteInput,
+  AttachmentObject,
+  AttachmentObjectMetadata,
+  AttachmentObjectStore,
   AttachmentPartInput,
   AttachmentPartOutput,
   AttachmentUploadInput,
   AttachmentUploadSession,
 } from './domain/attachmentObjectStore';
-import type { AttachmentObject, AttachmentStore } from './r2AttachmentStore';
+import {
+  assertExpectedObjectSize,
+  normalizeAttachmentComplete,
+  validateAttachmentPart,
+  validateAttachmentUpload,
+  validateStorageKey,
+  validateUploadSession,
+} from './domain/attachmentObjectStore';
 
 export type S3AttachmentConfig = {
   endpoint?: string;
   bucket?: string;
   accessKeyId?: string;
   secretAccessKey?: string;
+  /** Injectable signed-request transport for adapter contract tests. */
+  request?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 type S3ClientContext = {
-  aws: AwsClient;
+  request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   endpoint: string;
   bucket: string;
 };
@@ -34,13 +46,14 @@ function requireS3Context(config: S3AttachmentConfig): S3ClientContext {
   if (!hasS3AttachmentConfig(config)) {
     throw new Error('附件存储未配置 R2 S3 访问参数');
   }
-  return {
-    aws: new AwsClient({
+  const aws = new AwsClient({
       accessKeyId: config.accessKeyId || '',
       secretAccessKey: config.secretAccessKey || '',
       service: 's3',
       region: 'auto',
-    }),
+    });
+  return {
+    request: config.request ?? ((input, init) => aws.fetch(input, init)),
     endpoint: normalizeEndpoint(config.endpoint || ''),
     bucket: config.bucket || '',
   };
@@ -80,8 +93,9 @@ async function assertOk(response: Response, action: string): Promise<Response> {
 }
 
 export async function getS3Attachment(config: S3AttachmentConfig, storageKey: string): Promise<AttachmentObject | null> {
+  validateStorageKey(storageKey);
   const context = requireS3Context(config);
-  const response = await context.aws.fetch(objectUrl(context, storageKey), { method: 'GET' });
+  const response = await context.request(objectUrl(context, storageKey), { method: 'GET' });
   if (response.status === 404) {
     return null;
   }
@@ -91,17 +105,54 @@ export async function getS3Attachment(config: S3AttachmentConfig, storageKey: st
   }
   return {
     body: response.body,
+    metadata: responseMetadata(storageKey, response.headers),
     httpMetadata: {
       contentType: response.headers.get('content-type') || undefined,
     },
   };
 }
 
-export function createS3AttachmentStore(config: S3AttachmentConfig): AttachmentStore {
+function responseMetadata(storageKey: string, headers: Headers): AttachmentObjectMetadata {
+  const size = Number(headers.get('content-length'));
+  if (!Number.isSafeInteger(size) || size < 0 || headers.get('content-length') === null) {
+    throw new Error('S3 object metadata is missing actual size');
+  }
+  const sha256Header = headers.get('x-amz-meta-sha256') || headers.get('x-amz-checksum-sha256') || undefined;
+  let sha256: string | undefined;
+  if (sha256Header && /^[a-f0-9]{64}$/i.test(sha256Header)) {
+    sha256 = sha256Header.toLowerCase();
+  } else if (sha256Header) {
+    try {
+      const bytes = Uint8Array.from(atob(sha256Header), (character) => character.charCodeAt(0));
+      if (bytes.byteLength === 32) sha256 = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    } catch {
+      // Ignore malformed optional checksum metadata; size remains authoritative.
+    }
+  }
+  return {
+    storageKey,
+    sizeBytes: size,
+    contentType: headers.get('content-type') || undefined,
+    etag: headers.get('etag') || undefined,
+    sha256,
+  };
+}
+
+export async function headS3Attachment(config: S3AttachmentConfig, storageKey: string): Promise<AttachmentObjectMetadata | null> {
+  validateStorageKey(storageKey);
+  const context = requireS3Context(config);
+  const response = await context.request(objectUrl(context, storageKey), { method: 'HEAD' });
+  if (response.status === 404) return null;
+  await assertOk(response, '查询附件');
+  return responseMetadata(storageKey, response.headers);
+}
+
+export function createS3AttachmentStore(config: S3AttachmentConfig): AttachmentObjectStore {
   return {
     async createAttachmentUpload(input: AttachmentUploadInput): Promise<AttachmentUploadSession> {
+      validateAttachmentUpload(input);
       const context = requireS3Context(config);
-      const response = await context.aws.fetch(objectUrl(context, input.storageKey, '?uploads'), {
+      const response = await context.request(objectUrl(context, input.storageKey, '?uploads'), {
         method: 'POST',
         headers: { 'content-type': input.contentType || 'application/octet-stream' },
       });
@@ -109,9 +160,10 @@ export function createS3AttachmentStore(config: S3AttachmentConfig): AttachmentS
       return { uploadId: parseUploadId(await response.text()), storageKey: input.storageKey };
     },
     async uploadAttachmentPart(input: AttachmentPartInput): Promise<AttachmentPartOutput> {
+      validateAttachmentPart(input);
       const context = requireS3Context(config);
       const search = `?partNumber=${input.partNumber}&uploadId=${encodeURIComponent(input.uploadId)}`;
-      const response = await context.aws.fetch(objectUrl(context, input.storageKey, search), {
+      const response = await context.request(objectUrl(context, input.storageKey, search), {
         method: 'PUT',
         body: input.body,
       });
@@ -123,30 +175,48 @@ export function createS3AttachmentStore(config: S3AttachmentConfig): AttachmentS
       return { etag };
     },
     async completeAttachmentUpload(input: AttachmentCompleteInput): Promise<void> {
+      const normalized = normalizeAttachmentComplete(input);
+      const existing = await headS3Attachment(config, input.storageKey);
+      if (existing) {
+        assertExpectedObjectSize(existing, input.expectedSizeBytes);
+        return;
+      }
       const context = requireS3Context(config);
-      const parts = input.parts
-        .slice()
-        .sort((a, b) => a.partNumber - b.partNumber)
+      const parts = normalized
         .map((part) => `<Part><PartNumber>${part.partNumber}</PartNumber><ETag>${escapeXml(part.etag)}</ETag></Part>`)
         .join('');
-      const response = await context.aws.fetch(objectUrl(context, input.storageKey, `?uploadId=${encodeURIComponent(input.uploadId)}`), {
+      const response = await context.request(objectUrl(context, input.storageKey, `?uploadId=${encodeURIComponent(input.uploadId)}`), {
         method: 'POST',
         headers: { 'content-type': 'application/xml' },
         body: `<CompleteMultipartUpload>${parts}</CompleteMultipartUpload>`,
       });
       await assertOk(response, '完成附件上传');
+      assertExpectedObjectSize(await headS3Attachment(config, input.storageKey), input.expectedSizeBytes);
     },
     async abortAttachmentUpload(input: AttachmentAbortInput): Promise<void> {
+      validateUploadSession(input);
       const context = requireS3Context(config);
-      const response = await context.aws.fetch(objectUrl(context, input.storageKey, `?uploadId=${encodeURIComponent(input.uploadId)}`), {
+      const response = await context.request(objectUrl(context, input.storageKey, `?uploadId=${encodeURIComponent(input.uploadId)}`), {
         method: 'DELETE',
       });
+      if (response.status === 404) return;
       await assertOk(response, '取消附件上传');
     },
     async deleteAttachment(storageKey: string): Promise<void> {
+      validateStorageKey(storageKey);
       const context = requireS3Context(config);
-      const response = await context.aws.fetch(objectUrl(context, storageKey), { method: 'DELETE' });
+      const response = await context.request(objectUrl(context, storageKey), { method: 'DELETE' });
+      if (response.status === 404) return;
       await assertOk(response, '删除附件');
+    },
+    getAttachment(storageKey: string) {
+      return getS3Attachment(config, storageKey);
+    },
+    headAttachment(storageKey: string) {
+      return headS3Attachment(config, storageKey);
+    },
+    async attachmentExists(storageKey: string) {
+      return (await headS3Attachment(config, storageKey)) !== null;
     },
   };
 }

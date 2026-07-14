@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -54,5 +54,55 @@ describe('file canonical inactive-generation boot', () => {
     expect(restarted.customers.find((item) => item.id === seedData.customers[0].id)?.name).toBe('first legacy customer');
     expect((await readFile(path.join(canonicalRoot, 'runtime-namespace'), 'utf8')).trim()).toBe(first.generationId);
     expect((await readFile(path.join(canonicalRoot, 'active-namespace'), 'utf8')).trim()).toBe('previous-active');
+  });
+
+  it('upgrades an existing canonical namespace with a durable, non-extending rollback lease', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'sop-file-runtime-lease-'));
+    const dataDir = path.join(root, 'legacy');
+    const canonicalRoot = path.join(root, 'canonical');
+    const attachmentRoot = path.join(root, 'attachments');
+    const data = structuredClone(seedData);
+    data.materials[0].images = [{
+      id: 'lease-image', name: 'lease.png', size: 4, contentType: 'image/png',
+      storageKey: 'managed/lease.png', uploadedAt: '2025-01-01T00:00:00.000Z',
+    }];
+    await writeLegacyData(dataDir, 'first legacy customer');
+    await writeFile(path.join(dataDir, 'materials.json'), JSON.stringify(data.materials));
+    await mkdir(path.join(attachmentRoot, 'managed'), { recursive: true });
+    await writeFile(path.join(attachmentRoot, 'managed/lease.png'), 'data');
+
+    const installed = await bootstrapValidatedFileGeneration({
+      canonicalRoot, legacyDir: dataDir, attachmentRoot,
+      clock: () => new Date('2025-01-01T00:00:00.000Z'), rollbackAttachmentLeaseMs: 60_000,
+    });
+    const store = createCanonicalFileAppStore({ rootDir: canonicalRoot, bootstrap: { namespace: installed.generationId, snapshot: installed.snapshot } });
+    const installedPin = await store.pin(installed.generationId);
+    await store.commit(installedPin, (snapshot) => ({
+      ...snapshot,
+      materials: snapshot.materials.map((material) => ({ ...material, images: [] })),
+      attachments: [],
+      operational: { ...snapshot.operational, leases: [] },
+    }));
+    await rm(path.join(canonicalRoot, 'runtime-attachment-leases', `${installed.generationId}.json`));
+
+    const first = await bootstrapValidatedFileGeneration({
+      canonicalRoot, legacyDir: dataDir, attachmentRoot,
+      clock: () => new Date('2026-07-14T10:00:00.000Z'), rollbackAttachmentLeaseMs: 60_000,
+    });
+    const firstPin = await store.pin(first.generationId);
+    const firstPersisted = await store.readSnapshot(firstPin);
+    expect(firstPersisted.operational.leases).toContainEqual({
+      storageKey: 'managed/lease.png', generationId: first.generationId, expiresAt: '2026-07-14T10:01:00.000Z',
+    });
+
+    const second = await bootstrapValidatedFileGeneration({
+      canonicalRoot, legacyDir: dataDir, attachmentRoot,
+      clock: () => new Date('2026-07-20T00:00:00.000Z'), rollbackAttachmentLeaseMs: 60_000,
+    });
+    const secondPin = await store.pin(first.generationId);
+    expect(secondPin.generation).toBe(firstPin.generation);
+    expect(second.snapshot.operational.leases).toEqual(firstPersisted.operational.leases);
+    expect(JSON.parse(await readFile(path.join(canonicalRoot, 'runtime-attachment-leases', `${first.generationId}.json`), 'utf8')))
+      .toMatchObject({ createdAt: '2026-07-14T10:00:00.000Z', expiresAt: '2026-07-14T10:01:00.000Z' });
   });
 });

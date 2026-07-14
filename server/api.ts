@@ -15,7 +15,9 @@ import type { LegacyApiStore, ApiRequest, ApiResponse } from '../shared/transpor
 import { buildRequirementYaml, buildTaskSopYaml } from './yamlExport';
 import { canEditStatus, createId, createShortId, nextPatchVersion, nowIso } from './versioning';
 import { isCanonicalApiStore } from './domain/services/runtime';
+import { publicAttachmentUri } from './domain/attachmentReachability';
 import { CanonicalDataError, StaleStoreEpochError } from './domain/errors';
+import { resourceName, stableJson } from './migrations/identity';
 
 const maxAttachmentSize = 1024 * 1024 * 1024;
 const attachmentPartSize = 16 * 1024 * 1024;
@@ -148,6 +150,55 @@ function attachmentDownloadUrl(storageKey: string): string {
 
 function attachmentResponse(attachment: RequirementAttachment): RequirementAttachment & { url: string } {
   return { ...attachment, url: attachmentDownloadUrl(attachment.storageKey) };
+}
+
+function uploadAttachment(upload: {
+  attachmentId: string; filename: string; expectedSizeBytes: number; mediaType: string; storageKey: string;
+}): RequirementAttachment {
+  return {
+    id: upload.attachmentId,
+    name: upload.filename,
+    size: upload.expectedSizeBytes,
+    contentType: upload.mediaType,
+    storageKey: upload.storageKey,
+    uploadedAt: nowIso(),
+  };
+}
+
+function sameUploadParts(
+  expected: Array<{ partNumber: number; etag: string }>,
+  actual: Array<{ partNumber: number; etag: string }>,
+): boolean {
+  const normalize = (items: Array<{ partNumber: number; etag: string }>) =>
+    items.map(({ partNumber, etag }) => ({ partNumber, etag })).sort((a, b) => a.partNumber - b.partNumber);
+  return stableJson(normalize(expected)) === stableJson(normalize(actual));
+}
+
+async function captureCompletedAttachmentMetadata(
+  store: LegacyApiStore,
+  uploadId: string,
+  storageKey: string,
+): Promise<void> {
+  if (!isCanonicalApiStore(store) || !store.headAttachment) return;
+  const metadata = await store.headAttachment(storageKey);
+  if (!metadata) throw new CanonicalDataError('已完成的附件对象不存在');
+  await store.recordAttachmentObjectMetadata(uploadId, metadata.sha256);
+}
+
+async function compensateFailedAttachmentBind(
+  store: LegacyApiStore & Required<Pick<LegacyApiStore, 'abortAttachmentUpload'>>,
+  input: { storageKey: string; uploadId: string },
+): Promise<void> {
+  try {
+    await store.abortAttachmentUpload(input);
+  } catch (abortError) {
+    if (!isCanonicalApiStore(store)) throw abortError;
+    try {
+      await store.recordUnboundAttachmentAbort(input);
+    } catch (intentError) {
+      throw new AggregateError([abortError, intentError], '无法取消附件上传或记录持久清理意图');
+    }
+  }
 }
 
 function stripSelectedTaskSopCode(selected: RequirementVersion['selectedSubscenes'][number]): RequirementVersion['selectedSubscenes'][number] {
@@ -408,8 +459,29 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
         uploadedAt: nowIso(),
       };
       const session = await store.createAttachmentUpload({ storageKey, contentType });
-      const nextMaterials = data.materials.map((item) => (item.id === materialId ? materialWithAttachment(item, attachment) : item));
-      await store.writeMaterials(nextMaterials);
+      if (isCanonicalApiStore(store)) {
+        try {
+          await store.bindAttachmentUpload({
+            uploadId: session.uploadId, storageKey: session.storageKey,
+            attachmentName: resourceName('attachments', attachmentId), attachmentId,
+            filename: fileName, mediaType: contentType, expectedSizeBytes: size,
+            publicUri: request.attachmentPublicBaseUrl
+              ? publicAttachmentUri({ storageKey: session.storageKey, uri: '' }, request.attachmentPublicBaseUrl)
+              : undefined,
+            scope: 'material', ownerId: materialId, version: 'images',
+          });
+        } catch (error) {
+          try {
+            await compensateFailedAttachmentBind(store, { storageKey: session.storageKey, uploadId: session.uploadId });
+          } catch (compensationError) {
+            throw new AggregateError([error, compensationError], '附件上传绑定及补偿均失败');
+          }
+          throw error;
+        }
+      } else {
+        const nextMaterials = data.materials.map((item) => (item.id === materialId ? materialWithAttachment(item, attachment) : item));
+        await store.writeMaterials(nextMaterials);
+      }
       return json(200, {
         attachmentId,
         uploadId: session.uploadId,
@@ -427,7 +499,15 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       const partNumber = Number(decodeURIComponent(materialImagePart[3]));
       const storageKey = new URLSearchParams(request.search || '').get('storageKey') || '';
       if (!storageKey || !uploadId || !Number.isInteger(partNumber) || partNumber < 1) return json(400, { message: '分片参数无效' });
-      const result = await store.uploadAttachmentPart({ storageKey, uploadId, partNumber, body: request.rawBody });
+      const materialId = decodeURIComponent(materialImagePart[1]);
+      const bound = isCanonicalApiStore(store)
+        ? await store.attachmentUpload({ uploadId, scope: 'material', ownerId: materialId, version: 'images' })
+        : undefined;
+      if (bound && bound.storageKey !== storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+      const result = await store.uploadAttachmentPart({ storageKey: bound?.storageKey ?? storageKey, uploadId, partNumber, body: request.rawBody });
+      if (bound && isCanonicalApiStore(store)) {
+        await store.recordAttachmentPart(uploadId, { partNumber, etag: result.etag, sizeBytes: request.rawBody.byteLength });
+      }
       return json(200, result);
     }
 
@@ -437,9 +517,25 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       const [materialId, attachmentId] = materialImageComplete.slice(1).map(decodeURIComponent);
       const body = request.body as { uploadId?: string; storageKey?: string; parts?: Array<{ partNumber: number; etag: string }> };
       if (!body.uploadId || !body.storageKey || !body.parts?.length) return json(400, { message: '图片完成参数无效' });
-      await store.completeAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId, parts: body.parts });
+      const bound = isCanonicalApiStore(store)
+        ? await store.attachmentUpload({ uploadId: body.uploadId, scope: 'material', ownerId: materialId, version: 'images', attachmentId })
+        : undefined;
+      if (bound && bound.storageKey !== body.storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+      if (bound && !sameUploadParts(bound.parts, body.parts)) return json(400, { message: '附件分片与上传会话不匹配' });
+      if (bound && isCanonicalApiStore(store)) await store.prepareAttachmentCompletion(body.uploadId);
+      await store.completeAttachmentUpload({
+        storageKey: bound?.storageKey ?? body.storageKey, uploadId: body.uploadId,
+        parts: bound?.parts ?? body.parts, expectedSizeBytes: bound?.expectedSizeBytes,
+      });
+      if (bound) await captureCompletedAttachmentMetadata(store, body.uploadId, bound.storageKey);
       const data = await store.readData();
-      const material = data.materials.find((item) => item.id === materialId);
+      const nextMaterials = bound
+        ? data.materials.map((item) => item.id === materialId ? materialWithAttachment(item, uploadAttachment(bound)) : item)
+        : data.materials;
+      const committed = bound && isCanonicalApiStore(store)
+        ? await store.writeMaterialsAndFinishUpload(nextMaterials, body.uploadId)
+        : data.materials;
+      const material = committed.find((item) => item.id === materialId);
       const attachment = material?.images?.find((item) => item.id === attachmentId);
       return json(200, attachment ? attachmentResponse(attachment) : { id: attachmentId });
     }
@@ -449,9 +545,16 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       requireAttachmentStore(store);
       const [materialId, attachmentId] = materialImageAbort.slice(1).map(decodeURIComponent);
       const body = request.body as { uploadId?: string; storageKey?: string };
+      if (isCanonicalApiStore(store) && (!body.uploadId || !body.storageKey)) return json(400, { message: '附件取消参数无效' });
       if (body.uploadId && body.storageKey) {
-        await store.abortAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId });
+        const bound = isCanonicalApiStore(store)
+          ? await store.attachmentUpload({ uploadId: body.uploadId, scope: 'material', ownerId: materialId, version: 'images', attachmentId, allowExpired: true })
+          : undefined;
+        if (bound && bound.storageKey !== body.storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+        await store.abortAttachmentUpload({ storageKey: bound?.storageKey ?? body.storageKey, uploadId: body.uploadId });
+        if (bound && isCanonicalApiStore(store)) await store.abandonAttachmentUpload(body.uploadId);
       }
+      if (isCanonicalApiStore(store)) return json(200, { ok: true });
       const data = await store.readData();
       const nextMaterials = data.materials.map((item) => (item.id === materialId ? materialWithoutAttachment(item, attachmentId) : item));
       await store.writeMaterials(nextMaterials);
@@ -466,9 +569,13 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       const material = data.materials.find((item) => item.id === materialId);
       const attachment = material?.images?.find((item) => item.id === attachmentId);
       if (!attachment) return json(404, { message: '找不到图片' });
-      await store.deleteAttachment(attachment.storageKey);
       const nextMaterials = data.materials.map((item) => (item.id === materialId ? materialWithoutAttachment(item, attachmentId) : item));
-      return json(200, await store.writeMaterials(nextMaterials));
+      const result = isCanonicalApiStore(store)
+        ? await store.writeMaterialsForAttachmentDelete(nextMaterials)
+        : await store.writeMaterials(nextMaterials);
+      if (isCanonicalApiStore(store)) await store.cleanupAttachments();
+      else await store.deleteAttachment(attachment.storageKey);
+      return json(200, result);
     }
 
     if (method === 'POST' && path === '/api/robot-models') {
@@ -568,20 +675,38 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
 
       const attachmentId = createId('att');
       const storageKey = attachmentStorageKey('requirements', requirementId, versionNumber, attachmentId, fileName);
-      const update = updateRequirementVersion(data.requirements, requirementId, versionNumber, (version) => {
-        const attachment: RequirementAttachment = {
-          id: attachmentId,
-          name: fileName,
-          size,
-          contentType: body.contentType || 'application/octet-stream',
-          storageKey,
-          uploadedAt: nowIso(),
-        };
-        return addAttachmentToVersion(version, attachment) as RequirementVersion;
-      });
+      const contentType = body.contentType || 'application/octet-stream';
+      const attachment = { id: attachmentId, name: fileName, size, contentType, storageKey, uploadedAt: nowIso() };
+      const update = updateRequirementVersion(data.requirements, requirementId, versionNumber, (version) =>
+        addAttachmentToVersion(version, attachment) as RequirementVersion);
       if (update.blocked) return update.blocked;
-      const session = await store.createAttachmentUpload({ storageKey, contentType: body.contentType || 'application/octet-stream' });
-      await store.writeRequirements(update.nextRequirements);
+      const session = await store.createAttachmentUpload({ storageKey, contentType });
+      if (isCanonicalApiStore(store)) {
+        try {
+          await store.bindAttachmentUpload({
+            uploadId: session.uploadId,
+            storageKey: session.storageKey,
+            attachmentName: resourceName('attachments', attachmentId),
+            attachmentId,
+            filename: fileName,
+            mediaType: contentType,
+            expectedSizeBytes: size,
+            publicUri: request.attachmentPublicBaseUrl
+              ? publicAttachmentUri({ storageKey: session.storageKey, uri: '' }, request.attachmentPublicBaseUrl)
+              : undefined,
+            scope: 'requirement', ownerId: requirementId, version: versionNumber,
+          });
+        } catch (error) {
+          try {
+            await compensateFailedAttachmentBind(store, { storageKey: session.storageKey, uploadId: session.uploadId });
+          } catch (compensationError) {
+            throw new AggregateError([error, compensationError], '附件上传绑定及补偿均失败');
+          }
+          throw error;
+        }
+      } else {
+        await store.writeRequirements(update.nextRequirements);
+      }
       return json(200, {
         attachmentId,
         uploadId: session.uploadId,
@@ -595,11 +720,18 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
     if (method === 'PUT' && attachmentPart) {
       requireAttachmentStore(store);
       if (!request.rawBody) return json(400, { message: '缺少附件分片内容' });
-      const [_requirementId, _versionNumber, uploadId, partNumberText] = attachmentPart.slice(1).map(decodeURIComponent);
+      const [requirementId, versionNumber, uploadId, partNumberText] = attachmentPart.slice(1).map(decodeURIComponent);
       const storageKey = new URLSearchParams(request.search || '').get('storageKey') || '';
       const partNumber = Number(partNumberText);
       if (!storageKey || !uploadId || !Number.isInteger(partNumber) || partNumber < 1) return json(400, { message: '分片参数无效' });
-      const result = await store.uploadAttachmentPart({ storageKey, uploadId, partNumber, body: request.rawBody });
+      const bound = isCanonicalApiStore(store)
+        ? await store.attachmentUpload({ uploadId, scope: 'requirement', ownerId: requirementId, version: versionNumber })
+        : undefined;
+      if (bound && bound.storageKey !== storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+      const result = await store.uploadAttachmentPart({ storageKey: bound?.storageKey ?? storageKey, uploadId, partNumber, body: request.rawBody });
+      if (bound && isCanonicalApiStore(store)) {
+        await store.recordAttachmentPart(uploadId, { partNumber, etag: result.etag, sizeBytes: request.rawBody.byteLength });
+      }
       return json(200, result);
     }
 
@@ -609,17 +741,34 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       const [requirementId, versionNumber, attachmentId] = attachmentComplete.slice(1).map(decodeURIComponent);
       const body = request.body as { uploadId?: string; storageKey?: string; parts?: Array<{ partNumber: number; etag: string }> };
       if (!body.uploadId || !body.storageKey || !body.parts?.length) return json(400, { message: '附件完成参数无效' });
-      await store.completeAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId, parts: body.parts });
+      const bound = isCanonicalApiStore(store)
+        ? await store.attachmentUpload({ uploadId: body.uploadId, scope: 'requirement', ownerId: requirementId, version: versionNumber, attachmentId })
+        : undefined;
+      if (bound && bound.storageKey !== body.storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+      if (bound && !sameUploadParts(bound.parts, body.parts)) return json(400, { message: '附件分片与上传会话不匹配' });
+      if (bound && isCanonicalApiStore(store)) await store.prepareAttachmentCompletion(body.uploadId);
+      await store.completeAttachmentUpload({
+        storageKey: bound?.storageKey ?? body.storageKey,
+        uploadId: body.uploadId,
+        parts: bound?.parts ?? body.parts,
+        expectedSizeBytes: bound?.expectedSizeBytes,
+      });
+      if (bound) await captureCompletedAttachmentMetadata(store, body.uploadId, bound.storageKey);
       const data = await store.readData();
       const update = updateRequirementVersion(
         data.requirements,
         requirementId,
         versionNumber,
-        (version) => completeAttachmentInVersion(version, attachmentId) as RequirementVersion,
+        (version) => bound
+          ? addAttachmentToVersion(version, uploadAttachment(bound)) as RequirementVersion
+          : completeAttachmentInVersion(version, attachmentId) as RequirementVersion,
       );
       if (update.blocked) return update.blocked;
-      await store.writeRequirements(update.nextRequirements);
-      const attachment = update.version?.attachments?.find((item) => item.id === attachmentId);
+      const committedRequirements = bound && isCanonicalApiStore(store)
+        ? await store.writeRequirementsAndFinishUpload(update.nextRequirements, body.uploadId)
+        : await store.writeRequirements(update.nextRequirements);
+      const attachment = committedRequirements.find((item) => item.id === requirementId)?.versions
+        .find((item) => item.version === versionNumber)?.attachments?.find((item) => item.id === attachmentId);
       return json(200, attachment ? attachmentResponse(attachment) : { id: attachmentId });
     }
 
@@ -628,9 +777,16 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       requireAttachmentStore(store);
       const [requirementId, versionNumber, attachmentId] = attachmentAbort.slice(1).map(decodeURIComponent);
       const body = request.body as { uploadId?: string; storageKey?: string };
+      if (isCanonicalApiStore(store) && (!body.uploadId || !body.storageKey)) return json(400, { message: '附件取消参数无效' });
       if (body.uploadId && body.storageKey) {
-        await store.abortAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId });
+        const bound = isCanonicalApiStore(store)
+          ? await store.attachmentUpload({ uploadId: body.uploadId, scope: 'requirement', ownerId: requirementId, version: versionNumber, attachmentId, allowExpired: true })
+          : undefined;
+        if (bound && bound.storageKey !== body.storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+        await store.abortAttachmentUpload({ storageKey: bound?.storageKey ?? body.storageKey, uploadId: body.uploadId });
+        if (bound && isCanonicalApiStore(store)) await store.abandonAttachmentUpload(body.uploadId);
       }
+      if (isCanonicalApiStore(store)) return json(200, { ok: true });
       const data = await store.readData();
       const update = updateRequirementVersion(
         data.requirements,
@@ -652,7 +808,6 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       const version = requirement?.versions.find((item) => item.version === versionNumber);
       const attachment = version?.attachments?.find((item) => item.id === attachmentId);
       if (!attachment) return json(404, { message: '找不到附件' });
-      await store.deleteAttachment(attachment.storageKey);
       const update = updateRequirementVersion(
         data.requirements,
         requirementId,
@@ -660,7 +815,12 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
         (current) => removeAttachmentFromVersion(current, attachmentId) as RequirementVersion,
       );
       if (update.blocked) return update.blocked;
-      return json(200, await store.writeRequirements(update.nextRequirements));
+      const result = isCanonicalApiStore(store)
+        ? await store.writeRequirementsForAttachmentDelete(update.nextRequirements)
+        : await store.writeRequirements(update.nextRequirements);
+      if (isCanonicalApiStore(store)) await store.cleanupAttachments();
+      else await store.deleteAttachment(attachment.storageKey);
+      return json(200, result);
     }
 
     const subsceneAttachmentInit = path.match(
@@ -696,7 +856,28 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       );
       if (update.blocked) return update.blocked;
       const session = await store.createAttachmentUpload({ storageKey, contentType: body.contentType || 'application/octet-stream' });
-      await store.writeScenes(update.nextScenes);
+      if (isCanonicalApiStore(store)) {
+        try {
+          await store.bindAttachmentUpload({
+            uploadId: session.uploadId, storageKey: session.storageKey,
+            attachmentName: resourceName('attachments', attachmentId), attachmentId,
+            filename: fileName, mediaType: body.contentType || 'application/octet-stream', expectedSizeBytes: size,
+            publicUri: request.attachmentPublicBaseUrl
+              ? publicAttachmentUri({ storageKey: session.storageKey, uri: '' }, request.attachmentPublicBaseUrl)
+              : undefined,
+            scope: 'task_sop', ownerId: `${sceneId}-${subsceneCode}`, version: versionNumber,
+          });
+        } catch (error) {
+          try {
+            await compensateFailedAttachmentBind(store, { storageKey: session.storageKey, uploadId: session.uploadId });
+          } catch (compensationError) {
+            throw new AggregateError([error, compensationError], '附件上传绑定及补偿均失败');
+          }
+          throw error;
+        }
+      } else {
+        await store.writeScenes(update.nextScenes);
+      }
       return json(200, {
         attachmentId,
         uploadId: session.uploadId,
@@ -716,7 +897,16 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       const partNumber = Number(decodeURIComponent(subsceneAttachmentPart[5]));
       const storageKey = new URLSearchParams(request.search || '').get('storageKey') || '';
       if (!storageKey || !uploadId || !Number.isInteger(partNumber) || partNumber < 1) return json(400, { message: '分片参数无效' });
-      const result = await store.uploadAttachmentPart({ storageKey, uploadId, partNumber, body: request.rawBody });
+      const [sceneId, subsceneCode] = subsceneAttachmentPart.slice(1, 3).map(decodeURIComponent);
+      const versionNumber = decodeURIComponent(subsceneAttachmentPart[3]);
+      const bound = isCanonicalApiStore(store)
+        ? await store.attachmentUpload({ uploadId, scope: 'task_sop', ownerId: `${sceneId}-${subsceneCode}`, version: versionNumber })
+        : undefined;
+      if (bound && bound.storageKey !== storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+      const result = await store.uploadAttachmentPart({ storageKey: bound?.storageKey ?? storageKey, uploadId, partNumber, body: request.rawBody });
+      if (bound && isCanonicalApiStore(store)) {
+        await store.recordAttachmentPart(uploadId, { partNumber, etag: result.etag, sizeBytes: request.rawBody.byteLength });
+      }
       return json(200, result);
     }
 
@@ -728,18 +918,35 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       const [sceneId, subsceneCode, versionNumber, attachmentId] = subsceneAttachmentComplete.slice(1).map(decodeURIComponent);
       const body = request.body as { uploadId?: string; storageKey?: string; parts?: Array<{ partNumber: number; etag: string }> };
       if (!body.uploadId || !body.storageKey || !body.parts?.length) return json(400, { message: '附件完成参数无效' });
-      await store.completeAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId, parts: body.parts });
+      const bound = isCanonicalApiStore(store)
+        ? await store.attachmentUpload({
+            uploadId: body.uploadId, scope: 'task_sop', ownerId: `${sceneId}-${subsceneCode}`, version: versionNumber, attachmentId,
+          })
+        : undefined;
+      if (bound && bound.storageKey !== body.storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+      if (bound && !sameUploadParts(bound.parts, body.parts)) return json(400, { message: '附件分片与上传会话不匹配' });
+      if (bound && isCanonicalApiStore(store)) await store.prepareAttachmentCompletion(body.uploadId);
+      await store.completeAttachmentUpload({
+        storageKey: bound?.storageKey ?? body.storageKey, uploadId: body.uploadId,
+        parts: bound?.parts ?? body.parts, expectedSizeBytes: bound?.expectedSizeBytes,
+      });
+      if (bound) await captureCompletedAttachmentMetadata(store, body.uploadId, bound.storageKey);
       const data = await store.readData();
       const update = updateSubsceneVersion(
         data.scenes,
         sceneId,
         subsceneCode,
         versionNumber,
-        (version) => completeAttachmentInVersion(version, attachmentId) as SubsceneVersion,
+        (version) => bound
+          ? addAttachmentToVersion(version, uploadAttachment(bound)) as SubsceneVersion
+          : completeAttachmentInVersion(version, attachmentId) as SubsceneVersion,
       );
       if (update.blocked) return update.blocked;
-      await store.writeScenes(update.nextScenes);
-      const attachment = update.version?.attachments?.find((item) => item.id === attachmentId);
+      const committedScenes = bound && isCanonicalApiStore(store)
+        ? await store.writeScenesAndFinishUpload(update.nextScenes, body.uploadId)
+        : await store.writeScenes(update.nextScenes);
+      const attachment = committedScenes.find((item) => item.id === sceneId)?.subscenes.find((item) => item.code === subsceneCode)
+        ?.versions.find((item) => item.version === versionNumber)?.attachments?.find((item) => item.id === attachmentId);
       return json(200, attachment ? attachmentResponse(attachment) : { id: attachmentId });
     }
 
@@ -750,9 +957,19 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
       requireAttachmentStore(store);
       const [sceneId, subsceneCode, versionNumber, attachmentId] = subsceneAttachmentAbort.slice(1).map(decodeURIComponent);
       const body = request.body as { uploadId?: string; storageKey?: string };
+      if (isCanonicalApiStore(store) && (!body.uploadId || !body.storageKey)) return json(400, { message: '附件取消参数无效' });
       if (body.uploadId && body.storageKey) {
-        await store.abortAttachmentUpload({ storageKey: body.storageKey, uploadId: body.uploadId });
+        const bound = isCanonicalApiStore(store)
+          ? await store.attachmentUpload({
+              uploadId: body.uploadId, scope: 'task_sop', ownerId: `${sceneId}-${subsceneCode}`, version: versionNumber, attachmentId,
+              allowExpired: true,
+            })
+          : undefined;
+        if (bound && bound.storageKey !== body.storageKey) return json(400, { message: '附件 storageKey 与上传会话不匹配' });
+        await store.abortAttachmentUpload({ storageKey: bound?.storageKey ?? body.storageKey, uploadId: body.uploadId });
+        if (bound && isCanonicalApiStore(store)) await store.abandonAttachmentUpload(body.uploadId);
       }
+      if (isCanonicalApiStore(store)) return json(200, { ok: true });
       const data = await store.readData();
       const update = updateSubsceneVersion(
         data.scenes,
@@ -779,7 +996,6 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
         ?.versions.find((item) => item.version === versionNumber);
       const attachment = version?.attachments?.find((item) => item.id === attachmentId);
       if (!attachment) return json(404, { message: '找不到附件' });
-      await store.deleteAttachment(attachment.storageKey);
       const update = updateSubsceneVersion(
         data.scenes,
         sceneId,
@@ -788,7 +1004,12 @@ export async function handleApiRequest(store: LegacyApiStore, request: ApiReques
         (current) => removeAttachmentFromVersion(current, attachmentId) as SubsceneVersion,
       );
       if (update.blocked) return update.blocked;
-      return json(200, await store.writeScenes(update.nextScenes));
+      const result = isCanonicalApiStore(store)
+        ? await store.writeScenesForAttachmentDelete(update.nextScenes)
+        : await store.writeScenes(update.nextScenes);
+      if (isCanonicalApiStore(store)) await store.cleanupAttachments();
+      else await store.deleteAttachment(attachment.storageKey);
+      return json(200, result);
     }
 
     const requirementUpdate = path.match(/^\/api\/requirements\/([^/]+)$/);

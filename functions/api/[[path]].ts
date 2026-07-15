@@ -6,6 +6,7 @@ import { createAttachmentService } from '../../server/domain/services/attachment
 import { createD1AttachmentStateStore } from '../../server/repositories/d1AttachmentStateStore';
 import { createD1ResourceRepository, type D1DatabaseLike } from '../../server/repositories/d1ResourceRepository';
 import { createR2AttachmentStore, type R2BucketLike } from '../../server/r2AttachmentStore';
+import { createS3AttachmentStore, hasS3AttachmentConfig } from '../../server/s3AttachmentStore';
 import type { SaveWarning } from '../../shared/transport/resourceDto';
 
 type Env = {
@@ -15,6 +16,10 @@ type Env = {
   ATTACHMENTS?: unknown;
   APP_PASSWORD?: string;
   R2_PUBLIC_BASE_URL?: string;
+  R2_S3_ENDPOINT?: string;
+  R2_S3_BUCKET?: string;
+  R2_S3_ACCESS_KEY_ID?: string;
+  R2_S3_SECRET_ACCESS_KEY?: string;
   [binding: string]: unknown;
 };
 
@@ -122,12 +127,20 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
         };
       },
     });
+    const s3Config = {
+      endpoint: context.env.R2_S3_ENDPOINT,
+      bucket: context.env.R2_S3_BUCKET,
+      accessKeyId: context.env.R2_S3_ACCESS_KEY_ID,
+      secretAccessKey: context.env.R2_S3_SECRET_ACCESS_KEY,
+    };
     const response = await handleResourceApiRequest(context.request, repository, {
       requestId,
       readRowSizeWarning: () => warning,
       createAttachmentService: () => createAttachmentService({
         state: createD1AttachmentStateStore(database as D1DatabaseLike),
-        provider: createR2AttachmentStore(context.env.ATTACHMENTS as R2BucketLike | undefined),
+        provider: hasS3AttachmentConfig(s3Config)
+          ? createS3AttachmentStore(s3Config)
+          : createR2AttachmentStore(context.env.ATTACHMENTS as R2BucketLike | undefined),
         publicBaseUrl: context.env.R2_PUBLIC_BASE_URL,
       }),
     });

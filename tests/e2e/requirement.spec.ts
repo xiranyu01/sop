@@ -111,6 +111,12 @@ test('Requirement create → ETag update → review → confirm → export → n
   await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
   await page.getByRole('button', { name: new RegExp(title) }).first().click();
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'YAML 预览' })).toHaveCount(0);
+  await page.getByRole('button', { name: '导出' }).click();
+  await expect(page.getByRole('button', { name: '导出 YAML' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '导出 PDF' })).toBeEnabled();
+  await page.getByRole('button', { name: '导出 PDF' }).click();
+  await expect(page.frameLocator('iframe[title$=".pdf"]').locator('body')).toContainText(title);
 
   const rootPath = resourcePath('requirements', draft.name);
   const review = await apiJson<DependencyReviewResult>(request, 'POST', `${rootPath}/review-proposal`, {
@@ -143,6 +149,8 @@ test('Requirement create → ETag update → review → confirm → export → n
     idempotent: false,
   });
   await expect(page.getByText('客户需求版本已确认')).toBeVisible();
+  await expect(page.getByRole('paragraph').filter({ hasText: 'v1.0.0 · 已确认' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '编辑为草稿' })).toBeVisible();
 
   await page.reload();
   await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
@@ -185,6 +193,11 @@ test('Requirement create → ETag update → review → confirm → export → n
   const createdDraft = await createdDraftResponse.json() as ResourceMutationResult;
   expect(createdDraft.resource.resource).toMatchObject({ candidateVersionLabel: '1.0.1' });
   await expect(page.getByText('已创建草稿版本')).toBeVisible();
+  await expect(page.getByLabel('版本')).toHaveValue('1.0.1');
+
+  await page.getByLabel('版本').selectOption('1.0.0');
+  await expect(page.getByRole('button', { name: '进入当前草稿' })).toBeVisible();
+  await page.getByRole('button', { name: '进入当前草稿' }).click();
   await expect(page.getByLabel('版本')).toHaveValue('1.0.1');
 
   const deleteDraftResponse = page.waitForResponse((response) =>

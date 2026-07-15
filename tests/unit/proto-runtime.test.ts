@@ -93,6 +93,12 @@ const robot = create(RobotModelSchema, {
   extraTopicRequirements: [{ topicId: 'camera', requirement: '30 Hz RGB' }],
   currentRevision: 'robotModels/arm/revisions/1',
 });
+const robotWithFreeFormTopic = create(RobotModelSchema, {
+  name: 'robotModels/free-form-topic',
+  uid: '00000000-0000-4000-8000-000000000020',
+  displayName: 'Free-form topic robot',
+  topics: [{ id: '/astribot_head/joint_space_states 0 0', topic: '' }],
+});
 const robotRevision = create(RobotModelRevisionSchema, {
   name: 'robotModels/arm/revisions/1',
   uid: '00000000-0000-4000-8000-000000000010',
@@ -188,6 +194,10 @@ const requirementRevision = create(RequirementRevisionSchema, {
 });
 
 describe('generated Proto runtime', () => {
+  it('accepts free-form Topic IDs and empty Topic values', () => {
+    expect(createValidator().validate(RobotModelSchema, robotWithFreeFormTopic).kind).toBe('valid');
+  });
+
   it('constructs every resource, spec, and immutable revision with frozen dependencies', () => {
     expect([
       customer,

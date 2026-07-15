@@ -46,6 +46,10 @@ import { resourceName } from '../domain/identity';
 import { CanonicalDataError } from '../domain/errors';
 import {
   acknowledgeRootDependencies,
+  buildRequirementCheckpointExportBundle,
+  buildRequirementDraftExportBundle,
+  buildTaskSopCheckpointExportBundle,
+  buildTaskSopDraftExportBundle,
   confirmRoot,
   DependencyReviewRequiredError,
   reviewRootDependencies,
@@ -224,14 +228,43 @@ function resourceDetail(kind: ResourceKind, record: CatalogResourceRecord | Curr
   return { ...resourceSummary(kind, record), resource: parseProtoJson(record.protoJson) };
 }
 
-function resourcePage(kind: ResourceKind, page: { items: ResourceSummary[]; nextCursor?: string }): ResourcePage {
+function resourcePage(
+  kind: ResourceKind,
+  page: { items: ResourceSummary[]; nextCursor?: string },
+  listViews: ReadonlyMap<string, JsonValue> = new Map(),
+): ResourcePage {
   return {
     items: page.items.map((item) => {
       const { resource: _resource, ...summary } = resourceSummary(kind, item);
-      return summary;
+      const listView = listViews.get(item.name);
+      return listView ? { ...summary, listView } : summary;
     }),
     nextCursor: page.nextCursor,
   };
+}
+
+function exportResponse(
+  bundle: ReturnType<typeof decodeExportBundle>,
+  format: 'yaml' | 'pdf',
+  versionLabel: string,
+): Response {
+  if (!bundle.content) throw new CanonicalDataError('导出包缺少内容');
+  if (format === 'pdf') {
+    return new Response(JSON.stringify(renderFrozenPdfModel(bundle.content)), {
+      status: 200,
+      headers: {
+        'content-type': 'application/vnd.coscene.sop.pdf-model+json; charset=utf-8',
+        'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(`${versionLabel}.pdf-model.json`)}`,
+      },
+    });
+  }
+  return new Response(serializeExportBundleYaml(bundle), {
+    status: 200,
+    headers: {
+      'content-type': 'application/yaml; charset=utf-8',
+      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${versionLabel}.yaml`)}`,
+    },
+  });
 }
 
 function sourceVersionId(protoJson: string): string | undefined {
@@ -588,6 +621,11 @@ async function listResources(
   const result = item.value.persistence === 'catalog'
     ? await repository.listCatalog(item.value.repositoryKind as CatalogResourceKind, page)
     : await repository.listCurrent(item.value.repositoryKind as CurrentResourceKind, page);
+  if (item.kind === 'customers' || item.kind === 'materials' || item.kind === 'globalFields') {
+    const records = await repository.getCatalogs(result.items.map((resource) => resource.name));
+    const listViews = new Map(records.map((record) => [record.name, parseProtoJson(record.protoJson)]));
+    return json(resourcePage(item.kind, result, listViews));
+  }
   return json(resourcePage(item.kind, result));
 }
 
@@ -764,10 +802,11 @@ export async function handleResourceApiRequest(
     }
 
     const revisionExport = /^\/api\/revisions\/([^/]+)\/export\.(yaml|pdf)$/.exec(pathname);
+    const draftExport = /^\/api\/resources\/(taskSops|requirements)\/([^/]+)\/export\.(yaml|pdf)$/.exec(pathname);
     const revisionDetailRoute = /^\/api\/revisions\/([^/]+)$/.exec(pathname);
     const attachmentRoute = /^\/api\/resources\/([^/]+)\/([^/]+)\/attachments(?:\/([^/]+)(?:\/parts\/([^/]+)|\/(complete|abort))?)?$/.exec(pathname);
     const resourceRoute = /^\/api\/resources\/([^/]+)(?:\/([^/]+))?(?:\/(archive|revisions|drafts|review-proposal|review-acknowledgements|confirmations))?$/.exec(pathname);
-    if (!revisionExport && !revisionDetailRoute && !attachmentRoute && !resourceRoute) {
+    if (!revisionExport && !draftExport && !revisionDetailRoute && !attachmentRoute && !resourceRoute) {
       return errorResponse(404, apiError('NOT_FOUND', 'API 路由不存在', undefined, options.requestId));
     }
 
@@ -786,30 +825,52 @@ export async function handleResourceApiRequest(
       const name = decodeSegment(revisionExport[1], 'revision name');
       const revision = await repository.getRevision(name);
       if (!revision) throw new ResourceNotFoundError(name);
-      if (!revision.exportEligible || revision.lifecycle !== 'CONFIRMED') {
-        return errorResponse(409, apiError('IMMUTABLE_REVISION', '该历史版本不可导出', { resourceName: name }, options.requestId));
+      const stored = revision.exportEligible && revision.lifecycle === 'CONFIRMED'
+        ? await repository.getExportBundle(name)
+        : undefined;
+      if (!stored && revisionExport[2] === 'yaml') {
+        return errorResponse(409, apiError(
+          'IMMUTABLE_REVISION',
+          '草稿历史版本只能导出 PDF',
+          { resourceName: name },
+          options.requestId,
+        ));
       }
-      const stored = await repository.getExportBundle(name);
-      if (!stored) throw new ResourceNotFoundError(name);
-      const bundle = decodeExportBundle(stored.bundleProtoJson);
-      if (revisionExport[2] === 'pdf') {
-        if (!bundle.content) throw new CanonicalDataError(`导出包缺少冻结内容：${name}`);
-        return new Response(JSON.stringify(renderFrozenPdfModel(bundle.content)), {
-          status: 200,
-          headers: {
-            'content-type': 'application/vnd.coscene.sop.pdf-model+json; charset=utf-8',
-            'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(`${revision.versionLabel}.pdf-model.json`)}`,
-          },
-        });
+      if (!stored && !['TASK_SOP_REVISION', 'REQUIREMENT_REVISION'].includes(revision.kind)) {
+        return errorResponse(409, apiError(
+          'IMMUTABLE_REVISION',
+          '该历史版本不可导出',
+          { resourceName: name },
+          options.requestId,
+        ));
       }
-      const yaml = serializeExportBundleYaml(bundle);
-      return new Response(yaml, {
-        status: 200,
-        headers: {
-          'content-type': 'application/yaml; charset=utf-8',
-          'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${revision.versionLabel}.yaml`)}`,
-        },
-      });
+      const bundle = stored
+        ? decodeExportBundle(stored.bundleProtoJson)
+        : revision.kind === 'TASK_SOP_REVISION'
+          ? await buildTaskSopCheckpointExportBundle(repository, name)
+          : await buildRequirementCheckpointExportBundle(repository, name);
+      return exportResponse(bundle, revisionExport[2] as 'yaml' | 'pdf', revision.versionLabel);
+    }
+
+    if (draftExport && method === 'GET') {
+      const kind = draftExport[1] as 'taskSops' | 'requirements';
+      const name = decodeSegment(draftExport[2], `${kind} name`);
+      if (draftExport[3] === 'yaml') {
+        return errorResponse(409, apiError(
+          'IMMUTABLE_REVISION',
+          '草稿版本只能导出 PDF',
+          { resourceName: name },
+          options.requestId,
+        ));
+      }
+      const bundle = kind === 'taskSops'
+        ? await buildTaskSopDraftExportBundle(repository, name)
+        : await buildRequirementDraftExportBundle(repository, name);
+      return exportResponse(
+        bundle,
+        draftExport[3] as 'yaml' | 'pdf',
+        bundle.content?.versionLabel || 'draft',
+      );
     }
 
     if (revisionDetailRoute && method === 'GET') {

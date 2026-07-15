@@ -297,6 +297,15 @@ export class ApiClient {
     });
   }
 
+  exportDraft(kind: 'taskSops' | 'requirements', name: string, format: 'yaml' | 'pdf'): Promise<Response> {
+    return this.requestFetch(`${this.baseUrl}/api/resources/${kind}/${encodeURIComponent(name)}/export.${format}`, {
+      headers: this.authHeaders(),
+    }).then((response) => {
+      if (!response.ok) return this.throwResponseError(response);
+      return response;
+    });
+  }
+
   async request<T>(path: string, options: {
     method?: string;
     body?: unknown;

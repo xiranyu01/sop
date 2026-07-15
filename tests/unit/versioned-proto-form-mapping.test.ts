@@ -52,6 +52,25 @@ describe('versioned Proto form mapping', () => {
     expect(current).toBeDefined();
     const resource = JSON.parse(current!.protoJson);
     const sourceObject = resource.spec.objects[0];
+    resource.spec.objectStates = {
+      ...resource.spec.objectStates,
+      duringOperation: [{
+        objectId: sourceObject.id,
+        parameters: [{
+          name: 'door_open_angle',
+          displayName: '微波炉门打开角度',
+          valueType: 'number',
+          constraints: ['需要满足安全要求'],
+        }],
+      }],
+    };
+    resource.spec.randomization = {
+      ...resource.spec.randomization,
+      objectDuringOperation: [{
+        objectIds: [sourceObject.id],
+        parameterNames: ['door_open_angle'],
+      }],
+    };
     sourceObject.roles = ['primary'];
     sourceObject.attributes = [{ key: 'finish', values: ['matte', 'glossy'] }];
     sourceObject.images = ['attachments/object-photo'];
@@ -80,6 +99,10 @@ describe('versioned Proto form mapping', () => {
         weight: '150 g',
       },
     });
+    expect(draft!.objectStates.duringOperation).toBeUndefined();
+    expect(draft!.randomization.materialStateDuringOperation).toBeUndefined();
+    expect(message.spec?.objectStates?.duringOperation).toEqual([]);
+    expect(message.spec?.randomization?.objectDuringOperation).toEqual([]);
 
     const attachmentName = 'attachments/uploaded-1';
     const withAttachment = { ...resource, attachments: [attachmentName] };

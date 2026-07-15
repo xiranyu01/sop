@@ -966,6 +966,18 @@ summary:focus-visible,
   color: var(--color-fg-muted);
 }
 
+.material-reference-status {
+  font-weight: 600;
+}
+
+.material-reference-status.selected {
+  color: var(--color-success-fg);
+}
+
+.material-reference-status.available {
+  color: var(--color-accent-fg);
+}
+
 .embedded-table {
   margin: 16px 18px;
   min-width: 0;
@@ -1649,6 +1661,10 @@ summary:focus-visible,
   min-width: min(640px, 100%);
 }
 
+.modal-form-stack > .field.wide {
+  margin: 0;
+}
+
 .form-actions {
   display: flex;
   align-items: center;
@@ -1799,44 +1815,6 @@ summary:focus-visible,
 .section-title span {
   color: var(--color-fg-muted);
   font-size: 13px;
-}
-
-.yaml-preview-title {
-  align-items: flex-start;
-}
-
-.yaml-preview-title > div:first-child {
-  min-width: 0;
-}
-
-.yaml-preview-title span {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.yaml-preview {
-  margin: 18px;
-  border: 1px solid var(--color-border-muted);
-  border-radius: var(--primer-radius-medium);
-  overflow: hidden;
-}
-
-.yaml-preview.small {
-  margin-top: 12px;
-}
-
-.yaml-preview pre {
-  max-height: 420px;
-  margin: 0;
-  overflow: auto;
-  background: #0f1f33;
-  color: #e7f0fb;
-  font-size: 12px;
-  line-height: 1.55;
-  padding: 14px;
 }
 
 .inline-edit {

@@ -29,13 +29,95 @@ test('customer create/edit persists after reload and remains searchable', async 
   await page.getByLabel('备注').fill('浏览器创建');
   const saveResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === '/api/resources/customers' && response.request().method() === 'POST');
+  const dialog = page.getByRole('dialog', { name: '客户详情' });
+  const [nameBounds, notesBounds] = await Promise.all([
+    dialog.getByLabel('客户名称').evaluate((element) => element.getBoundingClientRect().toJSON()),
+    dialog.getByLabel('备注').evaluate((element) => element.getBoundingClientRect().toJSON()),
+  ]);
+  expect(Math.round(notesBounds.x)).toBe(Math.round(nameBounds.x));
+  expect(Math.round(notesBounds.width)).toBe(Math.round(nameBounds.width));
   await page.getByRole('button', { name: '保存客户' }).click();
   expect((await saveResponse).status()).toBe(201);
-  await page.getByRole('button', { name: '关闭' }).click();
+  await expect(dialog).toBeHidden();
+
+  await page.getByRole('button', { name: anchoredRowName(customerName) }).click();
+  await dialog.getByLabel('备注').fill('编辑已保存');
+  const updateResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith('/api/resources/customers/') && response.request().method() === 'PUT');
+  await dialog.getByRole('button', { name: '保存客户' }).click();
+  expect((await updateResponse).status()).toBe(200);
+  await expect(dialog).toBeHidden();
 
   await page.reload();
   await page.getByPlaceholder('搜索客户名称、编号或字段').fill(customerName);
-  await expect(page.getByRole('button', { name: new RegExp(customerName) })).toBeVisible();
+  const customerTable = page.getByRole('table');
+  await expect(customerTable).toContainText(customerName);
+  await expect(customerTable).toContainText('Alice');
+  await expect(customerTable).toContainText('13800000000');
+  await expect(customerTable).toContainText('alice@example.test');
+  await expect(customerTable).toContainText('编辑已保存');
+});
+
+test('material list fields remain visible after reload without opening detail', async ({ page, request }, testInfo) => {
+  const suffix = `w${testInfo.workerIndex}-r${testInfo.retry}`;
+  const sku = `SKU-LIST-${suffix}`;
+  await createResource(request, 'materials', {
+    displayName: `列表物料 ${suffix}`,
+    sourceId: `list-material-${suffix}`,
+    sku,
+    category: `列表物料 ${suffix}`,
+    colors: ['绿色'],
+    compositions: ['塑料'],
+    packaging: '袋装',
+    size: '长 20cm',
+    weight: '500g',
+  });
+
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^物料\s+\d+$/ }).click();
+  await page.getByPlaceholder('搜索物料名称、编号或字段').fill(sku);
+  const materialTable = page.getByRole('table');
+  await expect(materialTable).toContainText(sku);
+  await expect(materialTable).toContainText('绿色');
+  await expect(materialTable).toContainText('塑料');
+  await expect(materialTable).toContainText('袋装');
+  await expect(materialTable).toContainText('长 20cm');
+  await expect(materialTable).toContainText('500g');
+});
+
+test('new material shows its SKU and stages an image until save', async ({ page, request }, testInfo) => {
+  const type = `预上传图片物料 w${testInfo.workerIndex}-r${testInfo.retry}`;
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^物料\s+\d+$/ }).click();
+  await page.getByRole('button', { name: '新建物料' }).click();
+  const dialog = page.getByRole('dialog', { name: '物料详情' });
+  await expect(dialog.getByLabel('物料类型')).toBeFocused();
+  const sku = await dialog.getByLabel('SKU 编号').inputValue();
+  expect(sku).toMatch(/^SKU\d{3,}$/);
+  await dialog.getByLabel('物料类型').fill(type);
+
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: 'before-save.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+  });
+  await expect(dialog).toContainText('before-save.png');
+
+  const createResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/resources/materials' && response.request().method() === 'POST');
+  await dialog.getByRole('button', { name: '保存物料' }).click();
+  const created = await createResponse;
+  expect(created.status()).toBe(201);
+  await expect(dialog).toBeHidden();
+
+  const detail = await created.json() as ResourceMutationResult;
+  await expect(getResource(request, 'materials', detail.resource.name)).resolves.toMatchObject({
+    resource: {
+      sku,
+      category: type,
+      images: [expect.stringMatching(/^attachments\//)],
+    },
+  });
 });
 
 test('RobotModel edit is submitted by the page and persists through the resource API', async ({ page, request }, testInfo) => {
@@ -52,23 +134,33 @@ test('RobotModel edit is submitted by the page and persists through the resource
     extraTopicRequirements: [{ topicId: 'camera', requirement: '30fps' }],
   });
   const endEffector = `E2E 末端 R${testInfo.retry}`;
+  const freeFormTopicId = '/astribot_head/joint_space_states 0 0';
 
   await openAuthenticated(page);
   await page.getByRole('button', { name: /^机器型号\s+\d+$/ }).click();
   await page.getByPlaceholder('搜索机器型号名称、编号或字段').fill(modelCode);
-  await page.getByRole('table').getByRole('button', { name: anchoredRowName(displayName) }).click();
+  await page.getByRole('table').getByRole('button').first().click();
   const dialog = page.getByRole('dialog', { name: '机器型号详情' });
   await expect(dialog).toBeVisible();
+  await page.locator('.modal-backdrop').click({ position: { x: 5, y: 5 } });
+  await expect(dialog).toBeVisible();
   await dialog.getByLabel('末端').fill(endEffector);
+  await dialog.getByLabel('Topic（key:value，一行一个）').fill(`${freeFormTopicId}:`);
 
   const updateResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === resourcePath('robotModels', robot.name) &&
     response.request().method() === 'PUT');
   await dialog.getByRole('button', { name: '保存型号' }).click();
   expect((await updateResponse).status()).toBe(200);
+  await expect(dialog).toBeHidden();
   await expect(getResource(request, 'robotModels', robot.name)).resolves.toMatchObject({
-    resource: { modelCode, endEffector },
+    resource: { modelCode, endEffector, topics: [{ id: freeFormTopicId }] },
   });
+
+  await page.getByRole('table').getByRole('button').first().click();
+  await expect(dialog.getByLabel('Topic（key:value，一行一个）')).toHaveValue(freeFormTopicId);
+  await dialog.getByRole('button', { name: '关闭' }).click();
+  await expect(dialog).toBeHidden();
 });
 
 test('GlobalField edit is submitted by the field dialog and persists', async ({ page, request }, testInfo) => {

@@ -39,6 +39,8 @@ export type ResourceSummary = {
   deadline?: string;
   productionItemCount?: number;
   aggregateDuration?: string;
+  /** List-visible fields for compact catalog resources such as customers, materials, and global fields. */
+  listView?: JsonValue;
   archived: boolean;
 };
 

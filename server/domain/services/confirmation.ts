@@ -15,7 +15,7 @@ import {
   type RobotModelRevision,
   type Scene,
 } from '../../../gen/coscene/sop/v1alpha1/catalog_pb';
-import { DependencyKind } from '../../../gen/coscene/sop/v1alpha1/common_pb';
+import { DependencyKind, Lifecycle, RevisionOrigin } from '../../../gen/coscene/sop/v1alpha1/common_pb';
 import {
   RequirementRevisionSchema,
   RequirementSchema,
@@ -444,6 +444,152 @@ function safeSequence(value: bigint | undefined): number {
 
 function rootSourceId(value: { name: string; sourceId?: string }): string {
   return value.sourceId ?? value.name.split('/').at(-1)!;
+}
+
+export async function buildTaskSopDraftExportBundle(
+  repository: ResourceRepository,
+  rootName: string,
+  now = new Date(),
+) {
+  const resolution = await resolveRoot(repository, rootName, now.toISOString());
+  if (!resolution.message.$typeName.endsWith('TaskSop')) {
+    throw new CanonicalDataError(`Resource is not a TaskSop draft: ${rootName}`);
+  }
+  const built = buildTaskSopConfirmation(
+    resolution.message as TaskSop,
+    resolution.frozenDependencies,
+    now,
+  );
+  return buildExportBundle(resolveExportClosure({
+    requirementRevisions: [],
+    taskSopRevisions: [built.revision],
+    robotModelRevisions: [],
+  }, {
+    kind: 'task_sop',
+    sourceId: rootSourceId(built.revision.snapshot!),
+    versionLabel: built.revision.versionLabel,
+  }));
+}
+
+export async function buildRequirementDraftExportBundle(
+  repository: ResourceRepository,
+  rootName: string,
+  now = new Date(),
+) {
+  const resolution = await resolveRoot(repository, rootName, now.toISOString());
+  if (!resolution.message.$typeName.endsWith('Requirement')) {
+    throw new CanonicalDataError(`Resource is not a Requirement draft: ${rootName}`);
+  }
+  const built = buildRequirementConfirmation(
+    resolution.message as Requirement,
+    resolution.frozenDependencies,
+    now,
+  );
+  return buildExportBundle(resolveExportClosure({
+    requirementRevisions: [built.revision],
+    taskSopRevisions: resolution.taskSopRevisions,
+    robotModelRevisions: resolution.robotModelRevisions,
+  }, {
+    kind: 'requirement',
+    sourceId: rootSourceId(built.revision.snapshot!),
+    versionLabel: built.revision.versionLabel,
+  }));
+}
+
+export async function buildTaskSopCheckpointExportBundle(
+  repository: ResourceRepository,
+  revisionNameValue: string,
+) {
+  const record = await repository.getRevision(revisionNameValue);
+  if (!record) throw new ResourceNotFoundError(revisionNameValue);
+  if (record.kind !== 'TASK_SOP_REVISION') {
+    throw new CanonicalDataError(`Revision is not a TaskSop revision: ${revisionNameValue}`);
+  }
+  const revision = fromDomainJsonString(TaskSopRevisionSchema, record.revisionProtoJson);
+  if (!revision.snapshot || !revision.frozenDependencies) {
+    throw new CanonicalDataError(`TaskSop checkpoint is missing its snapshot or dependencies: ${revisionNameValue}`);
+  }
+  const snapshot = create(TaskSopSchema, {
+    ...revision.snapshot,
+    lifecycle: Lifecycle.CONFIRMED,
+    currentRevision: revision.name,
+    candidateVersionSequence: undefined,
+    candidateVersionLabel: undefined,
+    candidateSourceVersionId: undefined,
+  });
+  const previewRevision = create(TaskSopRevisionSchema, {
+    ...revision,
+    snapshot,
+    origin: RevisionOrigin.RUNTIME_CONFIRMED,
+    exportEligible: true,
+  });
+  return buildExportBundle(resolveExportClosure({
+    requirementRevisions: [],
+    taskSopRevisions: [previewRevision],
+    robotModelRevisions: [],
+  }, {
+    kind: 'task_sop',
+    sourceId: rootSourceId(snapshot),
+    versionLabel: previewRevision.versionLabel,
+  }));
+}
+
+export async function buildRequirementCheckpointExportBundle(
+  repository: ResourceRepository,
+  revisionNameValue: string,
+) {
+  const record = await repository.getRevision(revisionNameValue);
+  if (!record) throw new ResourceNotFoundError(revisionNameValue);
+  if (record.kind !== 'REQUIREMENT_REVISION') {
+    throw new CanonicalDataError(`Revision is not a Requirement revision: ${revisionNameValue}`);
+  }
+  const revision = fromDomainJsonString(RequirementRevisionSchema, record.revisionProtoJson);
+  if (!revision.snapshot || !revision.frozenDependencies || !revision.snapshot.spec) {
+    throw new CanonicalDataError(`Requirement checkpoint is missing its snapshot or dependencies: ${revisionNameValue}`);
+  }
+  const snapshot = create(RequirementSchema, {
+    ...revision.snapshot,
+    lifecycle: Lifecycle.CONFIRMED,
+    currentRevision: revision.name,
+    candidateVersionSequence: undefined,
+    candidateVersionLabel: undefined,
+    candidateSourceVersionId: undefined,
+  });
+  const previewRevision = create(RequirementRevisionSchema, {
+    ...revision,
+    snapshot,
+    origin: RevisionOrigin.RUNTIME_CONFIRMED,
+    exportEligible: true,
+  });
+  const spec = revision.snapshot.spec;
+  const taskRevisionNames = uniqueSorted(
+    spec.productionItems.map((item) => item.taskSopRevision).filter(Boolean),
+  );
+  const dependencyRecords = revisionMap(await repository.getRevisions([
+    spec.robotModelRevision,
+    ...taskRevisionNames,
+  ]));
+  const robot = requireRevision(
+    dependencyRecords,
+    spec.robotModelRevision,
+    'ROBOT_MODEL_REVISION',
+    RobotModelRevisionSchema,
+  );
+  const tasks = taskRevisionNames.map((name) => requireRevision(
+    dependencyRecords,
+    name,
+    'TASK_SOP_REVISION',
+    TaskSopRevisionSchema,
+  ).value);
+  return buildExportBundle(resolveExportClosure({
+    requirementRevisions: [previewRevision],
+    taskSopRevisions: tasks,
+    robotModelRevisions: [robot.value],
+  }, {
+    kind: 'requirement',
+    sourceId: rootSourceId(snapshot),
+    versionLabel: previewRevision.versionLabel,
+  }));
 }
 
 export async function confirmRoot(

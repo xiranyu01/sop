@@ -150,7 +150,12 @@ describe('Pages resource API adapter', () => {
     const taskSop = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
     const requirement = data.currents.find((item) => item.protoSchema.endsWith('.Requirement'))!;
     const materialResource = JSON.parse(material.protoJson) as { sourceId: string; sku: string };
-    const globalFieldResource = JSON.parse(globalField.protoJson) as { group: string; status: string };
+    const globalFieldResource = JSON.parse(globalField.protoJson) as {
+      group: string;
+      status: string;
+      label: string;
+      value: string;
+    };
     const robotResource = JSON.parse(robot.protoJson) as { currentRevision: string };
     const taskSopResource = JSON.parse(taskSop.protoJson) as {
       sourceId: string; scene: string; currentRevision?: string;
@@ -185,6 +190,10 @@ describe('Pages resource API adapter', () => {
     await expect(fetchSummary('globalFields', globalField.name)).resolves.toMatchObject({
       fieldGroup: globalFieldResource.group,
       fieldStatus: globalFieldResource.status,
+      listView: expect.objectContaining({
+        label: globalFieldResource.label,
+        value: globalFieldResource.value,
+      }),
     });
     await expect(fetchSummary('robotModels', robot.name)).resolves.toMatchObject({
       currentRevision: robotResource.currentRevision,
@@ -270,6 +279,15 @@ describe('Pages resource API adapter', () => {
     const requirement = data.currents.find((item) => item.protoSchema.endsWith('.Requirement'))!;
     const detailResponse = await request(`/api/resources/requirements/${encodeURIComponent(requirement.name)}`);
     const detail = await detailResponse.json() as { etag: string };
+
+    const draftYaml = await request(`/api/resources/requirements/${encodeURIComponent(requirement.name)}/export.yaml`);
+    expect(draftYaml.status).toBe(409);
+    await expect(draftYaml.json()).resolves.toMatchObject({ error: { kind: 'IMMUTABLE_REVISION' } });
+
+    const draftPdf = await request(`/api/resources/requirements/${encodeURIComponent(requirement.name)}/export.pdf`);
+    expect(draftPdf.status).toBe(200);
+    expect(draftPdf.headers.get('content-type')).toContain('application/vnd.coscene.sop.pdf-model+json');
+    await expect(draftPdf.json()).resolves.toMatchObject({ rendererVersion: 'sop-pdf-v1' });
 
     const reviewResponse = await request(
       `/api/resources/requirements/${encodeURIComponent(requirement.name)}/review-proposal`,
@@ -429,7 +447,7 @@ describe('Pages resource API adapter', () => {
     db.close();
   });
 
-  it('returns revision summaries, one revision detail, and YAML only from its sealed bundle', async () => {
+  it('exports confirmed and current draft TaskSop versions', async () => {
     const { db, data, request } = await harness();
     const task = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
     const exportable = data.revisions.find((item) => item.ownerName === task.name && item.exportEligible)!;
@@ -465,10 +483,31 @@ describe('Pages resource API adapter', () => {
       ]),
     });
 
-    const checkpoint = data.revisions.find((item) => !item.exportEligible)!;
-    const blocked = await request(`/api/revisions/${encodeURIComponent(checkpoint.name)}/export.yaml`);
+    const nonTaskRevision = data.revisions.find((item) => !item.exportEligible)!;
+    const blocked = await request(`/api/revisions/${encodeURIComponent(nonTaskRevision.name)}/export.yaml`);
     expect(blocked.status).toBe(409);
     await expect(blocked.json()).resolves.toMatchObject({ error: { kind: 'IMMUTABLE_REVISION' } });
+
+    const currentResponse = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}`);
+    const current = await currentResponse.json() as { etag: string };
+    const draftResponse = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: current.etag }),
+    });
+    expect(draftResponse.status).toBe(200);
+
+    const draftYaml = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}/export.yaml`);
+    expect(draftYaml.status).toBe(409);
+    await expect(draftYaml.json()).resolves.toMatchObject({ error: { kind: 'IMMUTABLE_REVISION' } });
+
+    const draftPdf = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}/export.pdf`);
+    expect(draftPdf.status).toBe(200);
+    expect(draftPdf.headers.get('content-type')).toContain('application/vnd.coscene.sop.pdf-model+json');
+    await expect(draftPdf.json()).resolves.toMatchObject({
+      rendererVersion: 'sop-pdf-v1',
+      page: { size: 'A4' },
+    });
     db.close();
   });
 

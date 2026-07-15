@@ -113,7 +113,6 @@ function taskSpec(
         objectId: state.objectId,
         requiredLocation: state.requiredLocation ? location(state.requiredLocation) : undefined,
       })),
-      duringOperation: spec.objectStates.duringOperation,
     } : undefined,
     randomization: spec?.randomization ? {
       robotInitialState: spec.randomization.robotInitialState,
@@ -128,7 +127,6 @@ function taskSpec(
         poses: rule.poses,
         forms: rule.forms,
       })),
-      objectDuringOperation: spec.randomization.objectDuringOperation,
     } : undefined,
     collection: spec?.collection,
     annotation: spec?.annotation,

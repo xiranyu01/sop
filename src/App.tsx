@@ -268,15 +268,6 @@ function findGlobalFieldCategory(group: GlobalFieldGroup) {
   return globalFieldCategories.find((category) => category.groups.includes(group));
 }
 
-const fallbackRobotRandomOptions: Option[] = [
-  { value: 'initial_position', label: '位置' },
-  { value: 'initial_yaw', label: '朝向' },
-];
-const fallbackMaterialRandomOptions: Option[] = [
-  { value: 'location', label: '物料位置' },
-  { value: 'pose', label: '物料姿态' },
-  { value: 'form', label: '物料形态' },
-];
 const defaultAttachmentStorageStatus: AttachmentStorageStatus = { enabled: true, message: '' };
 
 type ResourceBound = {
@@ -546,16 +537,18 @@ function requirementProductionItemCount(requirement: Requirement): number {
 }
 
 function customerPlaceholder(summary: ResourceSummary): Bound<Customer> {
-  return bindResource({
+  const customer = summary.listView ? decodeCustomerForm(summary.listView).value : {
     id: sourceLikeId(summary), name: summary.displayName, contact: { name: '', phone: '', email: '' }, notes: '',
-  }, summary, false);
+  };
+  return bindResource(customer, summary, false);
 }
 
 function materialPlaceholder(summary: ResourceSummary): Bound<Material> {
-  return bindResource({
+  const material = summary.listView ? decodeMaterialForm(summary.listView, resourceAttachmentResolver).value : {
     id: sourceLikeId(summary), skuId: summary.sku || sourceLikeId(summary), type: summary.displayName,
     color: '', material: '', packageType: '', images: [],
-  }, summary, false);
+  };
+  return bindResource(material, summary, false);
 }
 
 function robotPlaceholder(summary: ResourceSummary): Bound<RobotModel> {
@@ -569,6 +562,9 @@ function scenePlaceholder(summary: ResourceSummary): Bound<Scene> {
 }
 
 function globalFieldPlaceholder(summary: ResourceSummary): Bound<GlobalField> {
+  if (summary.listView) {
+    return bindResource(decodeGlobalFieldForm(summary.listView).value, summary, false);
+  }
   const group = summary.fieldGroup?.replace('GLOBAL_FIELD_GROUP_', '').toLowerCase() as GlobalFieldGroup | undefined;
   return bindResource({
     id: sourceLikeId(summary), group: group && globalFieldGroups.includes(group) ? group : 'reference_object',
@@ -882,6 +878,10 @@ function latest<T extends { version: string }>(versions: T[]): T {
   return versions[versions.length - 1];
 }
 
+function activeEditableDraft<T extends { status: EntityStatus; version: string }>(versions: T[]): T | undefined {
+  return [...versions].reverse().find((version) => version.status === 'draft' && !revisionIsCheckpoint(version));
+}
+
 function statusText(status: string): string {
   if (status === 'active') return '启用';
   if (status === 'inactive') return '停用';
@@ -1177,14 +1177,18 @@ function stateSentence(row: InitialLocationRow): string {
   return parts.join('，') + '。';
 }
 
-function materialRandomizationSentence(row: MaterialInitialRandomizationRow): string {
+function materialRandomizationSentence(row: MaterialInitialRandomizationRow, options: Option[]): string {
   const materials = row.targetMaterials.length ? row.targetMaterials.join('、') : '所选物料';
-  const fields = row.randomizedFields.length ? row.randomizedFields.join('、') : '位置/姿态/形态';
+  const fields = row.randomizedFields.length
+    ? row.randomizedFields
+      .map((field) => options.find((option) => option.value === field)?.label || field)
+      .join('、')
+    : '未设置';
   return `${materials} 每 ${row.changeIntervalRecords || 1} 条换一次，需要变化 ${fields}。`;
 }
 
 function publicAttachmentUrl(publicBaseUrl: string | undefined, storageKey: string): string {
-  if (/^https?:\/\//i.test(storageKey)) return storageKey;
+  if (/^(https?:\/\/|blob:)/i.test(storageKey)) return storageKey;
   if (!publicBaseUrl) return '';
   const base = publicBaseUrl.replace(/\/+$/, '');
   const encodedKey = storageKey.split('/').map(encodeURIComponent).join('/');
@@ -1206,13 +1210,13 @@ async function downloadStoredAttachment(attachment: RequirementAttachment) {
 
 function nextReadableId(values: string[], prefix: string): string {
   const pattern = new RegExp(`^${prefix}(\\d+)$`, 'i');
-  const maxNumber = values.reduce((max, value) => {
-    const match = value.match(pattern);
-    if (!match) return max;
-    const parsed = Number.parseInt(match[1], 10);
+  const matches = values.flatMap((value) => value.match(pattern)?.[1] ?? []);
+  const maxNumber = matches.reduce((max, digits) => {
+    const parsed = Number.parseInt(digits, 10);
     return Number.isNaN(parsed) ? max : Math.max(max, parsed);
   }, 0);
-  return `${prefix}${maxNumber + 1}`;
+  const width = Math.max(3, ...matches.map((digits) => digits.length));
+  return `${prefix}${String(maxNumber + 1).padStart(width, '0')}`;
 }
 
 function sceneLatestUpdated(scene: Scene): string {
@@ -1745,19 +1749,24 @@ export default function App() {
       if (acceptedState.kind === 'acknowledged') {
         const next = await resourceClient.get(kind, name);
         updateResourceEtag(kind, next);
-        setMessage('依赖审阅已确认，请再次点击确认版本');
-        return;
+        if (kind === 'taskSops') {
+          await flow.requestConfirmation();
+        } else {
+          setMessage('依赖审阅已确认，请再次点击确认版本');
+          return;
+        }
       }
     }
     if (flow.state.kind === 'confirmed') {
       const result = flow.state.result;
       const revisions = await loadRevisionDetails(kind, name);
+      saveQueues.current.remove(name);
       if (kind === 'requirements') {
-        const loaded = replaceRequirementResource(result.resource, revisions);
-        setSelectedRequirementVersion(latest(loaded.versions).version);
+        replaceRequirementResource(result.resource, revisions);
+        setSelectedRequirementVersion(result.revision.versionLabel);
       } else {
-        const loaded = replaceTaskSopResource(result.resource, revisions).subscene;
-        setSelectedSubsceneVersion(latest(loaded.versions).version);
+        replaceTaskSopResource(result.resource, revisions);
+        setSelectedSubsceneVersion(result.revision.versionLabel);
       }
       reviewFlows.current.delete(name);
       setMessage(kind === 'requirements' ? '客户需求版本已确认' : '任务 SOP 版本已确认');
@@ -1766,17 +1775,66 @@ export default function App() {
     if (flow.state.kind === 'failed') throw new Error(flow.state.message);
   }
 
-  async function exportYaml(version: RequirementVersion | SubsceneVersion): Promise<ExportResult> {
-    const name = revisionNameOf(version);
-    if (!name || !revisionExportEligible(version)) throw new Error('只有已确认且可导出的历史版本可以导出 YAML');
-    const response = await resourceClient.exportRevision(name, 'yaml');
-    return { yaml: await response.text(), path: `/api/revisions/${encodeURIComponent(name)}/export.yaml` };
+  async function requirementExportResponse(
+    requirement: Requirement,
+    version: RequirementVersion,
+    format: 'yaml' | 'pdf',
+  ): Promise<Response> {
+    const revisionName = revisionNameOf(version);
+    if (revisionName) return resourceClient.exportRevision(revisionName, format);
+
+    const name = resourceNameOf(requirement);
+    if (!name) throw new Error('客户需求资源尚未创建');
+    const pendingQueue = saveQueues.current.get(name);
+    if (pendingQueue) {
+      await pendingQueue.whenSettled();
+      if (pendingQueue.hasUnsavedChanges) {
+        throw new Error('仍有尚未成功保存的修改，处理保存问题后才能导出');
+      }
+    }
+    return resourceClient.exportDraft('requirements', name, format);
   }
 
-  async function exportPdf(version: RequirementVersion | SubsceneVersion): Promise<void> {
-    const name = revisionNameOf(version);
-    if (!name || !revisionExportEligible(version)) throw new Error('只有已确认且可导出的历史版本可以导出 PDF');
-    const response = await resourceClient.exportRevision(name, 'pdf');
+  async function exportRequirementYaml(
+    requirement: Requirement,
+    version: RequirementVersion,
+  ): Promise<ExportResult> {
+    const response = await requirementExportResponse(requirement, version, 'yaml');
+    return { yaml: await response.text(), path: response.url };
+  }
+
+  async function exportRequirementPdf(requirement: Requirement, version: RequirementVersion): Promise<void> {
+    const response = await requirementExportResponse(requirement, version, 'pdf');
+    exportPdfModel(await response.json() as PdfDocumentModel);
+  }
+
+  async function taskSopExportResponse(
+    subscene: Subscene,
+    version: SubsceneVersion,
+    format: 'yaml' | 'pdf',
+  ): Promise<Response> {
+    const revisionName = revisionNameOf(version);
+    if (revisionName) return resourceClient.exportRevision(revisionName, format);
+
+    const name = resourceNameOf(subscene);
+    if (!name) throw new Error('任务 SOP 资源尚未创建');
+    const pendingQueue = saveQueues.current.get(name);
+    if (pendingQueue) {
+      await pendingQueue.whenSettled();
+      if (pendingQueue.hasUnsavedChanges) {
+        throw new Error('仍有尚未成功保存的修改，处理保存问题后才能导出');
+      }
+    }
+    return resourceClient.exportDraft('taskSops', name, format);
+  }
+
+  async function exportTaskSopYaml(subscene: Subscene, version: SubsceneVersion): Promise<ExportResult> {
+    const response = await taskSopExportResponse(subscene, version, 'yaml');
+    return { yaml: await response.text(), path: response.url };
+  }
+
+  async function exportTaskSopPdf(subscene: Subscene, version: SubsceneVersion): Promise<void> {
+    const response = await taskSopExportResponse(subscene, version, 'pdf');
     exportPdfModel(await response.json() as PdfDocumentModel);
   }
 
@@ -2140,11 +2198,14 @@ export default function App() {
             }}
             onExport={async () => {
               if (!selectedRequirement || !requirementVersion) return undefined;
-              return run(() => exportYaml(requirementVersion), 'YAML 已导出');
+              return run(
+                () => exportRequirementYaml(selectedRequirement, requirementVersion),
+                'YAML 已导出',
+              );
             }}
             onExportPdf={async () => {
-              if (!requirementVersion) return;
-              await run(() => exportPdf(requirementVersion), 'PDF 已生成');
+              if (!selectedRequirement || !requirementVersion) return;
+              await run(() => exportRequirementPdf(selectedRequirement, requirementVersion), 'PDF 已生成');
             }}
             onRun={run}
             attachmentStorageStatus={attachmentStorageStatus}
@@ -2272,9 +2333,12 @@ export default function App() {
               if (!subscene) return;
               await run(() => confirmRoot('taskSops', subscene), '任务 SOP 版本已确认');
             }}
-            onExportSubscene={async (version) => run(() => exportYaml(version), '任务 SOP YAML 已生成')}
-            onExportSubscenePdf={async (version) => {
-              await run(() => exportPdf(version), 'PDF 已生成');
+            onExportSubscene={async (subscene, version) => run(
+              () => exportTaskSopYaml(subscene, version),
+              '任务 SOP YAML 已生成',
+            )}
+            onExportSubscenePdf={async (subscene, version) => {
+              await run(() => exportTaskSopPdf(subscene, version), 'PDF 已生成');
             }}
             onRun={run}
             attachmentStorageStatus={attachmentStorageStatus}
@@ -2328,10 +2392,7 @@ export default function App() {
                 () => saveMaster('materials', { ...material, images: material.images || existing?.images || [] }),
                 '保存成功',
               );
-              if (result) {
-                return true;
-              }
-              return false;
+              return result as Material | undefined;
             }}
           />
         )}
@@ -2600,15 +2661,21 @@ function Modal({
   title,
   children,
   panelClassName = '',
+  closeOnBackdrop = true,
   onClose,
 }: {
   title: string;
   children: ReactNode;
   panelClassName?: string;
+  closeOnBackdrop?: boolean;
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onClick={closeOnBackdrop ? onClose : undefined}
+    >
       <section
         className={`modal-panel ${panelClassName}`}
         role="dialog"
@@ -2953,6 +3020,34 @@ function uniqueOptions(options: Option[]): Option[] {
   });
 }
 
+function normalizedFieldId(value: string): string {
+  return value
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function globalFieldValueForStoredField(
+  field: { field: string; displayName?: string },
+  options: Option[],
+): string {
+  const candidates = [field.displayName || '', field.field].filter(Boolean);
+  const direct = options.find((option) =>
+    candidates.some((candidate) => candidate === option.value || candidate === option.label));
+  if (direct) return direct.value;
+
+  const prefixed = options.find((option) => {
+    const optionId = normalizedFieldId(option.value);
+    if (!optionId) return false;
+    return candidates.some((candidate) => {
+      const candidateId = normalizedFieldId(candidate);
+      return candidateId === optionId || candidateId.startsWith(`${optionId}-`);
+    });
+  });
+  return prefixed?.value || field.displayName || field.field;
+}
+
 function RequirementPage({
   data,
   globalFields,
@@ -3010,9 +3105,6 @@ function RequirementPage({
   taskSopPageState?: ResourcePageState;
   onLoadMoreTaskSops: () => void;
 }) {
-  const [yamlPreview, setYamlPreview] = useState('');
-  const [exportPath, setExportPath] = useState('');
-  const [yamlCopyStatus, setYamlCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [requirementQuery, setRequirementQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
   const [taskSopPickerItemId, setTaskSopPickerItemId] = useState('');
@@ -3337,21 +3429,15 @@ function RequirementPage({
 
   async function openRequirementDetail(id: string) {
     await onSelectRequirement(id);
-    setYamlPreview('');
-    setExportPath('');
     onDetailOpenChange(true);
   }
 
   async function createRequirementAndOpen() {
     await onCreate();
-    setYamlPreview('');
-    setExportPath('');
     onDetailOpenChange(true);
   }
 
   function closeRequirementDetail() {
-    setYamlPreview('');
-    setExportPath('');
     onDetailOpenChange(false);
   }
 
@@ -3392,6 +3478,7 @@ function RequirementPage({
   }
 
   const checkpoint = revisionIsCheckpoint(selectedVersion);
+  const currentDraft = activeEditableDraft(selectedRequirement.versions);
   const readonly = selectedVersion.status === 'confirmed' || checkpoint;
   const selectedAllowedOperations = selectedVersion.allowedOperations.map((item) => item.operation);
   const selectedAcceptableOperations = (selectedVersion.acceptableOperations || []).map((item) => item.operation);
@@ -3411,30 +3498,17 @@ function RequirementPage({
   const annotationForbiddenOptions = fieldOptions(globalFields, 'annotation_forbidden_operation', selectedAnnotationForbiddenOperations);
   const yamlDownloadFileName = `${safeFileName(selectedVersion.title)}-${selectedVersion.version}.yaml`;
 
-  async function generateYamlPreview(): Promise<ExportResult | undefined> {
-    const result = await onExport();
-    if (result) {
-      setYamlPreview(result.yaml);
-      setExportPath(result.path);
-    }
-    return result;
-  }
-
   async function downloadYaml() {
-    const result = await generateYamlPreview();
+    const result = await onExport();
     if (!result) return;
     downloadTextFile(result.yaml, yamlDownloadFileName, 'application/x-yaml;charset=utf-8');
   }
 
-  async function copyYamlPreview() {
-    const yaml = yamlPreview || (await generateYamlPreview())?.yaml;
-    if (!yaml) return;
-    const copied = await copyTextToClipboard(yaml);
-    setYamlCopyStatus(copied ? 'copied' : 'failed');
-    window.setTimeout(() => setYamlCopyStatus('idle'), 1600);
-  }
-
   function createDraftFromCurrentVersion() {
+    if (currentDraft) {
+      onSelectVersion(currentDraft.version);
+      return;
+    }
     void onSave({});
   }
 
@@ -3494,8 +3568,6 @@ function RequirementPage({
       );
       const linked = await onSave({ attachments: [...(selectedVersion.attachments ?? []), attachment] });
       if (!linked) throw new Error('附件已上传，但客户需求引用尚未保存；请先处理保存冲突');
-      setYamlPreview('');
-      setExportPath('');
     } finally {
       setAttachmentUpload(null);
     }
@@ -3617,23 +3689,27 @@ function RequirementPage({
               items={[
                 {
                   label: '导出 PDF',
-                  disabled: !revisionExportEligible(selectedVersion),
-                  title: !revisionExportEligible(selectedVersion) ? '只有已确认且可导出的历史版本可以导出' : undefined,
+                  disabled: missingSelectedSubscenes.length > 0,
+                  title: missingSelectedSubscenes.length > 0
+                    ? '有生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到'
+                    : undefined,
                   onSelect: onExportPdf,
                 },
                 {
                   label: '导出 YAML',
                   disabled: missingSelectedSubscenes.length > 0 || !revisionExportEligible(selectedVersion),
                   title: !revisionExportEligible(selectedVersion)
-                    ? '只有已确认且可导出的历史版本可以导出'
-                    : missingSelectedSubscenes.length > 0 ? '有生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到' : undefined,
+                    ? '草稿版本只能导出 PDF'
+                    : missingSelectedSubscenes.length > 0
+                      ? '有生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到'
+                      : undefined,
                   onSelect: downloadYaml,
                 },
               ]}
             />
             {selectedVersion.status === 'confirmed' ? (
               <button className="primary-button" onClick={createDraftFromCurrentVersion}>
-                编辑为草稿
+                {currentDraft ? '进入当前草稿' : '编辑为草稿'}
               </button>
             ) : checkpoint ? (
               <span className="muted-text">导入草稿检查点（只读）</span>
@@ -3656,8 +3732,14 @@ function RequirementPage({
           </div>
 
           {checkpoint
-            ? <div className="notice info">这是迁移保留的旧草稿检查点，仅供追踪，不能编辑、确认或导出。</div>
-            : selectedVersion.status === 'confirmed' && <div className="notice info">当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
+            ? <div className="notice info">这是迁移保留的旧草稿检查点，仅供追踪，不能编辑或确认，可以导出 PDF。</div>
+            : selectedVersion.status === 'confirmed' && (
+              <div className="notice info">
+                {currentDraft
+                  ? `当前已有草稿 v${currentDraft.version}，点击“进入当前草稿”继续编辑。`
+                  : '当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。'}
+              </div>
+            )}
           {!readonly && unconfirmedSelectedSubscenes.length > 0 && (
             <div className="notice warning">
               有 {unconfirmedSelectedSubscenes.length} 个生产需求项未选择任务 SOP，或选择的任务 SOP 还没有确认，不能确认需求：
@@ -3960,31 +4042,6 @@ function RequirementPage({
           )}
         </div>
 
-          <div className="yaml-preview">
-          <div className="section-title yaml-preview-title">
-            <div>
-              <h3>YAML 预览</h3>
-              {exportPath && <span>{exportPath}</span>}
-            </div>
-            <div className="button-row">
-              <button
-                className="ghost-button"
-                disabled={missingSelectedSubscenes.length > 0}
-                onClick={() => void generateYamlPreview()}
-              >
-                生成预览
-              </button>
-              <button
-                className="ghost-button"
-                disabled={missingSelectedSubscenes.length > 0}
-                onClick={() => void copyYamlPreview()}
-              >
-                {yamlCopyStatus === 'copied' ? '已复制' : yamlCopyStatus === 'failed' ? '复制失败' : '复制'}
-              </button>
-            </div>
-          </div>
-          <pre>{yamlPreview || '点击“生成预览”后在这里预览。'}</pre>
-          </div>
         </section>
       </div>
       {taskSopPickerModal}
@@ -4039,8 +4096,8 @@ function ScenePage({
   onSaveSubscene: (sceneId: string, code: string, version: VersionPatch<SubsceneVersion>) => Promise<boolean>;
   onDeleteSubsceneVersion: (sceneId: string, code: string, version: string) => Promise<void>;
   onConfirmSubscene: (sceneId: string, code: string, version: string) => Promise<void>;
-  onExportSubscene: (version: SubsceneVersion) => Promise<ExportResult | undefined>;
-  onExportSubscenePdf: (version: SubsceneVersion) => Promise<void>;
+  onExportSubscene: (subscene: Subscene, version: SubsceneVersion) => Promise<ExportResult | undefined>;
+  onExportSubscenePdf: (subscene: Subscene, version: SubsceneVersion) => Promise<void>;
   onRun: <T>(action: () => Promise<T>, success: string) => Promise<T | undefined>;
   attachmentStorageStatus: AttachmentStorageStatus;
   returnToRequirement: RequirementReturnTarget | null;
@@ -4068,6 +4125,7 @@ function ScenePage({
     ? subscene.versions.find((item) => item.version === selectedVersion) || latest(subscene.versions)
     : undefined;
   const checkpoint = revisionIsCheckpoint(version);
+  const currentDraft = subscene ? activeEditableDraft(subscene.versions) : undefined;
   const canEditVersion = version?.status === 'draft' && !checkpoint;
   const canEditSubsceneTitle = Boolean(version && canEditVersion && (version.version === '0.0.1' || subscene?.versions.length === 1));
   const canEditDescription = Boolean(version && canEditVersion && version.status === 'draft');
@@ -4263,7 +4321,14 @@ function ScenePage({
       key: 'status',
       title: '引用状态',
       width: '100px',
-      render: (item) => (version?.materials.some((material) => material.materialId === item.id) ? '已选择' : '可添加'),
+      render: (item) => {
+        const selected = version?.materials.some((material) => material.materialId === item.id) ?? false;
+        return (
+          <span className={`material-reference-status ${selected ? 'selected' : 'available'}`}>
+            {selected ? '已选择' : '可添加'}
+          </span>
+        );
+      },
     },
   ];
 
@@ -4294,6 +4359,10 @@ function ScenePage({
   }
 
   async function createDraftFromCurrentSubsceneVersion() {
+    if (currentDraft) {
+      onSelectVersion(currentDraft.version);
+      return;
+    }
     await saveCurrentSubscene({});
   }
 
@@ -4305,7 +4374,7 @@ function ScenePage({
 
   async function downloadCurrentSubsceneYaml() {
     if (!scene || !subscene || !version) return;
-    const result = await onExportSubscene(version);
+    const result = await onExportSubscene(subscene, version);
     if (!result) return;
     downloadTextFile(
       result.yaml,
@@ -4386,15 +4455,13 @@ function ScenePage({
     value: option.value,
     label: option.label,
   }));
-  const robotRandomFields = version?.randomization.robotInitialState.randomizedFields.map((item) => item.field) || [];
-  const robotRandomOptions = uniqueOptions([
-    ...fieldOptions(globalFields, 'robot_random_field', robotRandomFields),
-    ...fallbackRobotRandomOptions,
-  ]);
-  const robotInitialRandomRows = version ? robotInitialRandomizationRows(version.randomization, version.randomizationFrequency) : [];
+  const robotRandomOptions = fieldOptions(globalFields, 'robot_random_field');
+  const robotInitialRandomRows = version
+    ? robotInitialRandomizationRows(version.randomization, version.randomizationFrequency, robotRandomOptions)
+    : [];
   function saveRobotInitialRandomRows(nextRows: RobotInitialRandomizationRow[]) {
     if (!version) return;
-    void saveCurrentSubscene(robotInitialRandomizationPatch(version, nextRows));
+    void saveCurrentSubscene(robotInitialRandomizationPatch(version, nextRows, robotRandomOptions));
   }
   const robotInitialRandomColumns: Array<DataTableColumn<RobotInitialRandomizationRow>> = [
     {
@@ -4430,12 +4497,7 @@ function ScenePage({
       render: (row, index) => (
         <MultiSelectInput
           value={row.randomizedFields}
-          options={uniqueOptions([
-            ...robotRandomOptions,
-            ...row.randomizedFields
-              .filter((field) => !robotRandomOptions.some((option) => option.value === field))
-              .map((field) => ({ value: field, label: field })),
-          ])}
+          options={robotRandomOptions}
           disabled={!canEditVersion}
           onChange={(randomizedFields) => {
             const nextRows = robotInitialRandomRows.map((current, currentIndex) =>
@@ -4556,21 +4618,19 @@ function ScenePage({
                   items={[
                     {
                       label: '导出 PDF',
-                      disabled: !revisionExportEligible(version),
-                      title: !revisionExportEligible(version) ? '只有已确认且可导出的历史版本可以导出' : undefined,
-                      onSelect: () => onExportSubscenePdf(version),
+                      onSelect: () => onExportSubscenePdf(subscene, version),
                     },
                     {
                       label: '导出 YAML',
                       disabled: !revisionExportEligible(version),
-                      title: !revisionExportEligible(version) ? '只有已确认且可导出的历史版本可以导出' : undefined,
+                      title: !revisionExportEligible(version) ? '草稿版本只能导出 PDF' : undefined,
                       onSelect: downloadCurrentSubsceneYaml,
                     },
                   ]}
                 />
                 {version.status === 'confirmed' ? (
                   <button className="primary-button" onClick={() => void createDraftFromCurrentSubsceneVersion()}>
-                    编辑为草稿
+                    {currentDraft ? '进入当前草稿' : '编辑为草稿'}
                   </button>
                 ) : checkpoint ? (
                   <span className="muted-text">导入草稿检查点（只读）</span>
@@ -4587,8 +4647,14 @@ function ScenePage({
               </div>
             </div>
             {checkpoint
-              ? <div className="notice info">这是迁移保留的旧草稿检查点，仅供追踪，不能编辑、确认或导出。</div>
-              : version.status === 'confirmed' && <div className="notice info">当前任务 SOP 已确认，点击“编辑为草稿”会复制出新的草稿版本。</div>}
+              ? <div className="notice info">这是迁移保留的旧草稿检查点，仅供追踪，不能编辑或确认，可以导出 PDF。</div>
+              : version.status === 'confirmed' && (
+                <div className="notice info">
+                  {currentDraft
+                    ? `当前已有草稿 v${currentDraft.version}，点击“进入当前草稿”继续编辑。`
+                    : '当前任务 SOP 已确认，点击“编辑为草稿”会复制出新的草稿版本。'}
+                </div>
+              )}
             <CollapsibleSection title="基础信息" description="0.0.1 草稿可编辑名称；草稿版本可编辑描述">
               <div className="form-grid compact-fields">
                 <Field
@@ -4639,6 +4705,7 @@ function ScenePage({
                   value={version.robotState.initial}
                   options={robotStateOptions}
                   disabled={!canEditVersion}
+                  hideEmptyOption
                   onChange={(initial) => void saveCurrentSubscene({ robotState: { ...version.robotState, initial } })}
                 />
                 <SelectFieldInline
@@ -5285,19 +5352,21 @@ function SelectFieldInline({
   value,
   options,
   disabled = false,
+  hideEmptyOption = false,
   onChange,
 }: {
   label: string;
   value: string;
   options: Array<{ value: string; label: string }>;
   disabled?: boolean;
+  hideEmptyOption?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="field">
       <span>{label}</span>
       <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
-        <option value="">请选择</option>
+        <option value="" hidden={hideEmptyOption}>请选择</option>
         {options.map((option) => (
           <option value={option.value} key={option.value}>
             {option.label}
@@ -5806,18 +5875,23 @@ function CustomerPage({ customers, onSave, onOpen, pageState, onLoadMore }: {
       loadMoreError={pageState?.error}
       onLoadMore={onLoadMore}
     >
-      <Field label="客户名称" value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
-      <Field label="联系人" value={draft.contact.name} onChange={(name) => setDraft({ ...draft, contact: { ...draft.contact, name } })} />
-      <Field label="电话" value={draft.contact.phone} onChange={(phone) => setDraft({ ...draft, contact: { ...draft.contact, phone } })} />
-      <Field label="邮箱" value={draft.contact.email} onChange={(email) => setDraft({ ...draft, contact: { ...draft.contact, email } })} />
-      <TextArea label="备注" value={draft.notes || ''} onChange={(notes) => setDraft({ ...draft, notes })} />
-      <button className="primary-button" onClick={() => void onSave(draft).then((saved) => {
-        if (!saved) return;
-        newDraft.current = false;
-        setDraft(saved);
-      })}>
-        保存客户
-      </button>
+      {(closeEditor) => (
+        <>
+          <Field label="客户名称" value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
+          <Field label="联系人" value={draft.contact.name} onChange={(name) => setDraft({ ...draft, contact: { ...draft.contact, name } })} />
+          <Field label="电话" value={draft.contact.phone} onChange={(phone) => setDraft({ ...draft, contact: { ...draft.contact, phone } })} />
+          <Field label="邮箱" value={draft.contact.email} onChange={(email) => setDraft({ ...draft, contact: { ...draft.contact, email } })} />
+          <TextArea label="备注" value={draft.notes || ''} onChange={(notes) => setDraft({ ...draft, notes })} />
+          <button className="primary-button" onClick={() => void onSave(draft).then((saved) => {
+            if (!saved) return;
+            newDraft.current = false;
+            setDraft(saved);
+            closeEditor();
+          })}>
+            保存客户
+          </button>
+        </>
+      )}
     </MasterDataPage>
   );
 }
@@ -5845,6 +5919,7 @@ function SubsceneStateEditor({
   const targetRows = targetStateRows(version.objectStates.target);
   const materialInitialRandomRows = materialInitialRandomizationRows(version.randomization);
   const materialOptions = materials.map((material) => material.type);
+  const materialRandomOptions = fieldOptions(globalFields, 'material_random_field');
   const [expandedInitialRows, setExpandedInitialRows] = useState<Record<number, boolean>>({});
   const [expandedTargetRows, setExpandedTargetRows] = useState<Record<number, boolean>>({});
   const [expandedRandomRows, setExpandedRandomRows] = useState<Record<number, boolean>>({});
@@ -6137,7 +6212,12 @@ function SubsceneStateEditor({
     remove: (index: number) => void;
   }) {
     return (
-      <section className="state-card">
+      <section
+        className="state-card"
+        data-state-kind={kind}
+        data-state-index={index}
+        key={`${kind}-${index}-${row.object}`}
+      >
         <div className="state-card-main">
           <div className="state-card-top">
             <label>
@@ -6193,7 +6273,7 @@ function SubsceneStateEditor({
     emptyText: string;
   }) {
     return (
-      <div className="embedded-table state-card-section">
+      <div className="embedded-table state-card-section" data-state-section={kind}>
         <div className="embedded-table-header">
           <div>
             <h3>{title}</h3>
@@ -6227,12 +6307,12 @@ function SubsceneStateEditor({
   function randomizationCard(row: MaterialInitialRandomizationRow, index: number) {
     const expanded = expandedRandomRows[index] ?? !readOnly;
     return (
-      <section className="state-card">
+      <section className="state-card" data-state-kind="material-randomization" data-state-index={index}>
         <div className="state-card-main">
           <div className="state-card-top">
             <div>
               <h4>物料状态随机性 {index + 1}</h4>
-              <p className="state-human-summary">{materialRandomizationSentence(row)}</p>
+              <p className="state-human-summary">{materialRandomizationSentence(row, materialRandomOptions)}</p>
             </div>
             <div className="state-card-actions">
               <button
@@ -6282,10 +6362,7 @@ function SubsceneStateEditor({
                     <span>需要变化什么</span>
                     <MultiSelectInput
                       value={row.randomizedFields}
-                      options={uniqueOptions([
-                        ...fieldOptions(globalFields, 'material_random_field', row.randomizedFields),
-                        ...fallbackMaterialRandomOptions,
-                      ])}
+                      options={materialRandomOptions}
                       disabled={readOnly}
                       onChange={(randomizedFields) => updateMaterialInitialRandomRow(index, { randomizedFields })}
                     />
@@ -6333,7 +6410,10 @@ function SubsceneStateEditor({
         items: rows,
         kind: 'initial',
         expandedRows: expandedInitialRows,
-        toggleExpanded: (index) => setExpandedInitialRows((current) => ({ ...current, [index]: !current[index] })),
+        toggleExpanded: (index) => setExpandedInitialRows((current) => ({
+          ...current,
+          [index]: !(current[index] ?? !readOnly),
+        })),
         update: updateRow,
         remove: (index) => saveRows(rows.filter((_, currentIndex) => currentIndex !== index)),
         add: () => saveRows([...rows, emptyInitialLocationRow(materialOptions[0] || '')]),
@@ -6345,7 +6425,10 @@ function SubsceneStateEditor({
         items: targetRows,
         kind: 'target',
         expandedRows: expandedTargetRows,
-        toggleExpanded: (index) => setExpandedTargetRows((current) => ({ ...current, [index]: !current[index] })),
+        toggleExpanded: (index) => setExpandedTargetRows((current) => ({
+          ...current,
+          [index]: !(current[index] ?? !readOnly),
+        })),
         update: updateTargetRow,
         remove: (index) => saveTargetRows(targetRows.filter((_, currentIndex) => currentIndex !== index)),
         add: () => saveTargetRows([...targetRows, emptyTargetStateRow(materialOptions[0] || '')]),
@@ -6401,7 +6484,7 @@ function MaterialPage({
 }: {
   materials: Material[];
   storageStatus: AttachmentStorageStatus;
-  onSave: (material: Material) => Promise<boolean>;
+  onSave: (material: Material) => Promise<Material | undefined>;
   onOpen: (material: Material) => Promise<Material>;
   pageState?: ResourcePageState;
   onLoadMore: () => void;
@@ -6413,42 +6496,79 @@ function MaterialPage({
   const [draft, setDraft] = useState<Material>(materials[0] || emptyMaterial(nextSkuId));
   const newDraft = useRef(false);
   const [imageUpload, setImageUpload] = useState<{ fileName: string; progress: number } | null>(null);
+  const [pendingImages, setPendingImages] = useState<Array<{ file: File; attachment: RequirementAttachment }>>([]);
+  const pendingImagesRef = useRef(pendingImages);
+  pendingImagesRef.current = pendingImages;
+
+  useEffect(() => () => {
+    pendingImagesRef.current.forEach(({ attachment }) => URL.revokeObjectURL(attachment.storageKey));
+  }, []);
+
   useEffect(() => {
     setDraft((current) => reconcileMasterDraftFromItems(current, materials, newDraft.current, emptyMaterial(nextSkuId)));
   }, [materials, nextSkuId]);
 
-  async function uploadMaterialImage(file: File) {
-    if (!draft.id) {
-      window.alert('请先保存物料，再上传图片');
-      return;
-    }
-    const ownerName = resourceNameOf(draft);
-    if (!ownerName) throw new Error('请先保存物料，再上传图片');
+  function clearPendingImages() {
+    pendingImagesRef.current.forEach(({ attachment }) => URL.revokeObjectURL(attachment.storageKey));
+    setPendingImages([]);
+  }
+
+  function validateMaterialImage(file: File): boolean {
     if (!file.type.startsWith('image/')) {
       window.alert('只能上传图片文件');
-      return;
+      return false;
     }
     if (file.size > attachmentMaxSizeBytes) {
       window.alert('单张图片不能超过 100 MiB');
+      return false;
+    }
+    return true;
+  }
+
+  async function persistMaterialImage(material: Material, file: File): Promise<Material> {
+    const ownerName = resourceNameOf(material);
+    if (!ownerName) throw new Error('物料尚未创建，无法上传图片');
+    const image = await uploadOwnerAttachment(
+      'materials',
+      ownerName,
+      file,
+      (progress) => setImageUpload({ fileName: file.name, progress }),
+    );
+    const nextMaterial = { ...material, images: [...(material.images ?? []), image] };
+    const saved = await onSave(nextMaterial);
+    if (!saved) throw new Error('图片已上传，但物料引用尚未保存；请重试保存');
+    return saved;
+  }
+
+  async function uploadMaterialImage(file: File) {
+    if (!validateMaterialImage(file)) return;
+    if (!resourceNameOf(draft)) {
+      const attachment: RequirementAttachment = {
+        id: `pending-${crypto.randomUUID()}`,
+        name: file.name,
+        size: file.size,
+        contentType: file.type,
+        storageKey: URL.createObjectURL(file),
+        uploadedAt: new Date().toISOString(),
+      };
+      setPendingImages((current) => [...current, { file, attachment }]);
       return;
     }
     try {
       setImageUpload({ fileName: file.name, progress: 0 });
-      const image = await uploadOwnerAttachment(
-        'materials',
-        ownerName,
-        file,
-        (progress) => setImageUpload({ fileName: file.name, progress }),
-      );
-      const nextDraft = { ...draft, images: [...(draft.images ?? []), image] };
-      if (!await onSave(nextDraft)) throw new Error('图片已上传，但物料引用尚未保存；请先处理保存冲突');
-      setDraft(nextDraft);
+      setDraft(await persistMaterialImage(draft, file));
     } finally {
       setImageUpload(null);
     }
   }
 
   async function deleteMaterialImage(attachmentId: string) {
+    const pending = pendingImages.find(({ attachment }) => attachment.id === attachmentId);
+    if (pending) {
+      URL.revokeObjectURL(pending.attachment.storageKey);
+      setPendingImages((current) => current.filter(({ attachment }) => attachment.id !== attachmentId));
+      return;
+    }
     if (!draft.id) return;
     const ownerName = resourceNameOf(draft);
     if (!ownerName) throw new Error('物料资源尚未创建');
@@ -6490,11 +6610,13 @@ function MaterialPage({
       }
       selectedId={draft.id}
       onSelect={(item) => {
+        clearPendingImages();
         newDraft.current = false;
         setDraft(item);
       }}
       onResolve={onOpen}
       onNew={() => {
+        clearPendingImages();
         newDraft.current = true;
         setDraft(emptyMaterial(nextSkuId));
       }}
@@ -6509,20 +6631,20 @@ function MaterialPage({
           {!draft.id && <p className="field-note">SKU 由系统自动生成，保存时会按最新数据确认最终编号。</p>}
           <AttachmentField
             title="物料图片"
-            hint="支持上传图片，单张不超过 100 MiB"
+            hint={draft.id ? '支持上传图片，单张不超过 100 MiB' : '图片将在保存物料时自动上传，单张不超过 100 MiB'}
             uploadLabel="上传图片"
             emptyText="暂无图片"
             accept="image/*"
-            attachments={draft.images || []}
-            disabled={!draft.id}
-            storageStatus={draft.id ? storageStatus : { enabled: false, message: '请先保存物料，再上传图片。' }}
+            attachments={[...(draft.images || []), ...pendingImages.map(({ attachment }) => attachment)]}
+            disabled={false}
+            storageStatus={storageStatus}
             upload={imageUpload}
             onUpload={uploadMaterialImage}
             onDownload={(attachment) => downloadStoredAttachment(attachment)}
             onDelete={deleteMaterialImage}
           />
           <div className="material-detail-grid">
-            <Field label="物料类型" value={draft.type} onChange={(type) => setDraft({ ...draft, type })} />
+            <Field label="物料类型" value={draft.type} autoFocus={!draft.id} onChange={(type) => setDraft({ ...draft, type })} />
             <Field label="颜色" value={draft.color} onChange={(color) => setDraft({ ...draft, color })} />
             <Field label="材质" value={draft.material} onChange={(material) => setDraft({ ...draft, material })} />
             <Field label="包装类型" value={draft.packageType} onChange={(packageType) => setDraft({ ...draft, packageType })} />
@@ -6532,9 +6654,22 @@ function MaterialPage({
           <button
             className="primary-button"
             onClick={async () => {
-              const saved = await onSave(draft.id ? draft : { ...draft, skuId: '' });
-              if (saved) {
+              let saved = await onSave(draft);
+              if (!saved) return;
+              newDraft.current = false;
+              setDraft(saved);
+              try {
+                for (const pending of pendingImages) {
+                  setImageUpload({ fileName: pending.file.name, progress: 0 });
+                  saved = await persistMaterialImage(saved, pending.file);
+                  setDraft(saved);
+                }
+                clearPendingImages();
                 closeEditor();
+              } catch (error) {
+                window.alert(`物料已创建，但图片上传失败：${error instanceof Error ? error.message : String(error)}`);
+              } finally {
+                setImageUpload(null);
               }
             }}
           >
@@ -6599,23 +6734,28 @@ function RobotPage({ robots, onSave, onOpen, pageState, onLoadMore }: {
       loadMoreError={pageState?.error}
       onLoadMore={onLoadMore}
     >
-      <Field label="品牌" value={draft.brand} onChange={(brand) => setDraft({ ...draft, brand })} />
-      <Field label="型号" value={draft.model} onChange={(model) => setDraft({ ...draft, model })} />
-      <Field label="末端" value={draft.terminal} onChange={(terminal) => setDraft({ ...draft, terminal })} />
-      <TextArea
-        label="Topic（key:value，一行一个）"
-        value={Object.entries(draft.topics)
-          .map(([key, value]) => `${key}:${value}`)
-          .join('\n')}
-        onChange={(value) => setDraft({ ...draft, topics: keyValueLines(value) })}
-      />
-      <button className="primary-button" onClick={() => void onSave(draft).then((saved) => {
-        if (!saved) return;
-        newDraft.current = false;
-        setDraft(saved);
-      })}>
-        保存型号
-      </button>
+      {(closeEditor) => (
+        <>
+          <Field label="品牌" value={draft.brand} onChange={(brand) => setDraft({ ...draft, brand })} />
+          <Field label="型号" value={draft.model} onChange={(model) => setDraft({ ...draft, model })} />
+          <Field label="末端" value={draft.terminal} onChange={(terminal) => setDraft({ ...draft, terminal })} />
+          <TextArea
+            label="Topic（key:value，一行一个）"
+            value={Object.entries(draft.topics)
+              .map(([key, value]) => (value ? `${key}:${value}` : key))
+              .join('\n')}
+            onChange={(value) => setDraft({ ...draft, topics: keyValueLines(value) })}
+          />
+          <button className="primary-button" onClick={() => void onSave(draft).then((saved) => {
+            if (!saved) return;
+            newDraft.current = false;
+            setDraft(saved);
+            closeEditor();
+          })}>
+            保存型号
+          </button>
+        </>
+      )}
     </MasterDataPage>
   );
 }
@@ -6713,7 +6853,11 @@ function MasterDataPage<T extends { id: string }>({
         )}
       </section>
       {editorOpen && (
-        <Modal title={`${title}详情`} onClose={() => setEditorOpen(false)}>
+        <Modal
+          title={`${title}详情`}
+          closeOnBackdrop={false}
+          onClose={() => setEditorOpen(false)}
+        >
           <div className="form-stack modal-form-stack">
             {loadingDetail && <div className="loading">正在加载资源详情…</div>}
             {detailError && <div className="notice error">{detailError}</div>}
@@ -6731,11 +6875,13 @@ function Field({
   onChange,
   type = 'text',
   disabled = false,
+  autoFocus = false,
 }: {
   label: string;
   value: string;
   type?: 'text' | 'number' | 'date';
   disabled?: boolean;
+  autoFocus?: boolean;
   onChange: (value: string) => void;
 }) {
   const [draft, setDraft] = useState(value);
@@ -6758,6 +6904,7 @@ function Field({
         type={type}
         value={draft}
         disabled={disabled}
+        autoFocus={autoFocus}
         onBlur={commit}
         onChange={(event) => setDraft(event.target.value)}
         onCompositionStart={() => {
@@ -7401,6 +7548,7 @@ function emptyTargetStateRow(object = ''): TargetStateRow {
 function robotInitialRandomizationRows(
   randomization: SubsceneVersion['randomization'],
   legacyFrequency?: string,
+  options: Option[] = [],
 ): RobotInitialRandomizationRow[] {
   const robotInitialState = randomization.robotInitialState;
   if (!robotInitialState.enabled && robotInitialState.randomizedFields.length === 0) {
@@ -7411,7 +7559,7 @@ function robotInitialRandomizationRows(
     {
       target: '机器人初始态',
       changeIntervalRecords: robotInitialState.changeIntervalRecords || Number(legacyFrequency) || 1,
-      randomizedFields: robotInitialState.randomizedFields.map((field) => field.field),
+      randomizedFields: robotInitialState.randomizedFields.map((field) => globalFieldValueForStoredField(field, options)),
       constraints: joinEnum(constraints),
     },
   ];
@@ -7420,12 +7568,13 @@ function robotInitialRandomizationRows(
 function robotInitialRandomizationPatch(
   version: SubsceneVersion,
   rows: RobotInitialRandomizationRow[],
+  options: Option[] = [],
 ): Partial<SubsceneVersion> {
   const row = rows[0];
   const randomizedFields = row
     ? row.randomizedFields.map((field) => ({
         field,
-        displayName: field,
+        displayName: options.find((option) => option.value === field)?.label || field,
         constraints: splitEnum(row.constraints),
       }))
     : [];

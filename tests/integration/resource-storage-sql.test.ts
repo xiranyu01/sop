@@ -91,6 +91,31 @@ const exportBundle = /* sql */ `
 `;
 
 describe.skipIf(!sqliteAvailable)('resource storage SQL contract', () => {
+  it('backfills missing material SKUs without changing existing values', () => {
+    const result = spawnSync('sqlite3', ['-batch', '-bail', ':memory:'], {
+      input: `${resourceStorageMigrationSql.initial}
+        INSERT INTO SOP_CATALOG_RESOURCES (
+          name, uid, kind, display_name, sku, etag, proto_schema, proto_json, created_at, updated_at
+        ) VALUES
+          ('materials/existing', 'uid-existing', 'MATERIAL', 'Existing', 'SKU004', 'etag-1', 'Material', '{"sku":"SKU004"}', '2026-01-01', '2026-01-01'),
+          ('materials/second', 'uid-second', 'MATERIAL', 'Second', NULL, 'etag-2', 'Material', '{}', '2026-01-03', '2026-01-03'),
+          ('materials/first', 'uid-first', 'MATERIAL', 'First', '', 'etag-3', 'Material', '{}', '2026-01-02', '2026-01-02');
+        ${resourceStorageMigrationSql.materialSkuBackfill}
+        ${resourceStorageMigrationSql.materialSkuBackfill}
+        SELECT name || '|' || sku || '|' || json_extract(proto_json, '$.sku')
+        FROM SOP_CATALOG_RESOURCES
+        WHERE kind = 'MATERIAL'
+        ORDER BY created_at;
+      `,
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      'materials/existing|SKU004|SKU004\nmaterials/first|SKU005|SKU005\nmaterials/second|SKU006|SKU006',
+    );
+  });
+
   it('backfills bounded Requirement summary projections when upgrading an existing database', () => {
     const result = spawnSync('sqlite3', ['-batch', '-bail', ':memory:'], {
       input: `${resourceStorageMigrationSql.initial}

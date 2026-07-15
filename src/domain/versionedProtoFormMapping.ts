@@ -223,14 +223,6 @@ function taskVersion(
           constraints: [...rule.constraints],
         })),
       },
-      materialStateDuringOperation: {
-        rules: (spec.randomization?.objectDuringOperation ?? []).map((rule) => ({
-          targetMaterial: objectValue(rule.objectIds[0] || ''),
-          changeFrequency: rule.change ? changeFrequencyView.fromProto(rule.change.frequency) : 'fixed',
-          changeIntervalRecords: rule.change?.intervalRecords,
-          randomizedFields: { parameters: rule.parameterNames.map((name) => ({ name })) },
-        })),
-      },
     },
     operation: {
       stepOrder: spec.collection?.stepOrder || '',
@@ -261,22 +253,6 @@ function taskVersion(
         collectorInstruction: state.requiredLocation?.collectorInstruction,
         exampleImageAttachmentIds: (state.requiredLocation?.exampleImages ?? []).map(resourceTail),
         constraints: [...(state.requiredLocation?.constraints ?? [])],
-      })),
-      duringOperation: (spec.objectStates?.duringOperation ?? []).map((state) => ({
-        object: objectValue(state.objectId),
-        parameters: state.parameters.map((parameter) => ({
-          name: parameter.name,
-          displayName: parameter.displayName,
-          valueType: parameter.valueType,
-          unit: parameter.unit,
-          allowedValues: [...parameter.allowedValues],
-          sampling: parameter.sampling?.value.case === 'range'
-            ? { mode: 'range' as const, min: parameter.sampling.value.value.minValue, max: parameter.sampling.value.value.maxValue }
-            : parameter.sampling?.value.case === 'fixedValue'
-              ? { mode: 'fixed' as const, value: parameter.sampling.value.value }
-              : undefined,
-          constraints: [...parameter.constraints],
-        })),
       })),
     },
     materialStateRules: spec.materialStateRules.map((rule): MaterialStateRule => ({
@@ -588,22 +564,6 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
           constraints: state.constraints ?? [],
         },
       })),
-      duringOperation: (version.objectStates.duringOperation ?? []).map((state, index) => ({
-        objectId: objectId(state.object, `draft-object-${index + 1}`),
-        parameters: state.parameters.map((parameter) => ({
-          name: safeId(parameter.name, `parameter-${index + 1}`),
-          displayName: parameter.displayName,
-          valueType: parameter.valueType,
-          unit: optionalText(parameter.unit),
-          allowedValues: parameter.allowedValues ?? [],
-          sampling: parameter.sampling ? {
-            value: parameter.sampling.mode === 'range'
-              ? { case: 'range' as const, value: { minValue: parameter.sampling.min ?? 0, maxValue: parameter.sampling.max ?? 0 } }
-              : { case: 'fixedValue' as const, value: parameter.sampling.value ?? 0 },
-          } : undefined,
-          constraints: parameter.constraints,
-        })),
-      })),
     },
     randomization: {
       robotInitialState: {
@@ -639,14 +599,6 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
         locations: rule.randomizedFields.locations,
         poses: rule.randomizedFields.poses,
         forms: rule.randomizedFields.forms,
-      })),
-      objectDuringOperation: (version.randomization.materialStateDuringOperation?.rules ?? []).map((rule, index) => ({
-        objectIds: [objectId(rule.targetMaterial, `draft-object-${index + 1}`)],
-        change: {
-          frequency: changeFrequencyView.toProto(rule.changeFrequency),
-          intervalRecords: rule.changeIntervalRecords,
-        },
-        parameterNames: rule.randomizedFields.parameters.map((item) => item.name),
       })),
     },
     collection: {

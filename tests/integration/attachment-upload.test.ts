@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type {
   AttachmentCompleteInput,
@@ -23,8 +22,9 @@ import { onRequest as handlePagesRequest } from '../../functions/api/[[path]]';
 import { createD1AttachmentStateStore } from '../../server/repositories/d1AttachmentStateStore';
 import { createD1ResourceRepository } from '../../server/repositories/d1ResourceRepository';
 import { SqliteD1 } from '../helpers/sqliteD1';
+import { resourceStorageMigrationsSql } from '../helpers/resourceStorageMigrations';
 
-const migrationSql = readFileSync(new URL('../../migrations/0001_resource_storage.sql', import.meta.url), 'utf8');
+const migrationSql = resourceStorageMigrationsSql;
 
 const owner = { scope: 'requirement' as const, uid: 'owner-a' };
 const otherOwner = { scope: 'requirement' as const, uid: 'owner-b' };

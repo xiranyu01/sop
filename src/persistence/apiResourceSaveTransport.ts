@@ -13,9 +13,12 @@ export type ApiResourceSaveTransportOptions<T> = {
 };
 
 function terminal<T>(error: ApiClientError): QueueFailure<T> {
+  const violations = error.body?.error.details?.violations ?? [];
+  const detail = violations.map((violation) =>
+    `${violation.fieldPath} ${violation.message}`).join('；');
   return {
     kind: 'terminal',
-    message: error.message,
+    message: detail ? `${error.message}：${detail}` : error.message,
     code: error.body?.error.kind ?? `HTTP_${error.status}`,
   };
 }

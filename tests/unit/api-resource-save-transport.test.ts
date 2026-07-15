@@ -38,7 +38,11 @@ describe('API resource save transport', () => {
         warning,
       }))
       .mockResolvedValueOnce(jsonResponse({
-        error: { kind: 'VALIDATION', message: 'invalid material' },
+        error: {
+          kind: 'VALIDATION',
+          message: 'invalid material',
+          details: { violations: [{ fieldPath: 'spec.source_uri', message: 'must be a valid URI' }] },
+        },
       }, 400));
     const transport = createApiResourceSaveTransport<{ title: string }>({
       client: new ApiClient({ fetch: requestFetch }),
@@ -47,7 +51,9 @@ describe('API resource save transport', () => {
 
     await expect(transport.save('materials/cup', { title: 'Cup' }, 'e1')).resolves.toEqual({ etag: 'e2', warning });
     await expect(transport.save('materials/cup', { title: '' }, 'e2')).rejects.toEqual({
-      kind: 'terminal', message: 'invalid material', code: 'VALIDATION',
+      kind: 'terminal',
+      message: 'invalid material：spec.source_uri must be a valid URI',
+      code: 'VALIDATION',
     });
   });
 

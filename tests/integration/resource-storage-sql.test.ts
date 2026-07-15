@@ -1,11 +1,6 @@
-import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-
-const migration = readFileSync(
-  new URL('../../migrations/0001_resource_storage.sql', import.meta.url),
-  'utf8',
-);
+import { resourceStorageMigrationSql, resourceStorageMigrationsSql } from '../helpers/resourceStorageMigrations';
 
 const sqliteAvailable = spawnSync('sqlite3', ['--version'], {
   encoding: 'utf8',
@@ -19,7 +14,7 @@ type SqliteResult = {
 
 function runSql(sql: string): SqliteResult {
   const result = spawnSync('sqlite3', ['-batch', '-bail', ':memory:'], {
-    input: `${migration}\n${sql}\n`,
+    input: `${resourceStorageMigrationsSql}\n${sql}\n`,
     encoding: 'utf8',
   });
 
@@ -96,6 +91,53 @@ const exportBundle = /* sql */ `
 `;
 
 describe.skipIf(!sqliteAvailable)('resource storage SQL contract', () => {
+  it('backfills bounded Requirement summary projections when upgrading an existing database', () => {
+    const result = spawnSync('sqlite3', ['-batch', '-bail', ':memory:'], {
+      input: `${resourceStorageMigrationSql.initial}
+        INSERT INTO SOP_CURRENT_RESOURCES (
+          name, uid, kind, display_name, lifecycle, candidate_version_sequence, candidate_version_label,
+          etag, proto_schema, proto_json, created_at, updated_at
+        ) VALUES (
+          'requirements/legacy', 'legacy-uid', 'REQUIREMENT', 'Legacy', 'DRAFT', 1, '1.0.0',
+          'etag-1', 'coscene.sop.v1alpha1.Requirement',
+          '{"spec":{"projectDisplayName":"Legacy Project","deadline":{"year":2026,"month":9,"day":3},"productionItems":[{},{}],"aggregateTarget":{"duration":"5400s"}}}',
+          '2026-07-15T00:00:00Z', '2026-07-15T00:00:00Z'
+        );
+        INSERT INTO SOP_CURRENT_RESOURCES (
+          name, uid, kind, display_name, lifecycle, candidate_version_sequence, candidate_version_label,
+          etag, proto_schema, proto_json, created_at, updated_at
+        ) VALUES (
+          'requirements/partial', 'partial-uid', 'REQUIREMENT', 'Partial', 'DRAFT', 1, '1.0.0',
+          'etag-2', 'coscene.sop.v1alpha1.Requirement',
+          '{"spec":{"projectDisplayName":"","deadline":{"month":12,"day":25}}}',
+          '2026-07-15T00:00:00Z', '2026-07-15T00:00:00Z'
+        );
+        INSERT INTO SOP_CURRENT_RESOURCES (
+          name, uid, kind, display_name, lifecycle, candidate_version_sequence, candidate_version_label,
+          etag, proto_schema, proto_json, created_at, updated_at
+        ) VALUES (
+          'requirements/snake', 'snake-uid', 'REQUIREMENT', 'Snake', 'DRAFT', 1, '1.0.0',
+          'etag-3', 'coscene.sop.v1alpha1.Requirement',
+          '{"spec":{"project_display_name":"Snake Project","production_items":[{}],"aggregate_target":{"duration":"3600s"}}}',
+          '2026-07-15T00:00:00Z', '2026-07-15T00:00:00Z'
+        );
+        ${resourceStorageMigrationSql.requirementSummaryProjection}
+        SELECT project_display_name || '|' || deadline || '|' || production_item_count || '|' || aggregate_duration
+        FROM SOP_CURRENT_RESOURCES WHERE name = 'requirements/legacy';
+        SELECT COALESCE(project_display_name, 'NULL') || '|' || deadline || '|' || production_item_count
+        FROM SOP_CURRENT_RESOURCES WHERE name = 'requirements/partial';
+        SELECT project_display_name || '|' || production_item_count || '|' || aggregate_duration
+        FROM SOP_CURRENT_RESOURCES WHERE name = 'requirements/snake';
+      `,
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      'Legacy Project|2026-09-03|2|5400s\nNULL|0000-12-25|0\nSnake Project|1|3600s',
+    );
+  });
+
   it('parses the fresh schema and creates the complete physical model', () => {
     const result = runSql(/* sql */ `
       SELECT name

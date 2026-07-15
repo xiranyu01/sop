@@ -209,6 +209,12 @@ function resourceSummary(kind: ResourceKind, record: ResourceSummary): ResourceD
     sceneName: record.sceneName,
     customerName: record.customerName,
     robotModelRevisionName: record.robotModelRevisionName,
+    candidateVersionLabel: record.candidateVersionLabel,
+    currentVersionLabel: record.currentVersionLabel,
+    projectDisplayName: record.projectDisplayName,
+    deadline: record.deadline,
+    productionItemCount: record.productionItemCount,
+    aggregateDuration: record.aggregateDuration,
     archived: record.archivedAt !== undefined,
     resource: {},
   };

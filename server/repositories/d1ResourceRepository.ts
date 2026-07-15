@@ -97,6 +97,10 @@ type CurrentRow = {
   scene_name: string | null;
   customer_name: string | null;
   robot_model_revision_name: string | null;
+  project_display_name: string | null;
+  deadline: string | null;
+  production_item_count: number | null;
+  aggregate_duration: string | null;
   lifecycle: CurrentResourceRecord['lifecycle'];
   candidate_version_sequence: number | null;
   candidate_version_label: string | null;
@@ -157,7 +161,7 @@ type MetaRow = { key: string; value: string; updated_at: string };
 const CATALOG_DETAIL_COLUMNS = `name, uid, kind, source_id, display_name, sku, field_group, field_status, etag,
   proto_schema, proto_json, archived_at, created_at, updated_at`;
 const CURRENT_DETAIL_COLUMNS = `name, uid, kind, source_id, display_name, scene_name, customer_name,
-  robot_model_revision_name, lifecycle,
+  robot_model_revision_name, project_display_name, deadline, production_item_count, aggregate_duration, lifecycle,
   candidate_version_sequence, candidate_version_label, candidate_source_version_id, current_revision_name,
   reviewed_manifest_digest, etag, proto_schema, proto_json, archived_at, created_at, updated_at`;
 const REVISION_DETAIL_COLUMNS = `name, uid, owner_name, kind, version_sequence, version_label,
@@ -300,6 +304,10 @@ function currentRecord(row: CurrentRow): CurrentResourceRecord {
     sceneName: optional(row.scene_name),
     customerName: optional(row.customer_name),
     robotModelRevisionName: optional(row.robot_model_revision_name),
+    projectDisplayName: optional(row.project_display_name),
+    deadline: optional(row.deadline),
+    productionItemCount: optional(row.production_item_count),
+    aggregateDuration: optional(row.aggregate_duration),
     lifecycle: row.lifecycle,
     candidateVersionSequence: optional(row.candidate_version_sequence),
     candidateVersionLabel: optional(row.candidate_version_label),
@@ -414,6 +422,10 @@ function assertCurrentParity(row: CurrentRow): void {
       sceneName: optional(row.scene_name),
       customerName: optional(row.customer_name),
       robotModelRevisionName: optional(row.robot_model_revision_name),
+      projectDisplayName: optional(row.project_display_name),
+      deadline: optional(row.deadline),
+      productionItemCount: optional(row.production_item_count),
+      aggregateDuration: optional(row.aggregate_duration),
       etag: row.etag,
       lifecycle: row.lifecycle,
       candidateVersionSequence: optional(row.candidate_version_sequence),
@@ -499,6 +511,9 @@ function currentVariableColumns(record: CurrentResourceRecord): Record<string, V
     sceneName: record.sceneName,
     customerName: record.customerName,
     robotModelRevisionName: record.robotModelRevisionName,
+    projectDisplayName: record.projectDisplayName,
+    deadline: record.deadline,
+    aggregateDuration: record.aggregateDuration,
     etag: record.etag,
     protoSchema: record.protoSchema,
     protoJson: record.protoJson,
@@ -646,6 +661,10 @@ export function createD1ResourceRepository(
       sceneName: projected.sceneName,
       customerName: projected.customerName,
       robotModelRevisionName: projected.robotModelRevisionName,
+      projectDisplayName: projected.projectDisplayName,
+      deadline: projected.deadline,
+      productionItemCount: projected.productionItemCount,
+      aggregateDuration: projected.aggregateDuration,
       lifecycle: projected.lifecycle,
       candidateVersionSequence: projected.candidateVersionSequence,
       candidateVersionLabel: projected.candidateVersionLabel,
@@ -840,13 +859,24 @@ export function createD1ResourceRepository(
   async function listCurrent(kind: CurrentResourceKind, page?: PageRequest): Promise<PageResult<ResourceSummary>> {
     const limit = pageLimit(page);
     const cursor = decodeCursor(page?.cursor);
-    const result = await db.prepare(`SELECT name, uid, kind, source_id, display_name,
-      scene_name, customer_name, robot_model_revision_name, lifecycle, etag, archived_at
-      FROM SOP_CURRENT_RESOURCES
-      WHERE kind = ? AND archived_at IS NULL AND name > ?
-      ORDER BY name ASC LIMIT ?`).bind(kind, cursor, limit + 1).all<Pick<CurrentRow,
+    const result = await db.prepare(`SELECT current.name, current.uid, current.kind, current.source_id,
+      current.display_name, current.scene_name, current.customer_name, current.robot_model_revision_name,
+      current.lifecycle, current.current_revision_name, current.candidate_version_label,
+      current.etag, current.archived_at, revision.version_label AS current_version_label,
+      current.project_display_name, current.deadline, current.production_item_count, current.aggregate_duration
+      FROM SOP_CURRENT_RESOURCES AS current
+      LEFT JOIN SOP_REVISIONS AS revision ON revision.name = current.current_revision_name
+      WHERE current.kind = ? AND current.archived_at IS NULL AND current.name > ?
+      ORDER BY current.name ASC LIMIT ?`).bind(kind, cursor, limit + 1).all<Pick<CurrentRow,
         'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'scene_name' | 'customer_name'
-        | 'robot_model_revision_name' | 'lifecycle' | 'etag' | 'archived_at'>>();
+        | 'robot_model_revision_name' | 'lifecycle' | 'current_revision_name' | 'candidate_version_label'
+        | 'etag' | 'archived_at'> & {
+          current_version_label: string | null;
+          project_display_name: string | null;
+          deadline: string | null;
+          production_item_count: number | null;
+          aggregate_duration: string | null;
+        }>();
     return toPage(result.results.map((row) => ({
       name: row.name,
       uid: row.uid,
@@ -857,6 +887,13 @@ export function createD1ResourceRepository(
       customerName: optional(row.customer_name),
       robotModelRevisionName: optional(row.robot_model_revision_name),
       lifecycle: row.lifecycle,
+      currentRevisionName: optional(row.current_revision_name),
+      candidateVersionLabel: optional(row.candidate_version_label),
+      currentVersionLabel: optional(row.current_version_label),
+      projectDisplayName: optional(row.project_display_name),
+      deadline: optional(row.deadline),
+      productionItemCount: row.production_item_count ?? 0,
+      aggregateDuration: optional(row.aggregate_duration),
       etag: row.etag,
       archivedAt: optional(row.archived_at),
     })), limit);
@@ -867,12 +904,15 @@ export function createD1ResourceRepository(
     const record = buildCurrent(input, createdAt);
     await db.prepare(`INSERT INTO SOP_CURRENT_RESOURCES (
       name, uid, kind, source_id, display_name, scene_name, customer_name,
-      robot_model_revision_name, lifecycle, candidate_version_sequence,
+      robot_model_revision_name, project_display_name, deadline, production_item_count, aggregate_duration,
+      lifecycle, candidate_version_sequence,
       candidate_version_label, candidate_source_version_id, current_revision_name,
       reviewed_manifest_digest, etag, proto_schema, proto_json, archived_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       record.name, record.uid, record.kind, record.sourceId ?? null, record.displayName,
       record.sceneName ?? null, record.customerName ?? null, record.robotModelRevisionName ?? null,
+      record.projectDisplayName ?? null, record.deadline ?? null, record.productionItemCount ?? null,
+      record.aggregateDuration ?? null,
       record.lifecycle,
       record.candidateVersionSequence ?? null, record.candidateVersionLabel ?? null,
       record.candidateSourceVersionId ?? null, record.currentRevisionName ?? null,
@@ -904,12 +944,15 @@ export function createD1ResourceRepository(
     if (archive && record.lifecycle !== 'ARCHIVED') projectionError(name, ['lifecycle']);
     const result = await db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
       source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
-      robot_model_revision_name = ?, lifecycle = ?, candidate_version_sequence = ?,
+      robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
+      aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
       candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
       reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
       WHERE name = ? AND etag = ?`).bind(
       record.sourceId ?? null, record.displayName, record.sceneName ?? null, record.customerName ?? null,
-      record.robotModelRevisionName ?? null, record.lifecycle, record.candidateVersionSequence ?? null,
+      record.robotModelRevisionName ?? null, record.projectDisplayName ?? null, record.deadline ?? null,
+      record.productionItemCount ?? null, record.aggregateDuration ?? null,
+      record.lifecycle, record.candidateVersionSequence ?? null,
       record.candidateVersionLabel ?? null, record.candidateSourceVersionId ?? null,
       record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, record.etag,
       record.protoSchema, record.protoJson, record.archivedAt ?? null, record.updatedAt, name, expectedEtag,
@@ -1123,12 +1166,15 @@ export function createD1ResourceRepository(
     const results = await db.batch([
       db.prepare(`INSERT INTO SOP_CURRENT_RESOURCES (
         name, uid, kind, source_id, display_name, scene_name, customer_name,
-        robot_model_revision_name, lifecycle, candidate_version_sequence,
+        robot_model_revision_name, project_display_name, deadline, production_item_count, aggregate_duration,
+        lifecycle, candidate_version_sequence,
         candidate_version_label, candidate_source_version_id, current_revision_name,
         reviewed_manifest_digest, etag, proto_schema, proto_json, archived_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`).bind(
         root.name, root.uid, root.kind, root.sourceId ?? null, root.displayName,
         root.sceneName ?? null, root.customerName ?? null, root.robotModelRevisionName ?? null,
+        root.projectDisplayName ?? null, root.deadline ?? null, root.productionItemCount ?? null,
+        root.aggregateDuration ?? null,
         root.lifecycle, root.candidateVersionSequence ?? null, root.candidateVersionLabel ?? null,
         root.candidateSourceVersionId ?? null, root.reviewedManifestDigest ?? null, root.etag,
         root.protoSchema, root.protoJson, root.archivedAt ?? null, root.createdAt, root.updatedAt,
@@ -1181,12 +1227,15 @@ export function createD1ResourceRepository(
     const results = await db.batch([
       db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
         source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
-        robot_model_revision_name = ?, lifecycle = ?, candidate_version_sequence = ?,
+        robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
+        aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
         candidate_version_label = ?, candidate_source_version_id = ?,
         reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
       WHERE name = ? AND etag = ?`).bind(
         root.sourceId ?? null, root.displayName, root.sceneName ?? null, root.customerName ?? null,
-        root.robotModelRevisionName ?? null, root.lifecycle, root.candidateVersionSequence ?? null,
+        root.robotModelRevisionName ?? null, root.projectDisplayName ?? null, root.deadline ?? null,
+        root.productionItemCount ?? null, root.aggregateDuration ?? null,
+        root.lifecycle, root.candidateVersionSequence ?? null,
         root.candidateVersionLabel ?? null, root.candidateSourceVersionId ?? null,
         root.reviewedManifestDigest ?? null, root.etag, root.protoSchema, root.protoJson,
         root.archivedAt ?? null, root.updatedAt, input.rootName, input.expectedEtag,
@@ -1285,14 +1334,17 @@ export function createD1ResourceRepository(
       ),
       db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
         source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
-        robot_model_revision_name = ?, lifecycle = ?, candidate_version_sequence = ?,
+        robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
+        aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
         candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
         reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
       WHERE name = ? AND etag = ? AND EXISTS (
         SELECT 1 FROM SOP_CONFIRMATION_COMMANDS WHERE command_id = ? AND root_name = ?
       )`).bind(
         root.sourceId ?? null, root.displayName, root.sceneName ?? null, root.customerName ?? null,
-        root.robotModelRevisionName ?? null, root.lifecycle, root.candidateVersionSequence ?? null,
+        root.robotModelRevisionName ?? null, root.projectDisplayName ?? null, root.deadline ?? null,
+        root.productionItemCount ?? null, root.aggregateDuration ?? null,
+        root.lifecycle, root.candidateVersionSequence ?? null,
         root.candidateVersionLabel ?? null, root.candidateSourceVersionId ?? null,
         root.currentRevisionName ?? null, root.reviewedManifestDigest ?? null, root.etag,
         root.protoSchema, root.protoJson, root.archivedAt ?? null, root.updatedAt,

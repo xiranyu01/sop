@@ -71,6 +71,23 @@ describe('ProtoJSON storage projector', () => {
       kind: 'ROBOT_MODEL',
       lifecycle: 'ACTIVE',
     });
+
+    expect(projectResource('Requirement', json({
+      name: 'requirements/order', uid: 'requirement-uid', displayName: 'Order', etag: 'etag-requirement-1',
+      lifecycle: 'LIFECYCLE_DRAFT', candidateVersionSequence: '1', candidateVersionLabel: '1.0.0',
+      spec: {
+        projectDisplayName: 'Project A', deadline: { year: 2026, month: 9, day: 3 },
+        productionItems: [{ id: 'one' }, { id: 'two' }], aggregateTarget: { duration: '5400s' },
+      },
+    }))).toMatchObject({
+      projectDisplayName: 'Project A', deadline: '2026-09-03', productionItemCount: 2, aggregateDuration: '5400s',
+    });
+    expect(projectResource('Requirement', json({
+      name: 'requirements/partial-date', uid: 'requirement-uid-2', displayName: 'Partial date',
+      etag: 'etag-requirement-2', lifecycle: 'LIFECYCLE_DRAFT',
+      candidateVersionSequence: '1', candidateVersionLabel: '1.0.0',
+      spec: { projectDisplayName: '', deadline: { month: 12, day: 25 } },
+    }))).toMatchObject({ deadline: '0000-12-25', productionItemCount: 0 });
   });
 
   it('derives immutable revision columns from the revision and its complete snapshot', () => {

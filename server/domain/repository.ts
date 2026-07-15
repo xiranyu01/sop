@@ -26,6 +26,13 @@ export type ResourceSummary = {
   sceneName?: string;
   customerName?: string;
   robotModelRevisionName?: string;
+  candidateVersionLabel?: string;
+  currentVersionLabel?: string;
+  projectDisplayName?: string;
+  deadline?: string;
+  productionItemCount?: number;
+  aggregateDuration?: string;
+  currentRevisionName?: string;
 };
 
 export type CatalogResourceRecord = ResourceSummary & {
@@ -40,9 +47,7 @@ export type CurrentResourceRecord = ResourceSummary & {
   kind: CurrentResourceKind;
   lifecycle: CurrentLifecycle;
   candidateVersionSequence?: number;
-  candidateVersionLabel?: string;
   candidateSourceVersionId?: string;
-  currentRevisionName?: string;
   reviewedManifestDigest?: string;
   protoSchema: string;
   protoJson: string;

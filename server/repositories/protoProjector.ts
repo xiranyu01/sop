@@ -42,6 +42,10 @@ export type ProjectedResourceColumns = {
   sceneName?: string;
   customerName?: string;
   robotModelRevisionName?: string;
+  projectDisplayName?: string;
+  deadline?: string;
+  productionItemCount?: number;
+  aggregateDuration?: string;
 };
 
 export type ProjectedRevisionColumns = {
@@ -206,6 +210,16 @@ function optionalInteger(value: unknown, fieldName: string): number | undefined 
   return integer(value, fieldName);
 }
 
+function optionalDate(value: unknown, fieldName: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${fieldName} must be an object`);
+  const date = value as JsonObject;
+  const year = optionalInteger(field(date, 'year'), `${fieldName}.year`) ?? 0;
+  const month = optionalInteger(field(date, 'month'), `${fieldName}.month`) ?? 0;
+  const day = optionalInteger(field(date, 'day'), `${fieldName}.day`) ?? 0;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 export function withResourceEtag(protoJson: string, etag: string): string {
   const message = parseObject(protoJson, 'resource');
   message.etag = requiredString(etag, 'etag');
@@ -245,6 +259,25 @@ export function projectResource(protoSchema: string, protoJson: string): Project
   const robotModelRevisionName = kind === 'REQUIREMENT' && spec
     ? optionalString(field(spec, 'robotModelRevision', 'robot_model_revision'), 'spec.robotModelRevision')
     : undefined;
+  const projectDisplayName = kind === 'REQUIREMENT' && spec
+    ? optionalString(field(spec, 'projectDisplayName', 'project_display_name'), 'spec.projectDisplayName')
+    : undefined;
+  const deadline = kind === 'REQUIREMENT' && spec
+    ? optionalDate(field(spec, 'deadline'), 'spec.deadline')
+    : undefined;
+  const productionItemsValue = kind === 'REQUIREMENT' && spec ? field(spec, 'productionItems', 'production_items') : undefined;
+  const productionItemCount = kind === 'REQUIREMENT'
+    ? Array.isArray(productionItemsValue) ? productionItemsValue.length : 0
+    : undefined;
+  const aggregateTargetValue = kind === 'REQUIREMENT' && spec
+    ? field(spec, 'aggregateTarget', 'aggregate_target')
+    : undefined;
+  const aggregateTarget = aggregateTargetValue && typeof aggregateTargetValue === 'object' && !Array.isArray(aggregateTargetValue)
+    ? aggregateTargetValue as JsonObject
+    : undefined;
+  const aggregateDuration = aggregateTarget
+    ? optionalString(field(aggregateTarget, 'duration'), 'spec.aggregateTarget.duration')
+    : undefined;
   return {
     name: requiredString(field(message, 'name'), 'name'),
     uid: requiredString(field(message, 'uid'), 'uid'),
@@ -265,6 +298,10 @@ export function projectResource(protoSchema: string, protoJson: string): Project
     ...(sceneName ? { sceneName } : {}),
     ...(customerName ? { customerName } : {}),
     ...(robotModelRevisionName ? { robotModelRevisionName } : {}),
+    ...(projectDisplayName ? { projectDisplayName } : {}),
+    ...(deadline ? { deadline } : {}),
+    ...(productionItemCount !== undefined ? { productionItemCount } : {}),
+    ...(aggregateDuration ? { aggregateDuration } : {}),
     ...(currentKind ? {
       lifecycle: lifecycle(field(message, 'lifecycle'), currentKind),
       candidateVersionSequence: optionalInteger(

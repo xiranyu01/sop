@@ -33,6 +33,12 @@ export type ResourceSummary = {
   sceneName?: string;
   customerName?: string;
   robotModelRevisionName?: string;
+  candidateVersionLabel?: string;
+  currentVersionLabel?: string;
+  projectDisplayName?: string;
+  deadline?: string;
+  productionItemCount?: number;
+  aggregateDuration?: string;
   archived: boolean;
 };
 

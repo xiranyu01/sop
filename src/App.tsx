@@ -286,6 +286,7 @@ type ResourceBound = {
   __resourceEtag: string;
   __resourceLoaded: boolean;
   __resourceDraftSyncToken?: number;
+  __summaryProductionItemCount?: number;
 };
 
 type Bound<T> = T & ResourceBound;
@@ -319,6 +320,7 @@ function bindResource<T extends object>(value: T, summary: ResourceSummary, load
     __resourceName: summary.name,
     __resourceEtag: summary.etag,
     __resourceLoaded: loaded,
+    __summaryProductionItemCount: summary.productionItemCount,
   });
 }
 
@@ -536,6 +538,15 @@ function statusFromLifecycle(lifecycle?: string): EntityStatus {
   return 'draft';
 }
 
+function summaryVersionLabel(summary: ResourceSummary): string {
+  return summary.candidateVersionLabel || summary.currentVersionLabel || '1.0.0';
+}
+
+function requirementProductionItemCount(requirement: Requirement): number {
+  if (resourceLoaded(requirement)) return latest(requirement.versions).selectedSubscenes.length;
+  return (requirement as Partial<ResourceBound>).__summaryProductionItemCount ?? 0;
+}
+
 function customerPlaceholder(summary: ResourceSummary): Bound<Customer> {
   return bindResource({
     id: sourceLikeId(summary), name: summary.displayName, contact: { name: '', phone: '', email: '' }, notes: '',
@@ -569,7 +580,13 @@ function globalFieldPlaceholder(summary: ResourceSummary): Bound<GlobalField> {
 }
 
 function requirementPlaceholder(summary: ResourceSummary): Bound<Requirement> {
+  const durationSeconds = Number(summary.aggregateDuration?.replace(/s$/, '') ?? 0);
   const version = Object.assign(emptyRequirementVersion(summary.displayName, statusFromLifecycle(summary.lifecycle)), {
+    version: summaryVersionLabel(summary),
+    customerId: resourceTail(summary.customerName || ''),
+    projectName: summary.projectDisplayName || '',
+    deadline: summary.deadline || '',
+    requiredDurationHours: Number.isFinite(durationSeconds) ? durationSeconds / 3600 : 0,
     __revisionName: summary.currentRevision,
     __revisionExportEligible: Boolean(summary.currentRevision && summary.lifecycle?.endsWith('CONFIRMED')),
     __revisionCheckpoint: false,
@@ -583,7 +600,11 @@ function requirementPlaceholder(summary: ResourceSummary): Bound<Requirement> {
 function taskPlaceholder(summary: ResourceSummary): Bound<Subscene> {
   const source = sourceLikeId(summary);
   const version = Object.assign(
-    { ...emptySubsceneVersionDraft(summary.displayName), version: '1.0.0', status: statusFromLifecycle(summary.lifecycle) } as SubsceneVersion,
+    {
+      ...emptySubsceneVersionDraft(summary.displayName),
+      version: summaryVersionLabel(summary),
+      status: statusFromLifecycle(summary.lifecycle),
+    } as SubsceneVersion,
     {
       __revisionName: summary.currentRevision,
       __revisionExportEligible: Boolean(summary.currentRevision && summary.lifecycle?.endsWith('CONFIRMED')),
@@ -3343,7 +3364,7 @@ function RequirementPage({
       title: '生产需求项',
       width: '88px',
       align: 'right',
-      render: (requirement) => latest(requirement.versions).selectedSubscenes.length,
+      render: requirementProductionItemCount,
     },
     {
       key: 'duration',
@@ -3940,7 +3961,7 @@ function RequirementPage({
                   onChange={(requiredDurationHours) => void onSave({ requiredDurationHours: Number(requiredDurationHours) })}
                 />
                 <TextArea
-                  label="原始需求来源"
+                  label="原始需求来源链接"
                   value={selectedVersion.sourceBaseUrl || ''}
                   disabled={readonly}
                   onChange={(sourceBaseUrl) => void onSave({ sourceBaseUrl })}

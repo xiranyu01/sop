@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import customers from '../../data/customers.json';
 import globalFields from '../../data/global-fields.json';
 import materialStateRules from '../../data/material-state-rules.json';
@@ -25,6 +23,7 @@ import { decodeExportBundle } from '../../server/export/codec';
 import { createD1ResourceRepository } from '../../server/repositories/d1ResourceRepository';
 import type { AppData } from '../../shared/transport/restDto';
 import { SqliteD1 } from '../helpers/sqliteD1';
+import { resourceStorageMigrationsSql } from '../helpers/resourceStorageMigrations';
 
 const fixtureData = {
   metadata,
@@ -38,8 +37,7 @@ const fixtureData = {
 } as AppData;
 
 async function harness() {
-  const migration = await readFile(resolve('migrations/0001_resource_storage.sql'), 'utf8');
-  const db = new SqliteD1(migration);
+  const db = new SqliteD1(resourceStorageMigrationsSql);
   let etag = 0;
   const repository = createD1ResourceRepository(db, {
     clock: () => '2026-07-14T10:00:00.000Z',

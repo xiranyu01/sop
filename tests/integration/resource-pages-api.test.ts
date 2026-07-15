@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { bootstrapRepository } from '../../server/bootstrap/repository';
 import { prepareRepositoryData } from '../../server/bootstrap/repositoryData';
@@ -8,10 +6,10 @@ import { handleResourceApiRequest } from '../../server/http/resourceApi';
 import { createD1ResourceRepository } from '../../server/repositories/d1ResourceRepository';
 import { seedData } from '../e2e/fixtures/seed';
 import { SqliteD1 } from '../helpers/sqliteD1';
+import { resourceStorageMigrationsSql } from '../helpers/resourceStorageMigrations';
 
 async function harness() {
-  const migration = await readFile(resolve('migrations/0001_resource_storage.sql'), 'utf8');
-  const db = new SqliteD1(migration);
+  const db = new SqliteD1(resourceStorageMigrationsSql);
   let etag = 0;
   const repository = createD1ResourceRepository(db, {
     clock: () => '2026-07-14T10:00:00.000Z',
@@ -148,13 +146,25 @@ describe('Pages resource API adapter', () => {
     const { db, data, request } = await harness();
     const material = data.catalogs.find((item) => item.protoSchema.endsWith('.Material'))!;
     const globalField = data.catalogs.find((item) => item.protoSchema.endsWith('.GlobalField'))!;
+    const robot = data.currents.find((item) => item.protoSchema.endsWith('.RobotModel'))!;
     const taskSop = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
     const requirement = data.currents.find((item) => item.protoSchema.endsWith('.Requirement'))!;
     const materialResource = JSON.parse(material.protoJson) as { sourceId: string; sku: string };
     const globalFieldResource = JSON.parse(globalField.protoJson) as { group: string; status: string };
-    const taskSopResource = JSON.parse(taskSop.protoJson) as { sourceId: string; scene: string };
+    const robotResource = JSON.parse(robot.protoJson) as { currentRevision: string };
+    const taskSopResource = JSON.parse(taskSop.protoJson) as {
+      sourceId: string; scene: string; currentRevision?: string;
+    };
     const requirementResource = JSON.parse(requirement.protoJson) as {
-      spec: { customer: string; robotModelRevision: string };
+      candidateVersionLabel: string;
+      spec: {
+        customer: string;
+        robotModelRevision: string;
+        projectDisplayName: string;
+        deadline: { year: number; month: number; day: number };
+        productionItems?: unknown[];
+        aggregateTarget?: { duration?: string };
+      };
     };
 
     const fetchSummary = async (kind: string, name: string): Promise<Record<string, unknown>> => {
@@ -176,13 +186,27 @@ describe('Pages resource API adapter', () => {
       fieldGroup: globalFieldResource.group,
       fieldStatus: globalFieldResource.status,
     });
+    await expect(fetchSummary('robotModels', robot.name)).resolves.toMatchObject({
+      currentRevision: robotResource.currentRevision,
+    });
     await expect(fetchSummary('taskSops', taskSop.name)).resolves.toMatchObject({
       sourceId: taskSopResource.sourceId,
       sceneName: taskSopResource.scene,
+      currentVersionLabel: expect.any(String),
+      currentRevision: taskSopResource.currentRevision,
     });
     await expect(fetchSummary('requirements', requirement.name)).resolves.toMatchObject({
       customerName: requirementResource.spec.customer,
       robotModelRevisionName: requirementResource.spec.robotModelRevision,
+      candidateVersionLabel: requirementResource.candidateVersionLabel,
+      projectDisplayName: requirementResource.spec.projectDisplayName,
+      deadline: [
+        String(requirementResource.spec.deadline.year).padStart(4, '0'),
+        String(requirementResource.spec.deadline.month).padStart(2, '0'),
+        String(requirementResource.spec.deadline.day).padStart(2, '0'),
+      ].join('-'),
+      productionItemCount: requirementResource.spec.productionItems?.length ?? 0,
+      aggregateDuration: requirementResource.spec.aggregateTarget?.duration,
     });
     db.close();
   });

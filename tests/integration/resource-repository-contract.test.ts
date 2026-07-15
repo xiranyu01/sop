@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createD1ResourceRepository,
@@ -12,9 +11,10 @@ import {
   ResourceConflictError,
 } from '../../server/domain/repository';
 import { ROW_SIZE_REJECTION_BYTES } from '../../server/domain/rowSize';
+import { createRobotModel } from '../../server/domain/services/robotModel';
 import { SqliteD1 } from '../helpers/sqliteD1';
+import { resourceStorageMigrationsSql } from '../helpers/resourceStorageMigrations';
 
-const migrationSql = readFileSync(new URL('../../migrations/0001_resource_storage.sql', import.meta.url), 'utf8');
 const timestamp = '2026-07-14T10:00:00.000Z';
 
 function json(value: unknown): string {
@@ -76,7 +76,7 @@ describe('D1 resource repository contract', () => {
   let options: D1ResourceRepositoryOptions;
 
   beforeEach(() => {
-    db = new SqliteD1(migrationSql);
+    db = new SqliteD1(resourceStorageMigrationsSql);
     etagSequence = 0;
     options = {
       clock: () => timestamp,
@@ -133,6 +133,71 @@ describe('D1 resource repository contract', () => {
     expect(listQuery.values.at(-1)).toBe(201);
     await expect(repository.listCatalog('MATERIAL', { cursor: 'not-a-valid-cursor' }))
       .rejects.toBeInstanceOf(InvalidCursorError);
+  });
+
+  it('includes the current revision name in current-resource summaries', async () => {
+    const repository = createD1ResourceRepository(db, options);
+    const created = await createRobotModel(repository, {
+      resourceProtoJson: json({
+        name: 'robotModels/robot-a',
+        uid: '11111111-1111-4111-8111-111111111111',
+        displayName: 'Robot A',
+      }),
+      now: new Date(timestamp),
+    });
+
+    await expect(repository.listCurrent('ROBOT_MODEL')).resolves.toMatchObject({
+      items: [{
+        name: 'robotModels/robot-a',
+        currentRevisionName: created.revision.name,
+      }],
+    });
+    const listQuery = db.executed.filter((entry) => entry.operation === 'all' &&
+      entry.sql.includes('SOP_CURRENT_RESOURCES')).at(-1)!;
+    expect(listQuery.sql).not.toContain('proto_json');
+  });
+
+  it('returns bounded requirement list fields without returning ProtoJSON', async () => {
+    const repository = createD1ResourceRepository(db, options);
+    await repository.createCurrent({
+      protoSchema: 'coscene.sop.v1alpha1.Requirement',
+      protoJson: json({
+        name: 'requirements/summary-a',
+        uid: '22222222-2222-4222-8222-222222222222',
+        displayName: 'Summary A',
+        lifecycle: 'LIFECYCLE_DRAFT',
+        candidateVersionSequence: '3',
+        candidateVersionLabel: '1.2.0',
+        spec: {
+          customer: 'customers/acme',
+          robotModelRevision: 'robotModels/robot-a/revisions/current',
+          projectDisplayName: 'Project A',
+          deadline: { year: 2026, month: 9, day: 30 },
+          aggregateTarget: { duration: '5400s' },
+          productionItems: [{
+            id: 'item-1',
+            displayName: 'Item 1',
+            taskSopRevision: 'taskSops/task-a/revisions/v-1-0-0',
+          }],
+        },
+      }),
+      now: timestamp,
+    });
+
+    const page = await repository.listCurrent('REQUIREMENT');
+    expect(page.items).toEqual([expect.objectContaining({
+      name: 'requirements/summary-a',
+      candidateVersionLabel: '1.2.0',
+      customerName: 'customers/acme',
+      projectDisplayName: 'Project A',
+      deadline: '2026-09-30',
+      productionItemCount: 1,
+      aggregateDuration: '5400s',
+    })]);
+    const listQuery = db.executed.filter((entry) => entry.operation === 'all' &&
+      entry.sql.includes('SOP_CURRENT_RESOURCES')).at(-1)!;
+    expect(listQuery.sql).not.toContain('proto_json');
+    expect(page.items.every((item) => !('protoJson' in item))).toBe(true);
   });
 
   it('bulk-reads distinct catalog details through one fixed-shape JSON bind', async () => {

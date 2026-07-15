@@ -34,6 +34,7 @@ import {
   dateView,
   durationHoursView,
   lifecycleView,
+  optionalText,
   priorityView,
 } from './protoFormMappings';
 
@@ -57,10 +58,6 @@ export type RequirementFormContext = {
   attachmentByName?: (name: string) => RequirementAttachment | undefined;
   taskRevisionName?: (item: RequirementVersion['selectedSubscenes'][number]) => string | undefined;
 };
-
-function optional(value: string | undefined): string | undefined {
-  return value === undefined || value === '' ? undefined : value;
-}
 
 function sourceId(message: { sourceId?: string; name: string }): string {
   return message.sourceId || resourceTail(message.name);
@@ -485,7 +482,7 @@ function operationRules(items: TextItem[] | undefined, prefix: string) {
   return (items ?? []).flatMap((item, index) => item.description || item.type ? [create(OperationRuleSchema, {
     id: safeId(`${prefix}-${index + 1}`, `${prefix}-${index + 1}`),
     description: item.description,
-    category: optional(item.type),
+    category: optionalText(item.type),
   })] : []);
 }
 
@@ -497,8 +494,8 @@ function requirementRules(
   return (items ?? []).flatMap((item, index) => item.operation || item.note || category ? [create(OperationRuleSchema, {
     id: safeId(`${prefix}-${index + 1}`, `${prefix}-${index + 1}`),
     description: item.operation,
-    category: optional(category),
-    note: optional(item.note),
+    category: optionalText(category),
+    note: optionalText(item.note),
   })] : []);
 }
 
@@ -528,11 +525,11 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
       attributes: previous?.attributes ?? [],
       images: previous?.images ?? [],
       materialDescriptor: {
-        sku: optional(item.skuId),
-        category: optional(item.type),
-        color: optional(item.color),
-        composition: optional(item.material),
-        packaging: optional(item.packageType),
+        sku: optionalText(item.skuId),
+        category: optionalText(item.type),
+        color: optionalText(item.color),
+        composition: optionalText(item.material),
+        packaging: optionalText(item.packageType),
         size: previous?.materialDescriptor?.size,
         weight: previous?.materialDescriptor?.weight,
       },
@@ -541,21 +538,21 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
   const objectId = (alias: string, fallback: string) => aliases.get(alias) || safeId(alias, fallback);
   const attachmentById = attachmentNames(current.attachments, context.attachmentNameById);
   const images = (ids: string[] | undefined) => (ids ?? []).flatMap((id) => attachmentById.get(id) ?? []);
-  const relation = (item: { referenceObject: string; relativePosition: string; level: number }, fallback: string) => ({
+  const relation = (item: { referenceObject: string; relativePosition: string; level: number }) => ({
     objectId: aliases.get(item.referenceObject),
-    referenceObject: optional(item.referenceObject),
-    relativePosition: optional(item.relativePosition),
+    referenceObject: optionalText(item.referenceObject),
+    relativePosition: optionalText(item.relativePosition),
     level: item.level,
   });
-  const location = (item: SubsceneVersion['objectStates']['initial'][number]['allowedLocations'][number], fallback: string) => ({
-    displayName: optional(item.location),
-    referencePath: item.referencePath.map((value, index) => relation(value, `${fallback}-reference-${index + 1}`)),
-    supportSurface: optional(item.supportSurface),
+  const location = (item: SubsceneVersion['objectStates']['initial'][number]['allowedLocations'][number]) => ({
+    displayName: optionalText(item.location),
+    referencePath: item.referencePath.map((value) => relation(value)),
+    supportSurface: optionalText(item.supportSurface),
     regions: item.allowedRegions,
     poses: item.allowedPose,
     forms: item.allowedForm,
     parameters: (item.parameters ?? []).map((value, index) => ({ key: `value-${index + 1}`, values: [value] })),
-    collectorInstruction: optional(item.collectorInstruction),
+    collectorInstruction: optionalText(item.collectorInstruction),
     exampleImages: images(item.exampleImageAttachmentIds),
     constraints: item.constraints,
   });
@@ -563,9 +560,9 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
     id: safeId(`${prefix}-${step.order || index + 1}`, `${prefix}-${index + 1}`),
     order: step.order || index + 1,
     description: step.description,
-    atomicSkill: optional(step.atomicSkill),
-    englishDescription: optional(step.englishDescription),
-    englishAtomicSkill: optional(step.englishAtomicSkill),
+    atomicSkill: optionalText(step.atomicSkill),
+    englishDescription: optionalText(step.englishDescription),
+    englishAtomicSkill: optionalText(step.englishAtomicSkill),
   }));
   const ruleNames = new Map((current.spec?.materialStateRules ?? []).map((rule) => [sourceId(rule), rule.name]));
   return {
@@ -574,19 +571,19 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
     objectStates: {
       initial: version.objectStates.initial.map((state, index) => ({
         objectId: objectId(state.object, `draft-object-${index + 1}`),
-        allowedLocations: state.allowedLocations.map((item, locationIndex) => location(item, `initial-${index + 1}-${locationIndex + 1}`)),
+        allowedLocations: state.allowedLocations.map((item) => location(item)),
       })),
       target: version.objectStates.target.map((state, index) => ({
         objectId: objectId(state.object, `draft-object-${index + 1}`),
         requiredLocation: {
-          displayName: optional(state.requiredLocation),
-          referencePath: (state.referencePath ?? []).map((item, relationIndex) => relation(item, `target-${index + 1}-${relationIndex + 1}`)),
-          supportSurface: optional(state.supportSurface),
+          displayName: optionalText(state.requiredLocation),
+          referencePath: (state.referencePath ?? []).map((item) => relation(item)),
+          supportSurface: optionalText(state.supportSurface),
           regions: state.requiredRegions,
           poses: state.requiredPose,
           forms: state.requiredForm,
           parameters: (state.parameters ?? []).map((value, parameterIndex) => ({ key: `value-${parameterIndex + 1}`, values: [value] })),
-          collectorInstruction: optional(state.collectorInstruction),
+          collectorInstruction: optionalText(state.collectorInstruction),
           exampleImages: images(state.exampleImageAttachmentIds),
           constraints: state.constraints ?? [],
         },
@@ -597,7 +594,7 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
           name: safeId(parameter.name, `parameter-${index + 1}`),
           displayName: parameter.displayName,
           valueType: parameter.valueType,
-          unit: optional(parameter.unit),
+          unit: optionalText(parameter.unit),
           allowedValues: parameter.allowedValues ?? [],
           sampling: parameter.sampling ? {
             value: parameter.sampling.mode === 'range'
@@ -617,7 +614,7 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
         } : undefined,
         fields: version.randomization.robotInitialState.randomizedFields.map((field, index) => ({
           fieldId: safeId(field.field, `field-${index + 1}`),
-          displayName: optional(field.displayName),
+          displayName: optionalText(field.displayName),
           constraints: field.constraints,
         })),
       },
@@ -636,7 +633,7 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
           displayName: item.name,
           constraints: item.valueSource ? [`value_source=${item.valueSource}`] : [],
         })),
-        collectorInstruction: optional(rule.collectorInstruction),
+        collectorInstruction: optionalText(rule.collectorInstruction),
         constraints: rule.constraints,
         exampleImages: images(rule.exampleImageAttachmentIds),
         locations: rule.randomizedFields.locations,
@@ -653,7 +650,7 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
       })),
     },
     collection: {
-      stepOrder: optional(version.operation.stepOrder),
+      stepOrder: optionalText(version.operation.stepOrder),
       steps: steps(version.operation.steps, 'step'),
       policy: {
         allowed: operationRules(version.operation.allowedOperations, 'allowed'),
@@ -672,7 +669,7 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
         ready: AnnotationReadiness.READY,
         not_required: AnnotationReadiness.NOT_REQUIRED,
       }[version.annotation.status],
-      note: optional(version.annotation.note),
+      note: optionalText(version.annotation.note),
       actionTags: version.annotation.actionTags,
       steps: steps(version.annotation.steps, 'annotation-step'),
       policy: {
@@ -686,9 +683,9 @@ function buildTaskSpec(version: SubsceneVersion, current: TaskSopMessage, contex
         : undefined,
     },
     expectedDuration: durationHoursView.toProto(version.requiredDurationHours ?? 0),
-    robotOperationRequirements: optional(version.robotOperationRequirements),
+    robotOperationRequirements: optionalText(version.robotOperationRequirements),
     robotInitialRandomizationRequirements: version.robotInitialRandomizationRequirements ?? [],
-    legacyRandomizationFrequency: optional(version.randomizationFrequency),
+    legacyRandomizationFrequency: optionalText(version.randomizationFrequency),
     materialStateRules: (version.materialStateRules ?? []).map((rule) => ({
       name: context.materialStateRuleNameById?.get(rule.id) || ruleNames.get(rule.id) || '',
       sourceId: rule.id,
@@ -715,7 +712,7 @@ export function encodeTaskSopVersion(
   return toDomainJson(TaskSopSchema, create(TaskSopSchema, {
     ...current,
     displayName: version.title,
-    description: optional(version.description),
+    description: optionalText(version.description),
     spec: create(TaskSopSpecSchema, buildTaskSpec(version, current, context) as never),
     attachments: (version.attachments ?? []).flatMap((item) => context.attachmentNameById?.get(item.id) ||
       current.attachments.find((name) => resourceTail(name) === item.id) || []),
@@ -725,8 +722,8 @@ export function encodeTaskSopVersion(
       filename: item.name,
       sizeBytes: BigInt(item.size),
     })),
-    legacySceneDisplayName: optional(version.sceneName),
-    legacySubsceneDisplayName: optional(version.subsceneName),
+    legacySceneDisplayName: optionalText(version.sceneName),
+    legacySubsceneDisplayName: optionalText(version.subsceneName),
   }));
 }
 
@@ -741,8 +738,8 @@ export function createTaskSopResource(
     scene: sceneName,
     lifecycle: Lifecycle.DRAFT,
     legacySubsceneCode: subsceneCode,
-    legacySceneDisplayName: optional(version.sceneName),
-    legacySubsceneDisplayName: optional(version.subsceneName),
+    legacySceneDisplayName: optionalText(version.sceneName),
+    legacySubsceneDisplayName: optionalText(version.subsceneName),
   });
   return encodeTaskSopVersion(version, toDomainJson(TaskSopSchema, empty), context);
 }
@@ -767,15 +764,15 @@ export function encodeRequirementVersion(
     return {
       id,
       displayName: item.title || item.subsceneName || `生产需求项 ${index + 1}`,
-      description: optional(item.description),
+      description: optionalText(item.description),
       taskSopRevision: context.taskRevisionName?.(item) || previous?.taskSopRevision || '',
       target: duration || collectionCount !== undefined ? { duration, collectionCount } : undefined,
-      legacySceneName: optional(item.taskSop?.sceneName || item.sceneName),
-      legacySubsceneCode: optional(item.subsceneCode),
-      legacySubsceneName: optional(item.taskSop?.title || item.subsceneName),
-      legacyVersionLabel: optional(item.taskSop?.version || item.version),
-      legacyVersionId: optional(item.taskSop?.versionId),
-      legacyParentVersionId: optional(item.taskSop?.parentVersionId),
+      legacySceneName: optionalText(item.taskSop?.sceneName || item.sceneName),
+      legacySubsceneCode: optionalText(item.subsceneCode),
+      legacySubsceneName: optionalText(item.taskSop?.title || item.subsceneName),
+      legacyVersionLabel: optionalText(item.taskSop?.version || item.version),
+      legacyVersionId: optionalText(item.taskSop?.versionId),
+      legacyParentVersionId: optionalText(item.taskSop?.parentVersionId),
       legacyLifecycle: item.taskSop?.status ? lifecycleView.toProto(item.taskSop.status) : undefined,
     };
   });
@@ -797,20 +794,20 @@ export function encodeRequirementVersion(
   const spec = {
     customer,
     robotModelRevision: robotRevision,
-    projectDisplayName: optional(version.projectName),
+    projectDisplayName: optionalText(version.projectName),
     businessGoal: version.businessGoal,
     deadline: dateView.toProto(version.deadline),
-    sourceUri: optional(version.sourceBaseUrl),
+    sourceUri: optionalText(version.sourceBaseUrl),
     priority: priorityView.toProto(version.priority),
     requestedSceneNames: version.requestedScenes,
     aggregateTarget,
-    attachmentNotes: optional(version.attachmentNotes),
-    extraTopicRequirementsText: optional(version.extraTopicRequirementsText),
+    attachmentNotes: optionalText(version.attachmentNotes),
+    extraTopicRequirementsText: optionalText(version.extraTopicRequirementsText),
     productionItems,
     globalRequirements: {
       topics: currentSpec?.globalRequirements?.topics ?? [],
-      randomizationNotes: optional(version.globalRandomizationRequirements),
-      additionalNotes: optional(version.additionalNotes),
+      randomizationNotes: optionalText(version.globalRandomizationRequirements),
+      additionalNotes: optionalText(version.additionalNotes),
       collectionPolicy: {
         allowed: requirementRules(version.allowedOperations, 'allowed'),
         acceptable: requirementRules(version.acceptableOperations, 'acceptable'),
@@ -824,14 +821,14 @@ export function encodeRequirementVersion(
     },
     delivery: {
       formats: version.delivery.formats,
-      method: optional(version.delivery.method),
-      languages: version.delivery.languages.map((item) => ({ code: item.code, displayName: optional(item.name) })),
-      dataStructureUri: optional(version.delivery.dataStructureUrl),
+      method: optionalText(version.delivery.method),
+      languages: version.delivery.languages.map((item) => ({ code: item.code, displayName: optionalText(item.name) })),
+      dataStructureUri: optionalText(version.delivery.dataStructureUrl),
     },
     annotation: { required: version.annotation.required, types: version.annotation.types },
     qualityInspection: {
       required: version.qualityInspection.required,
-      samplingPolicy: optional(version.qualityInspection.samplingPolicy),
+      samplingPolicy: optionalText(version.qualityInspection.samplingPolicy),
     },
   };
   return toDomainJson(RequirementSchema, create(RequirementSchema, {

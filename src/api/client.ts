@@ -86,6 +86,12 @@ export type ApiClientOptions = {
   fetch?: typeof fetch;
 };
 
+type PaginationOptions = {
+  pageSize?: number;
+  cursor?: string;
+  signal?: AbortSignal;
+};
+
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly getPassword: () => string | undefined;
@@ -99,11 +105,11 @@ export class ApiClient {
     this.requestFetch = (options.fetch ?? globalThis.fetch).bind(globalThis);
   }
 
-  list(kind: ResourceKind, options: { pageSize?: number; cursor?: string } = {}): Promise<ResourcePage> {
+  list(kind: ResourceKind, options: PaginationOptions = {}): Promise<ResourcePage> {
     const query = new URLSearchParams();
     if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
     if (options.cursor) query.set('cursor', options.cursor);
-    return this.request(`/api/resources/${kind}${query.size ? `?${query}` : ''}`);
+    return this.request(`/api/resources/${kind}${query.size ? `?${query}` : ''}`, { signal: options.signal });
   }
 
   /**
@@ -114,20 +120,10 @@ export class ApiClient {
     kind: ResourceKind,
     options: { pageSize?: number; signal?: AbortSignal } = {},
   ): AsyncGenerator<ResourcePage, void, void> {
-    let cursor: string | undefined;
-    const visited = new Set<string>();
-    do {
-      if (cursor && visited.has(cursor)) throw new Error(`Resource pagination cursor repeated for ${kind}`);
-      if (cursor) visited.add(cursor);
-      const query = new URLSearchParams();
-      if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
-      if (cursor) query.set('cursor', cursor);
-      const page = await this.request<ResourcePage>(`/api/resources/${kind}${query.size ? `?${query}` : ''}`, {
-        signal: options.signal,
-      });
-      yield page;
-      cursor = page.nextCursor;
-    } while (cursor);
+    yield* this.paginate(
+      (cursor) => this.list(kind, { ...options, cursor }),
+      `Resource pagination cursor repeated for ${kind}`,
+    );
   }
 
   get(kind: ResourceKind, name: string): Promise<ResourceDetail> {
@@ -153,13 +149,14 @@ export class ApiClient {
   revisions(
     kind: 'taskSops' | 'requirements' | 'robotModels',
     name: string,
-    options: { pageSize?: number; cursor?: string } = {},
+    options: PaginationOptions = {},
   ): Promise<{ items: RevisionSummary[]; nextCursor?: string }> {
     const query = new URLSearchParams();
     if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
     if (options.cursor) query.set('cursor', options.cursor);
     return this.request(
       `/api/resources/${kind}/${encodeURIComponent(name)}/revisions${query.size ? `?${query}` : ''}`,
+      { signal: options.signal },
     );
   }
 
@@ -168,18 +165,22 @@ export class ApiClient {
     name: string,
     options: { pageSize?: number; signal?: AbortSignal } = {},
   ): AsyncGenerator<{ items: RevisionSummary[]; nextCursor?: string }, void, void> {
+    yield* this.paginate(
+      (cursor) => this.revisions(kind, name, { ...options, cursor }),
+      `Revision pagination cursor repeated for ${name}`,
+    );
+  }
+
+  private async *paginate<T extends { nextCursor?: string }>(
+    loadPage: (cursor?: string) => Promise<T>,
+    repeatedCursorMessage: string,
+  ): AsyncGenerator<T, void, void> {
     let cursor: string | undefined;
     const visited = new Set<string>();
     do {
-      if (cursor && visited.has(cursor)) throw new Error(`Revision pagination cursor repeated for ${name}`);
+      if (cursor && visited.has(cursor)) throw new Error(repeatedCursorMessage);
       if (cursor) visited.add(cursor);
-      const query = new URLSearchParams();
-      if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
-      if (cursor) query.set('cursor', cursor);
-      const page = await this.request<{ items: RevisionSummary[]; nextCursor?: string }>(
-        `/api/resources/${kind}/${encodeURIComponent(name)}/revisions${query.size ? `?${query}` : ''}`,
-        { signal: options.signal },
-      );
+      const page = await loadPage(cursor);
       yield page;
       cursor = page.nextCursor;
     } while (cursor);

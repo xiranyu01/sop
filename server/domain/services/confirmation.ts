@@ -15,7 +15,7 @@ import {
   type RobotModelRevision,
   type Scene,
 } from '../../../gen/coscene/sop/v1alpha1/catalog_pb';
-import { DependencyKind, Lifecycle } from '../../../gen/coscene/sop/v1alpha1/common_pb';
+import { DependencyKind } from '../../../gen/coscene/sop/v1alpha1/common_pb';
 import {
   RequirementRevisionSchema,
   RequirementSchema,

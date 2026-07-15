@@ -92,7 +92,7 @@ export const globalFieldGroupView = {
   toProto: (token: GlobalFieldGroup): ProtoGlobalFieldGroup => protoEnum(token, globalFieldGroupTokens, 'GlobalFieldGroup') as ProtoGlobalFieldGroup,
 };
 
-function optionalText(value: string | undefined): string | undefined {
+export function optionalText(value: string | undefined): string | undefined {
   return value === undefined || value === '' ? undefined : value;
 }
 

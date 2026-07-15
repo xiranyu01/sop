@@ -279,8 +279,6 @@ const fallbackMaterialRandomOptions: Option[] = [
 ];
 const defaultAttachmentStorageStatus: AttachmentStorageStatus = { enabled: true, message: '' };
 
-type AppCollectionKey = keyof AppViewModel;
-
 type ResourceBound = {
   __resourceName: string;
   __resourceEtag: string;
@@ -1164,24 +1162,6 @@ function escapeHtml(value: string | number | undefined | null): string {
     .replace(/'/g, '&#39;');
 }
 
-function reportValue(value: string | number | boolean | undefined | null): string {
-  if (typeof value === 'boolean') return value ? '是' : '否';
-  if (value === undefined || value === null || value === '') return '-';
-  return String(value);
-}
-
-function reportList(values: Array<string | number | undefined | null> | undefined): string {
-  const items = (values || []).map((value) => String(value ?? '').trim()).filter(Boolean);
-  return items.length ? items.join('、') : '-';
-}
-
-function formatImageNames(ids: string[] | undefined, attachments: RequirementAttachment[] | undefined): string {
-  const names = (ids || [])
-    .map((id) => attachments?.find((attachment) => attachment.id === id)?.name || id)
-    .filter(Boolean);
-  return names.length ? names.join('、') : '-';
-}
-
 function stateSentence(row: InitialLocationRow): string {
   const parts = [`把 ${row.object || '物料'}`];
   const primary = [row.primaryReferences[0], row.primaryRelativePositions[0]].filter(Boolean).join('的');
@@ -1197,127 +1177,10 @@ function stateSentence(row: InitialLocationRow): string {
   return parts.join('，') + '。';
 }
 
-function stateReportLine(row: InitialLocationRow, attachments?: RequirementAttachment[]): string {
-  return [
-    stateSentence(row),
-    row.collectorInstruction ? `采集员说明：${row.collectorInstruction}` : '',
-    row.exampleImageAttachmentIds.length ? `示例图：${formatImageNames(row.exampleImageAttachmentIds, attachments)}` : '',
-    row.constraints.length ? `限制条件：${row.constraints.join('、')}` : '',
-  ]
-    .filter(Boolean)
-    .join('；');
-}
-
 function materialRandomizationSentence(row: MaterialInitialRandomizationRow): string {
   const materials = row.targetMaterials.length ? row.targetMaterials.join('、') : '所选物料';
   const fields = row.randomizedFields.length ? row.randomizedFields.join('、') : '位置/姿态/形态';
   return `${materials} 每 ${row.changeIntervalRecords || 1} 条换一次，需要变化 ${fields}。`;
-}
-
-function materialRandomizationReportLine(row: MaterialInitialRandomizationRow, attachments?: RequirementAttachment[]): string {
-  return [
-    materialRandomizationSentence(row),
-    row.collectorInstruction ? `采集员说明：${row.collectorInstruction}` : '',
-    row.exampleImageAttachmentIds.length ? `示例图：${formatImageNames(row.exampleImageAttachmentIds, attachments)}` : '',
-    row.constraints ? `限制条件：${row.constraints}` : '',
-  ]
-    .filter(Boolean)
-    .join('；');
-}
-
-function keyValueReport(rows: Array<[string, string | number | boolean | undefined | null]>): string {
-  return rows.map(([label, value]) => `${label}：${reportValue(value)}`).join('\n');
-}
-
-function numberedReportSteps(steps: OperationStep[] | undefined): string {
-  if (!steps?.length) return '-';
-  return steps.map((step, index) => `${step.order || index + 1}. ${step.description || '-'}`).join('\n');
-}
-
-function bilingualReportSteps(steps: OperationStep[] | undefined): string {
-  if (!steps?.length) return '-';
-  return steps
-    .map((step, index) => {
-      const order = step.order || index + 1;
-      const zhSkill = step.atomicSkill ? `；原子技能：${step.atomicSkill}` : '';
-      const enStep = step.englishDescription ? `；EN：${step.englishDescription}` : '';
-      const enSkill = step.englishAtomicSkill ? `；EN Skill：${step.englishAtomicSkill}` : '';
-      return `${order}. ${step.description || '-'}${zhSkill}${enStep}${enSkill}`;
-    })
-    .join('\n');
-}
-
-function textItemsReport(items: TextItem[] | undefined): string {
-  if (!items?.length) return '-';
-  return items.map((item, index) => `${index + 1}. ${item.description || item.type || '-'}`).join('\n');
-}
-
-function operationItemsReport(items: Array<{ operation: string; note: string }> | undefined): string {
-  if (!items?.length) return '-';
-  return items.map((item, index) => `${index + 1}. ${item.operation}${item.note ? `：${item.note}` : ''}`).join('\n');
-}
-
-function forbiddenRequirementReport(groups: RequirementVersion['forbiddenOperations']): string {
-  const lines = groups.flatMap((group) =>
-    group.operations.map((item) => `${group.category ? `${group.category} / ` : ''}${item.operation}${item.note ? `：${item.note}` : ''}`),
-  );
-  return lines.length ? lines.map((line, index) => `${index + 1}. ${line}`).join('\n') : '-';
-}
-
-function formatQuantity(material: SubsceneVersion['materials'][number]): string {
-  const unit = material.quantity.unit || '件';
-  if (material.quantity.mode === 'range') {
-    return `${reportValue(material.quantity.min)}-${reportValue(material.quantity.max)} ${unit}`;
-  }
-  return `${reportValue(material.quantity.value)} ${unit}`;
-}
-
-function materialsReport(materials: SubsceneVersion['materials']): string {
-  if (!materials.length) return '-';
-  return materials
-    .map(
-      (material, index) =>
-        `${index + 1}. ${material.skuId} / ${material.type} / 数量 ${formatQuantity(material)} / 颜色 ${reportValue(
-          material.color,
-        )} / 材质 ${reportValue(material.material)} / 包装 ${reportValue(material.packageType)}`,
-    )
-    .join('\n');
-}
-
-function initialStatesReport(states: SubsceneVersion['objectStates']['initial'], attachments?: RequirementAttachment[]): string {
-  const rows = initialStateRows(states);
-  if (!rows.length) return '-';
-  return rows.map((row, index) => `${index + 1}. ${stateReportLine(row, attachments)}`).join('\n');
-}
-
-function targetStatesReport(states: SubsceneVersion['objectStates']['target'], attachments?: RequirementAttachment[]): string {
-  const rows = targetStateRows(states);
-  if (!rows.length) return '-';
-  return rows.map((row, index) => `${index + 1}. ${stateReportLine(row, attachments)}`).join('\n');
-}
-
-function robotRandomizationReport(version: SubsceneVersion): string {
-  const rows = robotInitialRandomizationRows(version.randomization, version.randomizationFrequency);
-  if (!rows.length) return '-';
-  return rows
-    .map(
-      (row, index) =>
-        `${index + 1}. ${row.target}：每 ${row.changeIntervalRecords || 1} 条变换一次；随机字段 ${reportList(
-          row.randomizedFields,
-        )}；限制 ${reportValue(row.constraints)}`,
-    )
-    .join('\n');
-}
-
-function materialRandomizationReport(version: SubsceneVersion): string {
-  const rows = materialInitialRandomizationRows(version.randomization);
-  if (!rows.length) return '-';
-  return rows.map((row, index) => `${index + 1}. ${materialRandomizationReportLine(row, version.attachments)}`).join('\n');
-}
-
-function stepRandomizationReport(value?: { enabled: boolean; startOrder: number; endOrder: number }): string {
-  if (!value?.enabled) return '未启用';
-  return `第 ${value.startOrder || 1} 步到第 ${value.endOrder || 1} 步顺序可随机`;
 }
 
 function publicAttachmentUrl(publicBaseUrl: string | undefined, storageKey: string): string {
@@ -1326,16 +1189,6 @@ function publicAttachmentUrl(publicBaseUrl: string | undefined, storageKey: stri
   const base = publicBaseUrl.replace(/\/+$/, '');
   const encodedKey = storageKey.split('/').map(encodeURIComponent).join('/');
   return `${base}/${encodedKey}`;
-}
-
-function printableAttachments(attachments: RequirementAttachment[] | undefined, publicBaseUrl?: string): PrintableAttachment[] {
-  return (attachments || []).map((attachment) => ({
-    name: attachment.name,
-    size: attachment.size,
-    contentType: attachment.contentType,
-    uploadedAt: attachment.uploadedAt,
-    url: publicAttachmentUrl(publicBaseUrl, attachment.storageKey) || undefined,
-  }));
 }
 
 async function downloadStoredAttachment(attachment: RequirementAttachment) {
@@ -1349,87 +1202,6 @@ async function downloadStoredAttachment(attachment: RequirementAttachment) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-}
-
-function subsceneReportSections(scene: Scene, subscene: Subscene, version: SubsceneVersion, publicBaseUrl?: string): PrintableSection[] {
-  return [
-    {
-      title: '基础信息',
-      content: keyValueReport([
-        ['场景', scene.name],
-        ['任务 SOP 名称', version.title || subscene.name],
-        ['版本', version.version],
-        ['状态', statusText(version.status)],
-        ['更新时间', formatShortDate(version.updatedAt)],
-        ['描述', version.description],
-      ]),
-    },
-    {
-      title: '机器人与随机性',
-      content: [
-        keyValueReport([
-          ['机器人初始态', version.robotState.initial],
-          ['机器人目标态', version.robotState.target],
-        ]),
-        '',
-        '机器人初始态随机性：',
-        robotRandomizationReport(version),
-      ].join('\n'),
-    },
-    {
-      title: '物料',
-      content: materialsReport(version.materials),
-    },
-    {
-      title: '物料状态',
-      content: [
-        '物料初始状态：',
-        initialStatesReport(version.objectStates.initial, version.attachments),
-        '',
-        '物料目标状态：',
-        targetStatesReport(version.objectStates.target, version.attachments),
-      ].join('\n'),
-    },
-    {
-      title: '物料随机性',
-      content: materialRandomizationReport(version),
-    },
-    {
-      title: '采集步骤和说明',
-      content: [
-        '采集步骤：',
-        numberedReportSteps(version.operation.steps),
-        '',
-        `采集步骤随机性：${stepRandomizationReport(version.operation.stepRandomization)}`,
-        '',
-        '采集操作要求：',
-        textItemsReport(version.operation.allowedOperations),
-        '',
-        '采集禁止操作：',
-        textItemsReport(version.operation.forbiddenOperations),
-      ].join('\n'),
-    },
-    {
-      title: '标注步骤和说明',
-      content: [
-        keyValueReport([['标注状态', version.annotation.status]]),
-        '',
-        '标注步骤：',
-        bilingualReportSteps(version.annotation.steps),
-        '',
-        '标注操作要求：',
-        textItemsReport(version.annotation.allowedOperations),
-        '',
-        '标注禁止操作：',
-        textItemsReport(version.annotation.forbiddenOperations),
-      ].join('\n'),
-    },
-    {
-      title: '任务 SOP 附件',
-      content: version.attachments?.length ? '附件内容如下。' : '-',
-      attachments: printableAttachments(version.attachments, publicBaseUrl),
-    },
-  ];
 }
 
 function nextReadableId(values: string[], prefix: string): string {
@@ -1471,20 +1243,6 @@ function randomShortCode(usedCodes: string[] = [], length = 6): string {
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-function findSubscene(scenes: Scene[], code: string, version?: string): SubsceneLookupResult | undefined {
-  for (const scene of scenes) {
-    const subscene = scene.subscenes.find((item) => item.code === code);
-    if (!subscene) continue;
-    const foundVersion = version ? subscene.versions.find((item) => item.version === version) : undefined;
-    return {
-      scene,
-      subscene,
-      version: foundVersion,
-    };
-  }
-  return undefined;
 }
 
 export function findTaskSop(scenes: Scene[], selected: RequirementVersion['selectedSubscenes'][number]): SubsceneLookupResult | undefined {
@@ -2484,7 +2242,7 @@ export default function App() {
               );
               return Boolean(saved);
             }}
-            onDeleteSubsceneVersion={async (sceneId, code, version) => {
+            onDeleteSubsceneVersion={async (sceneId, code, _version) => {
               const subscene = dataRef.current.scenes.find((item) => item.id === sceneId)?.subscenes.find((item) => item.code === code);
               const name = resourceNameOf(subscene);
               const detail = name ? resourceDetails.current.get(name) : undefined;
@@ -2509,7 +2267,7 @@ export default function App() {
                 setSelectedSubsceneVersion(latest(loaded.versions).version);
               }
             }}
-            onConfirmSubscene={async (sceneId, code, version) => {
+            onConfirmSubscene={async (sceneId, code, _version) => {
               const subscene = dataRef.current.scenes.find((item) => item.id === sceneId)?.subscenes.find((item) => item.code === code);
               if (!subscene) return;
               await run(() => confirmRoot('taskSops', subscene), '任务 SOP 版本已确认');
@@ -4470,7 +4228,7 @@ function ScenePage({
       key: 'action',
       title: '操作',
       width: '90px',
-      render: (item, index) =>
+      render: (_item, index) =>
         version && subscene ? (
           <button
             className="text-button danger"
@@ -7470,13 +7228,6 @@ function keyValueLines(value: string): Record<string, string> {
     }
     return acc;
   }, {});
-}
-
-function splitList(value: string | undefined): string[] {
-  return (value || '')
-    .split(/[，,]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 function forbiddenGroupsFromKeys(keys: string[], options: Option[]): RequirementVersion['forbiddenOperations'] {

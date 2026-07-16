@@ -1,5 +1,5 @@
 format: coscene.sop.export
-schema_version: 2.0.0
+schema_version: 2.0.1
 requirement:
   basic_info:
     title: 基线客户需求

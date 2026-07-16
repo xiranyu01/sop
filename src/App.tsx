@@ -2113,13 +2113,12 @@ export default function App() {
         'customers', 'materials', 'robotModels', 'scenes', 'globalFields', 'materialStateRules', 'taskSops', 'requirements',
       ] as const satisfies readonly ResourceKind[];
       const results = await Promise.all(kinds.map(async (kind) => {
-        if (kind !== 'materialStateRules' && kind !== 'scenes') {
+        if (kind !== 'materialStateRules' && kind !== 'scenes' && kind !== 'globalFields') {
           return [kind, await resourceClient.list(kind)] as const;
         }
         let summaries: ResourceSummary[] = [];
-        // Rules have no page of their own, and every Task SOP summary must have
-        // its parent scene available. Exhaust only these summary catalogs;
-        // detail Proto remains lazy.
+        // These resources are complete option/reference catalogs used by
+        // editors, so partial pagination would silently omit valid choices.
         for await (const page of resourceClient.listPages(kind, { pageSize: 200 })) {
           summaries = appendUniqueResourceSummaries(summaries, page.items);
         }
@@ -2373,10 +2372,24 @@ export default function App() {
             }}
             onSelectVersion={setSelectedRequirementVersion}
             onCreate={async () => {
+              const allowedOptions = fieldOptions(data.globalFields, 'allowed_operation');
+              const acceptableOptions = fieldOptions(data.globalFields, 'acceptable_operation');
+              const forbiddenOptions = fieldOptions(data.globalFields, 'forbidden_operation');
+              const annotationAllowedOptions = fieldOptions(data.globalFields, 'annotation_allowed_operation');
+              const annotationForbiddenOptions = fieldOptions(data.globalFields, 'annotation_forbidden_operation');
               const draft = {
                 ...emptyRequirementVersion('新的客户需求'),
                 customerId: data.customers[0]?.id || '',
                 robotModelId: data.robotModels[0]?.id || '',
+                allowedOperations: operationItemsFromOptions(allowedOptions),
+                acceptableOperations: operationItemsFromOptions(acceptableOptions),
+                forbiddenOperations: forbiddenGroupsFromKeys(forbiddenOptions.map((option) => option.value), forbiddenOptions),
+                annotation: {
+                  required: false,
+                  types: [],
+                  allowedOperations: operationItemsFromOptions(annotationAllowedOptions),
+                  forbiddenOperations: operationItemsFromOptions(annotationForbiddenOptions),
+                },
               };
               const result = await run(
                 () => resourceClient.create('requirements', createRequirementResource(draft, requirementContext())),
@@ -5532,9 +5545,16 @@ function OperationRequirementGroup({
   onChange: (value: string[]) => void;
 }) {
   const [open, setOpen] = useState(!readOnly);
+  const [query, setQuery] = useState('');
   const selectedOptions = value.map((item) => options.find((option) => option.value === item) || { value: item, label: item });
   const allOptions = uniqueOptions([...options, ...selectedOptions]);
   const visibleOptions = readOnly ? selectedOptions : allOptions;
+  const filteredOptions = visibleOptions.filter((option) => matchesQuery(query, [
+    option.label,
+    option.value,
+    option.category,
+    option.description,
+  ]));
   const summary = selectedOptions.length ? selectedOptions.map((option) => option.label).join('、') : '未选择';
 
   useEffect(() => {
@@ -5550,13 +5570,24 @@ function OperationRequirementGroup({
     onChange([...value, target]);
   }
 
+  function selectFilteredOptions() {
+    if (readOnly) return;
+    onChange(Array.from(new Set([...value, ...filteredOptions.map((option) => option.value)])));
+  }
+
+  function clearFilteredOptions() {
+    if (readOnly) return;
+    const filteredValues = new Set(filteredOptions.map((option) => option.value));
+    onChange(value.filter((item) => !filteredValues.has(item)));
+  }
+
   function optionDescription(option: Option): string {
     const description = option.description?.trim() || '';
     return description && description !== option.label ? description : '';
   }
 
   return (
-    <div className={`operation-requirement-group ${open ? 'open' : ''}`}>
+    <div className={`operation-requirement-group ${open ? 'open' : ''}`} role="group" aria-label={title}>
       <button type="button" className="operation-requirement-summary" onClick={() => setOpen((current) => !current)}>
         <span>
           <strong>{title}</strong>
@@ -5566,10 +5597,40 @@ function OperationRequirementGroup({
       </button>
       {open && (
         <div className="operation-requirement-content">
-          {visibleOptions.length === 0 ? (
+          {!readOnly && (
+            <div className="operation-requirement-toolbar">
+              <input
+                type="search"
+                value={query}
+                aria-label={`搜索${title}`}
+                placeholder="搜索关键词"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              <span className="operation-requirement-actions">
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={filteredOptions.length === 0 || filteredOptions.every((option) => value.includes(option.value))}
+                  onClick={selectFilteredOptions}
+                >
+                  {query.trim() ? '全选结果' : '全选'}
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={!filteredOptions.some((option) => value.includes(option.value))}
+                  onClick={clearFilteredOptions}
+                >
+                  {query.trim() ? '取消结果' : '取消全选'}
+                </button>
+              </span>
+            </div>
+          )}
+          <div className="operation-requirement-list">
+          {filteredOptions.length === 0 ? (
             <div className="operation-requirement-empty">{readOnly ? '暂无已选条目' : '暂无可选条目'}</div>
           ) : (
-            visibleOptions.map((option) =>
+            filteredOptions.map((option) =>
               readOnly ? (
                 <div className="operation-requirement-readonly-item" key={`${title}-${option.value}`}>
                   <span>{option.category ? `${option.category} / ${option.label}` : option.label}</span>
@@ -5586,6 +5647,7 @@ function OperationRequirementGroup({
               ),
             )
           )}
+          </div>
         </div>
       )}
     </div>
@@ -7674,6 +7736,10 @@ function keyValueLines(value: string): Record<string, string> {
     }
     return acc;
   }, {});
+}
+
+function operationItemsFromOptions(options: Option[]): RequirementVersion['allowedOperations'] {
+  return options.map((option) => ({ operation: option.value, note: option.description || '' }));
 }
 
 function forbiddenGroupsFromKeys(keys: string[], options: Option[]): RequirementVersion['forbiddenOperations'] {

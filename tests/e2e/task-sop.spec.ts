@@ -27,6 +27,30 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+test('creates a new TaskSop from the selected Scene', async ({ page, request }) => {
+  const template = await firstResource(request, 'taskSops', (item) => !item.archived);
+  const templateProto = template.resource;
+  if (!templateProto || typeof templateProto !== 'object' || Array.isArray(templateProto) || typeof templateProto.scene !== 'string') {
+    throw new TypeError('TaskSop template must identify its Scene');
+  }
+  const scene = (await listResourceSummaries(request, 'scenes')).find((item) => item.name === templateProto.scene);
+  expect(scene, `Expected Scene ${templateProto.scene}`).toBeDefined();
+
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^场景库/ }).click();
+  await page.getByRole('button', {
+    name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
+  }).click();
+
+  const createdResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/resources/taskSops' &&
+    response.request().method() === 'POST');
+  await page.getByRole('button', { name: '新建任务 SOP' }).click();
+  expect((await createdResponse).status()).toBe(201);
+  await expect(page.getByRole('heading', { name: '新的任务 SOP' })).toBeVisible();
+  await expect(page.getByTestId('task-sop-version-trigger')).toContainText('v0.0.1 · 草稿');
+});
+
 test('TaskSop draft → review → confirm → export → next draft → restore lifecycle remains stable', async ({ page, request }, testInfo) => {
   await installPrintObserver(page);
   const title = `E2E 生命周期 SOP R${testInfo.retry}`;
@@ -120,7 +144,7 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   const path = await download.path();
   expect(path).toBeTruthy();
   expect(YAML.parse(await readFile(path!, 'utf8'))).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', schema_version: '2.0.0', task_sop: expect.objectContaining({ status: '已确认' }),
+    format: 'coscene.sop.export', schema_version: '2.0.1', task_sop: expect.objectContaining({ status: '已确认' }),
   }));
 
   await page.getByRole('button', { name: '导出' }).click();
@@ -379,7 +403,7 @@ test('revision export is addressed only by the canonical encoded revision name',
   expect(yaml.ok()).toBe(true);
   expect(yaml.headers()['content-type']).toContain('application/yaml');
   expect(YAML.parse(await yaml.text())).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', schema_version: '2.0.0', task_sop: expect.objectContaining({ status: '已确认' }),
+    format: 'coscene.sop.export', schema_version: '2.0.1', task_sop: expect.objectContaining({ status: '已确认' }),
   }));
 
   const detail = await apiJson<{ name: string; ownerName: string }>(

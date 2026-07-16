@@ -1,8 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { create } from '@bufbuild/protobuf';
 import YAML from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
-import { Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { ChangeFrequency, ChangePolicySchema, Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { ObjectRandomizationSchema, RobotRandomizationSchema } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import { exportRequirementYaml, exportTaskSopYaml } from '../../server/export';
 import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
 import { seedData } from '../e2e/fixtures/seed';
@@ -31,7 +33,7 @@ describe('deterministic canonical YAML export', () => {
     expect(first.endsWith('\n\n')).toBe(false);
     expect(YAML.parse(first)).toEqual(expect.objectContaining({
       format: 'coscene.sop.export',
-      schema_version: '2.0.0',
+      schema_version: '2.0.1',
       task_sop: expect.objectContaining({ status: '已确认' }),
     }));
   });
@@ -45,7 +47,7 @@ describe('deterministic canonical YAML export', () => {
     const document = YAML.parse(output);
     expect(document).toEqual(expect.objectContaining({
       format: 'coscene.sop.export',
-      schema_version: '2.0.0', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
+      schema_version: '2.0.1', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
     }));
   });
 
@@ -64,7 +66,40 @@ describe('deterministic canonical YAML export', () => {
       $typeName: 'google.protobuf.Duration', seconds: 3661n, nanos: 500_000_000,
     };
     const output = exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1');
-    expect(output).not.toMatch(/expected_duration|step_order|open_questions|change_interval_records|value_source/);
+    expect(output).not.toMatch(/expected_duration|step_order|open_questions|value_source/);
+  });
+
+  it('exports robot and material change intervals without legacy synthetic constraints', () => {
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
+    const spec = snapshot.taskSopRevisions[0].snapshot!.spec!;
+    spec.randomization!.robotInitialState = create(RobotRandomizationSchema, {
+      enabled: true,
+      change: create(ChangePolicySchema, { frequency: ChangeFrequency.EVERY_N_RECORDS, intervalRecords: 3 }),
+      fields: [],
+    });
+    spec.randomization!.objectInitialStates = [create(ObjectRandomizationSchema, {
+      objectIds: ['material-under-test'],
+      change: create(ChangePolicySchema, { frequency: ChangeFrequency.EVERY_N_RECORDS, intervalRecords: 50 }),
+      fields: [],
+      exampleImages: [],
+      locations: [],
+      poses: [],
+      forms: [],
+      constraints: [
+        '每次采集前需要改变位置',
+        '仍需满足 object_states.initial 中定义的允许状态',
+        '不要放进水槽',
+      ],
+    })];
+
+    const document = YAML.parse(exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1'));
+    const randomization = document.task_sop.environment_config.randomization;
+
+    expect(randomization.robot_initial_state.change_interval_records).toBe(3);
+    expect(randomization.material_initial_state.rules[0]).toEqual(expect.objectContaining({
+      change_interval_records: 50,
+      constraints: ['不要放进水槽'],
+    }));
   });
 
   it('uses material name consistently in Task SOP and Requirement YAML', () => {

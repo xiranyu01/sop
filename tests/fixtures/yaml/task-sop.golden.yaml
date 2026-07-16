@@ -1,5 +1,5 @@
 format: coscene.sop.export
-schema_version: 2.0.0
+schema_version: 2.0.1
 task_sop:
   sop_version: 0.0.1
   sop_version_id: 67af0f30-5057-5128-a859-a92a71bab8a2

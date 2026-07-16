@@ -1,6 +1,7 @@
 import YAML from 'yaml';
 import { RootKind, type ExportBundle, type FrozenExportContent } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
 import type { OperationPolicy, OperationStep, RandomizedField } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { removeLegacySyntheticMaterialRandomizationConstraints } from '../../shared/domain/randomization';
 import { verifyExportBundle } from './codec';
 
 type TaskSopEntry = FrozenExportContent['taskSops'][number];
@@ -14,7 +15,7 @@ export type DomainYamlOptions = {
 };
 
 // Domain YAML evolves independently from the internal frozen bundle format.
-export const domainYamlSchemaVersion = '2.0.0' as const;
+export const domainYamlSchemaVersion = '2.0.1' as const;
 export const domainYamlFormat = 'coscene.sop.export' as const;
 
 function attachmentUrls(refs: string[], attachments: ReadonlyMap<string, AttachmentEntry>): string[] {
@@ -193,6 +194,9 @@ function taskSopDocument(
       randomization: {
         robot_initial_state: {
           enabled: robotRandomization?.enabled || false,
+          ...(robotRandomization?.change?.intervalRecords !== undefined
+            ? { change_interval_records: robotRandomization.change.intervalRecords }
+            : {}),
           randomized_fields: (robotRandomization?.fields || []).map((field) => ({
             name: randomFieldName(field, false),
             constraints: field.constraints,
@@ -201,9 +205,12 @@ function taskSopDocument(
         material_initial_state: {
           rules: materialRandomization.map((rule) => ({
             target_materials: rule.objectIds.map(objectName),
+            ...(rule.change?.intervalRecords !== undefined
+              ? { change_interval_records: rule.change.intervalRecords }
+              : {}),
             randomized_fields: rule.fields.map((field) => randomFieldName(field, true)),
             collector_instruction: rule.collectorInstruction || '',
-            constraints: rule.constraints,
+            constraints: removeLegacySyntheticMaterialRandomizationConstraints(rule.constraints),
             example_images: attachmentUrls(rule.exampleAttachmentRefs, attachments),
           })),
         },

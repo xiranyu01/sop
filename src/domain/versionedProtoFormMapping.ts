@@ -20,6 +20,7 @@ import {
 } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import type { RevisionDetail } from '../../shared/transport/resourceDto';
 import { fromDomainJson, toDomainJson } from '../../shared/domain/codec';
+import { removeLegacySyntheticMaterialRandomizationConstraints } from '../../shared/domain/randomization';
 import type {
   EntityStatus,
   MaterialStateRule,
@@ -229,7 +230,7 @@ function taskVersion(
           },
           collectorInstruction: rule.collectorInstruction,
           exampleImageAttachmentIds: rule.exampleImages.map(resourceTail),
-          constraints: [...rule.constraints],
+          constraints: removeLegacySyntheticMaterialRandomizationConstraints(rule.constraints),
         })),
       },
     },

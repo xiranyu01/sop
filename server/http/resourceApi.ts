@@ -510,9 +510,11 @@ function createProtoJson(
   const globalFieldSeed = item.kind === 'globalFields' && typeof input.label === 'string' && typeof input.group === 'string'
     ? `${input.group}:${input.label}`
     : undefined;
-  const seed = explicitSeed ?? globalFieldSeed ?? [input.displayName, input.display_name, input.label,
-    input.filename, input.materialType, input.material_type]
-    .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim() !== '') ?? crypto.randomUUID();
+  const generatedRootSeed = item.kind === 'taskSops' || item.kind === 'requirements'
+    ? crypto.randomUUID()
+    : [input.displayName, input.display_name, input.label, input.filename, input.materialType, input.material_type]
+      .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim() !== '') ?? crypto.randomUUID();
+  const seed = explicitSeed ?? globalFieldSeed ?? generatedRootSeed;
   message.name = resourceName(item.kind, seed);
   message.uid = crypto.randomUUID();
   message.etag = '';

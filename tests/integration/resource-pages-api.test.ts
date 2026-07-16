@@ -27,6 +27,35 @@ async function harness() {
 }
 
 describe('Pages resource API adapter', () => {
+  it('allocates distinct names for new TaskSops with the same default title', async () => {
+    const { db, data, request } = await harness();
+    const source = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
+    const sourceResponse = await request(`/api/resources/taskSops/${encodeURIComponent(source.name)}`);
+    const resource = structuredClone((await sourceResponse.json() as { resource: Record<string, unknown> }).resource);
+    for (const field of [
+      'name', 'uid', 'sourceId', 'etag', 'currentRevision', 'candidateVersionSequence',
+      'candidateVersionLabel', 'candidateSourceVersionId', 'candidateCreateTime',
+      'reviewedDependencyDigest', 'createTime', 'updateTime',
+    ]) delete resource[field];
+    resource.displayName = '新的任务 SOP';
+    resource.lifecycle = 'LIFECYCLE_DRAFT';
+
+    const create = () => request('/api/resources/taskSops', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource }),
+    });
+    const firstResponse = await create();
+    const secondResponse = await create();
+    expect(firstResponse.status).toBe(201);
+    expect(secondResponse.status).toBe(201);
+    const first = await firstResponse.json() as { resource: { name: string; uid: string } };
+    const second = await secondResponse.json() as { resource: { name: string; uid: string } };
+    expect(first.resource.name).not.toBe(second.resource.name);
+    expect(first.resource.uid).not.toBe(second.resource.uid);
+    db.close();
+  });
+
   it('resolves confirmed revision and current draft UUIDs to shareable routes', async () => {
     const { db, data, repository, request } = await harness();
     const preparedRevision = data.revisions.find((item) => item.protoSchema.endsWith('.TaskSopRevision'))!;

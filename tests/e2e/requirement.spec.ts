@@ -56,6 +56,51 @@ async function firstExportableTaskRevision(
   throw new Error('Expected an exportable TaskSop revision fixture');
 }
 
+test('new Requirement selects operation vocabularies by default and supports searched bulk selection', async ({ page }) => {
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^客户需求/ }).click();
+  const createResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/resources/requirements' &&
+    response.request().method() === 'POST');
+  await page.getByRole('button', { name: '新建需求' }).click();
+  expect((await createResponse).status()).toBe(201);
+  await expect(page.getByRole('heading', { name: '新的客户需求' })).toBeVisible();
+
+  for (const title of [
+    '采集操作要求',
+    '不完美但可接受的采集操作',
+    '采集禁止操作',
+    '标注操作要求',
+    '标注禁止操作',
+  ]) {
+    const group = page.getByRole('group', { name: title, exact: true });
+    const checkboxes = group.locator('input[type="checkbox"]');
+    const count = await checkboxes.count();
+    expect(count, `${title} should have configured options`).toBeGreaterThan(0);
+    await expect(group.locator('input[type="checkbox"]:not(:checked)')).toHaveCount(0);
+  }
+
+  const forbidden = page.getByRole('group', { name: '采集禁止操作', exact: true });
+  await forbidden.getByRole('searchbox', { name: '搜索采集禁止操作' }).fill('画面');
+  const filtered = forbidden.locator('.operation-requirement-option');
+  const filteredCount = await filtered.count();
+  expect(filteredCount).toBeGreaterThan(0);
+
+  const clearResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith('/api/resources/requirements/') &&
+    response.request().method() === 'PUT');
+  await forbidden.getByRole('button', { name: '取消结果' }).click();
+  expect((await clearResponse).ok()).toBe(true);
+  await expect(filtered.locator('input:checked')).toHaveCount(0);
+
+  const selectResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith('/api/resources/requirements/') &&
+    response.request().method() === 'PUT');
+  await forbidden.getByRole('button', { name: '全选结果' }).click();
+  expect((await selectResponse).ok()).toBe(true);
+  await expect(filtered.locator('input:checked')).toHaveCount(filteredCount);
+});
+
 test('Requirement create → ETag update → review → confirm → export → next draft → restore remains stable', async ({ page, request }, testInfo) => {
   await installPrintObserver(page);
   const title = `E2E 关联需求 R${testInfo.retry}`;
@@ -192,7 +237,7 @@ test('Requirement create → ETag update → review → confirm → export → n
   expect(yamlPath).toBeTruthy();
   const exportedDocument = YAML.parse(await readFile(yamlPath!, 'utf8'));
   expect(exportedDocument).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', schema_version: '2.0.0', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
+    format: 'coscene.sop.export', schema_version: '2.0.1', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
   }));
   expect(exportedDocument.requirement.production_requirement_items[0].target_collection_count).toBe(2);
   expect(exportedDocument.requirement.task_sop_details).toHaveLength(1);

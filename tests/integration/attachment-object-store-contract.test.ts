@@ -225,3 +225,24 @@ function attachmentObjectStoreContract(name: string, factory: Factory): void {
 
 attachmentObjectStoreContract('R2 attachment object store', () => createR2AttachmentStore(createFakeR2Bucket()));
 attachmentObjectStoreContract('S3 attachment object store', () => createS3AttachmentStore(createFakeS3Config()));
+
+describe('S3 direct attachment upload', () => {
+  it('signs one short-lived multipart PUT URL without exposing credentials outside the signature', async () => {
+    const store = createS3AttachmentStore(createFakeS3Config());
+    const result = await store.createAttachmentPartUploadUrl?.({
+      storageKey: 'attachments/material/owner/attachment-1',
+      uploadId: 'upload-1',
+      partNumber: 2,
+      expiresInSeconds: 900,
+    });
+
+    const url = new URL(result?.uploadUrl || '');
+    expect(url.origin).toBe('https://s3.example.test');
+    expect(url.pathname).toBe('/attachments/attachments/material/owner/attachment-1');
+    expect(url.searchParams.get('partNumber')).toBe('2');
+    expect(url.searchParams.get('uploadId')).toBe('upload-1');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('900');
+    expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/);
+    expect(result?.expiresAt).toBeTruthy();
+  });
+});

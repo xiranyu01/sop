@@ -11,26 +11,6 @@ async function golden(name: string): Promise<string> {
   return readFile(path.join(process.cwd(), 'tests/fixtures/yaml', name), 'utf8');
 }
 
-function expectLocalRefsResolve(document: Record<string, unknown>): void {
-  const collections = [
-    'requirements', 'task_sops', 'customers', 'robot_model_revisions', 'materials', 'scenes',
-    'global_fields', 'material_state_rules', 'attachments',
-  ];
-  const refs = new Set(collections.flatMap((key) =>
-    ((document[key] as Array<{ ref: string }> | undefined) ?? []).map((entry) => entry.ref)));
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) return value.forEach(visit);
-    if (!value || typeof value !== 'object') return;
-    for (const [key, item] of Object.entries(value)) {
-      if (key === 'ref' || key.endsWith('_ref')) expect(refs.has(String(item)), `${key}: ${String(item)}`).toBe(true);
-      if (key.endsWith('_refs')) for (const ref of item as string[]) expect(refs.has(ref), `${key}: ${ref}`).toBe(true);
-      visit(item);
-    }
-  };
-  visit(document.root);
-  for (const key of collections) visit(document[key]);
-}
-
 function markRequirementConfirmed(snapshot: ReturnType<typeof convertLegacyToV1alpha1>['resources']): void {
   const revision = snapshot.requirementRevisions[0];
   revision.snapshot!.lifecycle = Lifecycle.CONFIRMED;
@@ -49,7 +29,11 @@ describe('deterministic canonical YAML export', () => {
     expect(second).toBe(first);
     expect(first.endsWith('\n')).toBe(true);
     expect(first.endsWith('\n\n')).toBe(false);
-    expectLocalRefsResolve(YAML.parse(first));
+    expect(YAML.parse(first)).toEqual(expect.objectContaining({
+      format: 'coscene.sop.export',
+      schema_version: '2.0.0',
+      task_sop: expect.objectContaining({ status: '已确认' }),
+    }));
   });
 
   it('matches the reviewed Requirement golden and omits history, storage, and volatile metadata', async () => {
@@ -57,12 +41,12 @@ describe('deterministic canonical YAML export', () => {
     markRequirementConfirmed(snapshot);
     const output = exportRequirementYaml(snapshot, 'REQ001', '0.0.1');
     expect(output).toBe(await golden('requirement.golden.yaml'));
-    expect(output).not.toMatch(/storage_key|etag|current_revision|previous_revision|create_time|update_time|export_time/);
+    expect(output).not.toMatch(/root:|storage_key|etag|current_revision|previous_revision|create_time|update_time|export_time/);
     const document = YAML.parse(output);
     expect(document).toEqual(expect.objectContaining({
-      format: 'coscene.sop.export', schema_version: '1.0.0', root: expect.objectContaining({ kind: 'requirement' }),
+      format: 'coscene.sop.export',
+      schema_version: '2.0.0', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
     }));
-    expectLocalRefsResolve(document);
   });
 
   it('never rewrites enum-looking free text', () => {
@@ -71,19 +55,53 @@ describe('deterministic canonical YAML export', () => {
     snapshot.requirementRevisions[0].snapshot!.spec!.businessGoal = 'PRIORITY_P1';
     const output = exportRequirementYaml(snapshot, 'REQ001', '0.0.1');
     expect(output).toContain('business_goal: PRIORITY_P1');
-    expect(output).toContain('priority: p1');
+    expect(output).not.toContain('priority:');
   });
 
-  it('serializes durations as one canonical ISO 8601 representation', () => {
+  it('omits internal or unused fields from the domain YAML', () => {
     const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
     snapshot.taskSopRevisions[0].snapshot!.spec!.expectedDuration = {
       $typeName: 'google.protobuf.Duration', seconds: 3661n, nanos: 500_000_000,
     };
     const output = exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1');
-    expect(output).toContain('expected_duration: PT1H1M1.5S');
+    expect(output).not.toMatch(/expected_duration|step_order|open_questions|change_interval_records|value_source/);
   });
 
-  it('preserves optional attachment metadata exactly and never performs provider checks', () => {
+  it('uses material name consistently in Task SOP and Requirement YAML', () => {
+    const data = structuredClone(seedData);
+    data.scenes[0].subscenes[0].versions[0].materials = [{
+      materialId: data.materials[0].id,
+      skuId: data.materials[0].skuId,
+      type: data.materials[0].type,
+      quantity: { mode: 'fixed', value: 1, unit: '件' },
+      color: data.materials[0].color,
+      material: data.materials[0].material,
+      packageType: data.materials[0].packageType,
+    }];
+    data.requirements[0].versions[0].selectedSubscenes = [{
+      id: 'production-item-1',
+      title: data.scenes[0].subscenes[0].name,
+      sceneName: data.scenes[0].name,
+      subsceneName: data.scenes[0].subscenes[0].name,
+      version: '0.0.1',
+      targetDurationHours: 1,
+      targetCollectionCount: 1,
+    }];
+    const snapshot = convertLegacyToV1alpha1(data).resources;
+    markRequirementConfirmed(snapshot);
+
+    const taskMaterial = YAML.parse(exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1'))
+      .task_sop.environment_config.materials[0];
+    const requirementMaterial = YAML.parse(exportRequirementYaml(snapshot, 'REQ001', '0.0.1'))
+      .requirement.task_sop_details[0].environment_config.materials[0];
+
+    expect(taskMaterial).toEqual(expect.objectContaining({ name: '测试物料' }));
+    expect(taskMaterial).not.toHaveProperty('type');
+    expect(requirementMaterial).toEqual(expect.objectContaining({ name: '测试物料' }));
+    expect(requirementMaterial).not.toHaveProperty('type');
+  });
+
+  it('exports public attachment URLs only and never performs provider checks', () => {
     const data = structuredClone(seedData);
     data.scenes[0].subscenes[0].versions[0].attachments = [{
       id: 'utf8-file', name: '测试 附件.txt', size: 4, contentType: 'text/plain', storageKey: 'managed/file',
@@ -95,19 +113,17 @@ describe('deterministic canonical YAML export', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const output = exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1');
     expect(output).toContain('https://cdn.example.test/%7E/%2F?q=a%2Fb#%E7%89%87%E6%AE%B5');
-    expect(output).toContain('测试 附件.txt');
+    expect(output).not.toContain('测试 附件.txt');
     expect(output).not.toContain('managed/file');
     expect(output).not.toContain('sha256:');
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
 
-    attachment.sha256 = 'b'.repeat(64);
-    expect(exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1')).toContain(`sha256: ${'b'.repeat(64)}`);
     attachment.uri = undefined;
     attachment.sizeBytes = undefined;
     const withoutOptionalMetadata = exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1');
     expect(withoutOptionalMetadata).not.toContain('public_uri:');
-    expect(withoutOptionalMetadata).not.toContain('size_bytes:');
+    expect(withoutOptionalMetadata).not.toContain('https://cdn.example.test');
     attachment.uri = 'http://cdn.example.test/file';
     expect(exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1')).toContain('http://cdn.example.test/file');
   });

@@ -48,7 +48,7 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   expect(draft).toMatchObject({
     name: `taskSops/e2e-task-r${testInfo.retry}`,
     lifecycle: 'DRAFT',
-    resource: { displayName: title, candidateVersionLabel: '1.0.0' },
+    resource: { displayName: title, candidateVersionLabel: '0.0.1' },
   });
 
   await openAuthenticated(page);
@@ -56,8 +56,11 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', { name: new RegExp(`^${title} v1\\.0\\.0 · 草稿$`) }).click();
+  await page.getByRole('button', { name: new RegExp(`^${title} v0\\.0\\.1 · 草稿$`) }).click();
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
+  await expect(page.locator('.version-time-meta')).toContainText('创建时间');
+  await expect(page.locator('.version-time-meta')).toContainText('更新时间');
+  await expect(page.getByRole('button', { name: '加载更多全局字段' })).toHaveCount(0);
 
   await page.getByRole('button', { name: '导出' }).click();
   await expect(page.getByRole('button', { name: '导出 PDF' })).toBeEnabled();
@@ -92,18 +95,21 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   const confirmed = await confirmationResponse.json() as ConfirmationResult;
   expect(confirmed).toMatchObject({
     resource: { name: draft.name, lifecycle: 'CONFIRMED' },
-    revision: { versionLabel: '1.0.0', exportEligible: true },
+    revision: { versionLabel: '0.0.1', exportEligible: true },
     idempotent: false,
   });
   expect(confirmed.exportPath).toBe(`/api/revisions/${encodeURIComponent(confirmed.revision.name)}/export.yaml`);
   await expect(page.getByText('任务 SOP 版本已确认')).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/task-sops/${confirmed.revision.uid}$`));
+  await page.goto(`/task-sops/${confirmed.revision.uid}`);
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
   await page.reload();
   await page.getByRole('button', { name: /^场景库/ }).click();
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', { name: new RegExp(`^${title} v1\\.0\\.0 · 已确认$`) }).click();
+  await page.getByRole('button', { name: new RegExp(`^${title} v0\\.0\\.1 · 已确认$`) }).click();
   await expect(page.getByText('当前任务 SOP 已确认')).toBeVisible();
 
   await page.getByRole('button', { name: '导出' }).click();
@@ -114,15 +120,15 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   const path = await download.path();
   expect(path).toBeTruthy();
   expect(YAML.parse(await readFile(path!, 'utf8'))).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', schema_version: '1.0.0', root: expect.objectContaining({ kind: 'task_sop' }),
+    format: 'coscene.sop.export', schema_version: '2.0.0', task_sop: expect.objectContaining({ status: '已确认' }),
   }));
 
   await page.getByRole('button', { name: '导出' }).click();
   await page.getByRole('button', { name: '导出 PDF' }).click();
   const pdfFrame = page.frameLocator('iframe[title$=".pdf"]');
   await expect(pdfFrame.locator('body')).toContainText(title);
-  await expect(pdfFrame.locator('body')).toContainText('1.0.0');
-  expect((await waitForPrintedDocument(page, title)).text).toContain('1.0.0');
+  await expect(pdfFrame.locator('body')).toContainText('0.0.1');
+  expect((await waitForPrintedDocument(page, title)).text).toContain('0.0.1');
 
   const draftPath = `${resourcePath('taskSops', draft.name)}/drafts`;
   const createDraftResponse = page.waitForResponse((response) =>
@@ -131,21 +137,23 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   const createdDraftResponse = await createDraftResponse;
   expect(createdDraftResponse.ok()).toBeTruthy();
   const createdDraft = await createdDraftResponse.json() as ResourceMutationResult;
-  expect(createdDraft.resource.resource).toMatchObject({ candidateVersionLabel: '1.0.1' });
+  expect(createdDraft.resource.resource).toMatchObject({ candidateVersionLabel: '0.0.2' });
   await expect(page.getByText('已创建草稿版本')).toBeVisible();
-  await expect(page.getByLabel('版本')).toHaveValue('1.0.1');
+  await expect(page.getByTestId('task-sop-version-trigger')).toContainText('v0.0.2');
 
-  await page.getByLabel('版本').selectOption('1.0.0');
+  await page.getByTestId('task-sop-version-trigger').click();
+  await expect(page.getByRole('menu', { name: '任务 SOP 版本' })).toBeVisible();
+  await page.getByTestId('task-sop-version-0.0.1').click();
   await expect(page.getByRole('button', { name: '进入当前草稿' })).toBeVisible();
   await page.getByRole('button', { name: '进入当前草稿' }).click();
-  await expect(page.getByLabel('版本')).toHaveValue('1.0.1');
+  await expect(page.getByTestId('task-sop-version-trigger')).toContainText('v0.0.2');
 
   const deleteDraftResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === draftPath && response.request().method() === 'DELETE');
   await page.getByRole('button', { name: '删除草稿' }).click();
   expect((await deleteDraftResponse).ok()).toBeTruthy();
   await expect(page.getByText('草稿版本已删除')).toBeVisible();
-  await expect(page.getByLabel('版本')).toHaveValue('1.0.0');
+  await expect(page.getByTestId('task-sop-version-trigger')).toContainText('v0.0.1');
   await expect(page.getByText('当前任务 SOP 已确认')).toBeVisible();
 
   await page.reload();
@@ -153,12 +161,13 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', { name: new RegExp(`^${title} v1\\.0\\.0 · 已确认$`) }).click();
-  await expect(page.getByLabel('版本').locator('option')).toHaveCount(1);
+  await page.getByRole('button', { name: new RegExp(`^${title} v0\\.0\\.1 · 已确认$`) }).click();
+  await page.getByTestId('task-sop-version-trigger').click();
+  await expect(page.getByRole('menuitemradio')).toHaveCount(1);
   await expect(page.getByText('当前任务 SOP 已确认')).toBeVisible();
   await expect(getResource(request, 'taskSops', draft.name)).resolves.toMatchObject({ lifecycle: 'CONFIRMED' });
   await expect(listRevisions(request, 'taskSops', draft.name)).resolves.toEqual([
-    expect.objectContaining({ name: confirmed.revision.name, versionLabel: '1.0.0', exportEligible: true }),
+    expect.objectContaining({ name: confirmed.revision.name, versionLabel: '0.0.1', exportEligible: true }),
   ]);
 });
 
@@ -195,7 +204,7 @@ test('robot initial state saves successfully and does not offer the empty placeh
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', { name: new RegExp(`^${title} v1\\.0\\.0 · 草稿$`) }).click();
+  await page.getByRole('button', { name: new RegExp(`^${title} v0\\.0\\.1 · 草稿$`) }).click();
 
   const select = page.getByRole('combobox', { name: '机器人初始态', exact: true });
   await expect(select.locator('option[value=""]')).toHaveAttribute('hidden', '');
@@ -214,6 +223,8 @@ test('robot initial state saves successfully and does not offer the empty placeh
   await expect(initialStateCard.getByRole('button', { name: '展开编辑' })).toBeVisible();
 
   const initialStateSection = page.locator('[data-state-section="initial"]');
+  await expect(initialStateSection.locator('.embedded-table-header')).toHaveCSS('position', 'sticky');
+  await expect(initialStateSection.locator('.embedded-table-header')).toHaveCSS('top', '8px');
   const initialCardCount = await initialStateSection.locator('[data-state-kind="initial"]').count();
   const addStateResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
@@ -226,6 +237,20 @@ test('robot initial state saves successfully and does not offer the empty placeh
   expect(materialChoices.length).toBeGreaterThan(1);
   const selectedMaterial = await materialSelect.inputValue();
   const replacementMaterial = materialChoices.find((item) => item !== selectedMaterial)!;
+  const oldMaterialInstruction = `旧物料说明 R${testInfo.retry}`;
+  const instructionButton = addedStateCard.getByRole('button', { name: '编辑采集员说明' });
+  await expect(instructionButton).toHaveClass(/placeholder-value/);
+  await instructionButton.click();
+  const instructionDialog = page.getByRole('dialog', { name: '采集员说明' });
+  await instructionDialog.locator('textarea').fill(oldMaterialInstruction);
+  const instructionSaveResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
+    response.request().method() === 'PUT');
+  await instructionDialog.getByRole('button', { name: '保存' }).click();
+  expect((await instructionSaveResponse).ok()).toBeTruthy();
+  await expect(addedStateCard).toContainText(oldMaterialInstruction);
+  await expect(instructionButton).not.toHaveClass(/placeholder-value/);
+
   const materialSaveResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
     response.request().method() === 'PUT');
@@ -233,6 +258,13 @@ test('robot initial state saves successfully and does not offer the empty placeh
   await expect(addedStateCard.getByRole('combobox', { name: '物料' })).toHaveValue(replacementMaterial);
   expect((await materialSaveResponse).ok()).toBeTruthy();
   await expect(addedStateCard.getByRole('combobox', { name: '物料' })).toHaveValue(replacementMaterial);
+  await expect(addedStateCard).not.toContainText(oldMaterialInstruction);
+  await expect(instructionButton).toHaveClass(/placeholder-value/);
+  await expect(addedStateCard.locator('.state-human-summary')).toHaveText(`把 ${replacementMaterial}。`);
+  await expect(addedStateCard.getByText('放在/靠近什么', { exact: true }).locator('..').locator('.single-enum-summary')).toContainText('选择参照物');
+
+  const savedAfterMaterialChange = await getResource(request, 'taskSops', draft.name);
+  expect(JSON.stringify(savedAfterMaterialChange.resource)).not.toContain(oldMaterialInstruction);
 
   const materialRandomizationSummary = page.locator(
     '[data-state-kind="material-randomization"][data-state-index="0"] .state-human-summary',
@@ -308,7 +340,8 @@ test('legacy draft checkpoints remain read-only but can be exported', async ({ p
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(checkpointRoot!.displayName)} v`),
   }).first().click();
-  await page.getByLabel('版本').selectOption(checkpoint!.versionLabel);
+  await page.getByTestId('task-sop-version-trigger').click();
+  await page.getByTestId(`task-sop-version-${checkpoint!.versionLabel}`).click();
   await expect(page.getByText('这是迁移保留的旧草稿检查点，仅供追踪，不能编辑或确认，可以导出 PDF。')).toBeVisible();
   await expect(page.getByText('导入草稿检查点（只读）')).toBeVisible();
   await expect(page.getByLabel('任务 SOP 名称')).toBeDisabled();
@@ -346,7 +379,7 @@ test('revision export is addressed only by the canonical encoded revision name',
   expect(yaml.ok()).toBe(true);
   expect(yaml.headers()['content-type']).toContain('application/yaml');
   expect(YAML.parse(await yaml.text())).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', root: expect.objectContaining({ kind: 'task_sop' }),
+    format: 'coscene.sop.export', schema_version: '2.0.0', task_sop: expect.objectContaining({ status: '已确认' }),
   }));
 
   const detail = await apiJson<{ name: string; ownerName: string }>(

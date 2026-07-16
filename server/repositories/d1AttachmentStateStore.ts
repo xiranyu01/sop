@@ -27,7 +27,9 @@ type UploadRow = {
   parts_json: string;
 };
 
-type MetadataRow = Omit<UploadRow, 'upload_id' | 'parts_json'>;
+type MetadataRow = Omit<UploadRow, 'upload_id' | 'parts_json'> & {
+  completed_at?: string;
+};
 
 export type D1AttachmentStateStoreOptions = {
   clock?: () => string;
@@ -80,6 +82,7 @@ function baseMetadata(row: MetadataRow): AttachmentMetadata {
     sizeBytes: row.size_bytes,
     ...(row.public_url === null ? {} : { publicUrl: row.public_url }),
     metadata: jsonObject(row.metadata_json, 'metadata'),
+    ...(row.completed_at ? { uploadedAt: row.completed_at } : {}),
   };
 }
 
@@ -170,7 +173,7 @@ export function createD1AttachmentStateStore(
 
   async function completedMetadata(uid: string): Promise<AttachmentMetadata | undefined> {
     const row = await database.prepare(`SELECT uid, owner_scope, owner_uid, object_key,
-      filename, media_type, size_bytes, public_url, metadata_json
+      filename, media_type, size_bytes, public_url, metadata_json, completed_at
       FROM SOP_ATTACHMENT_METADATA WHERE uid = ?`).bind(uid).first<MetadataRow>();
     return row ? baseMetadata(row) : undefined;
   }

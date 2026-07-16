@@ -152,7 +152,8 @@ export function cloneResourceForCreate(
   for (const field of [
     'name', 'uid', 'etag', 'currentRevision', 'current_revision', 'createTime', 'create_time', 'updateTime', 'update_time',
     'candidateVersionSequence', 'candidate_version_sequence', 'candidateVersionLabel', 'candidate_version_label',
-    'candidateSourceVersionId', 'candidate_source_version_id', 'reviewedDependencyDigest', 'reviewed_dependency_digest',
+    'candidateSourceVersionId', 'candidate_source_version_id', 'candidateCreateTime', 'candidate_create_time',
+    'reviewedDependencyDigest', 'reviewed_dependency_digest',
   ]) delete clone[field];
   return { ...clone, ...overrides } as JsonValue;
 }

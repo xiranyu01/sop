@@ -79,6 +79,16 @@ textarea {
   font: inherit;
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-fg-subtle);
+  opacity: 1;
+}
+
+.placeholder-value {
+  color: var(--color-fg-subtle) !important;
+}
+
 button {
   cursor: pointer;
 }
@@ -317,6 +327,14 @@ summary:focus-visible,
   margin-top: 4px;
   color: var(--color-fg-muted);
   font-size: 13px;
+}
+
+.panel-header .version-time-meta {
+  display: flex;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 2px;
+  flex-wrap: wrap;
 }
 
 .page-stack {
@@ -1001,6 +1019,18 @@ summary:focus-visible,
   background: var(--color-canvas-subtle);
 }
 
+.detail-page .embedded-table {
+  overflow: visible;
+}
+
+.detail-page .embedded-table-header {
+  position: sticky;
+  top: 8px;
+  z-index: 12;
+  border-radius: calc(var(--primer-radius-medium) - 1px) calc(var(--primer-radius-medium) - 1px) 0 0;
+  box-shadow: 0 1px 0 var(--color-border-subtle);
+}
+
 .embedded-table-header h3,
 .embedded-table-header p {
   margin: 0;
@@ -1144,6 +1174,70 @@ summary:focus-visible,
   background: var(--color-canvas-overlay);
   color: var(--color-fg-default);
   padding: 7px 10px;
+}
+
+.version-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-menu-label {
+  color: var(--color-fg-muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.version-menu-trigger {
+  display: inline-flex;
+  min-width: 150px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--primer-radius-medium);
+  background: var(--color-canvas-overlay);
+  color: var(--color-fg-default);
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.version-menu-trigger[aria-expanded="true"] {
+  border-color: var(--color-accent-emphasis);
+  box-shadow: 0 0 0 2px var(--color-accent-muted);
+}
+
+.version-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  display: grid;
+  min-width: 100%;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--primer-radius-medium);
+  background: var(--color-canvas-overlay);
+  box-shadow: var(--primer-shadow-medium);
+}
+
+.version-menu-list button {
+  min-height: 38px;
+  border: 0;
+  background: var(--color-canvas-overlay);
+  color: var(--color-fg-default);
+  padding: 8px 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.version-menu-list button:hover,
+.version-menu-list button.selected {
+  background: var(--color-accent-muted);
+  color: var(--color-accent-fg);
 }
 
 .notice {

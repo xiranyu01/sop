@@ -114,14 +114,22 @@ describe('D1 resource repository contract', () => {
     });
   });
 
-  it('returns bounded canonical-name summary pages without selecting ProtoJSON', async () => {
+  it('returns bounded creation-time summary pages without selecting ProtoJSON', async () => {
     const repository = createD1ResourceRepository(db, options);
-    for (const name of ['c', 'a', 'b']) {
-      await repository.createCatalog({ protoSchema: 'Material', protoJson: material(name), now: timestamp });
+    for (const { name, createdAt } of [
+      { name: 'c', createdAt: timestamp },
+      { name: 'a', createdAt: '2026-07-14T11:00:00.000Z' },
+      { name: 'b', createdAt: '2026-07-14T11:00:00.000Z' },
+    ]) {
+      await repository.createCatalog({ protoSchema: 'Material', protoJson: material(name), now: createdAt });
     }
 
     const first = await repository.listCatalog('MATERIAL', { limit: 2 });
     expect(first.items.map((item) => item.name)).toEqual(['materials/a', 'materials/b']);
+    expect(first.items.map((item) => item.createdAt)).toEqual([
+      '2026-07-14T11:00:00.000Z',
+      '2026-07-14T11:00:00.000Z',
+    ]);
     expect(first.nextCursor).toBeTruthy();
     expect(first.items.every((item) => !('protoJson' in item))).toBe(true);
 
@@ -155,6 +163,9 @@ describe('D1 resource repository contract', () => {
     const listQuery = db.executed.filter((entry) => entry.operation === 'all' &&
       entry.sql.includes('SOP_CURRENT_RESOURCES')).at(-1)!;
     expect(listQuery.sql).not.toContain('proto_json');
+    await expect(repository.getCurrents(['robotModels/robot-a', 'robotModels/robot-a'])).resolves.toEqual([
+      expect.objectContaining({ name: 'robotModels/robot-a', protoJson: expect.any(String) }),
+    ]);
   });
 
   it('returns bounded requirement list fields without returning ProtoJSON', async () => {

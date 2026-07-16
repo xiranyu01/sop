@@ -91,11 +91,11 @@ function attachmentPlaceholder(name: string): RequirementAttachment {
   const id = resourceTail(name);
   return {
     id,
-    name: id,
+    name: '附件信息暂不可用',
     size: 0,
-    contentType: 'application/octet-stream',
+    contentType: '',
     storageKey: '',
-    uploadedAt: new Date(0).toISOString(),
+    uploadedAt: '',
   };
 }
 
@@ -131,7 +131,15 @@ function status(lifecycle: Lifecycle): EntityStatus {
 function taskVersion(
   task: TaskSopMessage,
   versionLabel: string,
-  metadata: { name?: string; exportEligible?: boolean; checkpoint?: boolean; sourceVersionId?: string; parentSourceVersionId?: string },
+  metadata: {
+    name?: string;
+    exportEligible?: boolean;
+    checkpoint?: boolean;
+    versionId?: string;
+    sourceVersionId?: string;
+    parentSourceVersionId?: string;
+    createdAt?: string;
+  },
   context: TaskSopFormContext,
 ): SubsceneVersion & RevisionBound {
   const spec = task.spec;
@@ -168,8 +176,9 @@ function taskVersion(
   }));
   const result: SubsceneVersion = {
     version: versionLabel,
-    versionId: metadata.sourceVersionId,
+    versionId: metadata.versionId || metadata.sourceVersionId,
     parentVersionId: metadata.parentSourceVersionId,
+    createdAt: metadata.createdAt || timestamp(task.candidateCreateTime) || timestamp(task.updateTime) || timestamp(task.createTime),
     status: status(task.lifecycle),
     title: task.displayName,
     sceneName: task.legacySceneDisplayName,
@@ -296,8 +305,9 @@ function taskVersion(
   return revisionBound(result, metadata);
 }
 
-function revisionParentSource(details: RevisionDetail[], previous?: string): string | undefined {
-  return previous ? details.find((item) => item.name === previous)?.sourceVersionId : undefined;
+function revisionParentId(details: RevisionDetail[], previous?: string): string | undefined {
+  const parent = previous ? details.find((item) => item.name === previous) : undefined;
+  return parent?.uid || parent?.sourceVersionId;
 }
 
 function compareVersions(left: { version: string }, right: { version: string }): number {
@@ -317,15 +327,19 @@ export function decodeTaskSopVersions(
       name: detail.name,
       exportEligible: detail.exportEligible,
       checkpoint: !detail.exportEligible,
+      versionId: detail.uid,
       sourceVersionId: revision.sourceVersionId || detail.sourceVersionId,
-      parentSourceVersionId: revisionParentSource(revisions, revision.previousRevision || detail.previousRevisionName),
+      parentSourceVersionId: revisionParentId(revisions, revision.previousRevision || detail.previousRevisionName),
+      createdAt: timestamp(revision.createTime) || detail.createdAt,
     }, context);
   });
   if (current.lifecycle === Lifecycle.DRAFT) {
-    values.push(taskVersion(current, current.candidateVersionLabel || '1.0.0', {
+    values.push(taskVersion(current, current.candidateVersionLabel || '0.0.1', {
       exportEligible: false,
+      versionId: current.uid,
       sourceVersionId: current.candidateSourceVersionId,
-      parentSourceVersionId: revisionParentSource(revisions, current.currentRevision),
+      parentSourceVersionId: revisionParentId(revisions, current.currentRevision),
+      createdAt: timestamp(current.candidateCreateTime) || timestamp(current.updateTime) || timestamp(current.createTime),
     }, context));
   }
   return values.sort(compareVersions);
@@ -349,7 +363,15 @@ export function decodeTaskSopIdentity(currentResource: JsonValue): {
 function requirementVersion(
   requirement: RequirementMessage,
   versionLabel: string,
-  metadata: { name?: string; exportEligible?: boolean; checkpoint?: boolean; sourceVersionId?: string; parentSourceVersionId?: string },
+  metadata: {
+    name?: string;
+    exportEligible?: boolean;
+    checkpoint?: boolean;
+    versionId?: string;
+    sourceVersionId?: string;
+    parentSourceVersionId?: string;
+    createdAt?: string;
+  },
   context: RequirementFormContext,
 ): RequirementVersion & RevisionBound {
   const spec = requirement.spec;
@@ -362,8 +384,9 @@ function requirementVersion(
   }
   const result: RequirementVersion = {
     version: versionLabel,
-    versionId: metadata.sourceVersionId,
+    versionId: metadata.versionId || metadata.sourceVersionId,
     parentVersionId: metadata.parentSourceVersionId,
+    createdAt: metadata.createdAt || timestamp(requirement.candidateCreateTime) || timestamp(requirement.updateTime) || timestamp(requirement.createTime),
     status: status(requirement.lifecycle),
     title: requirement.displayName,
     projectName: spec.projectDisplayName || '',
@@ -436,15 +459,19 @@ export function decodeRequirementVersions(
       name: detail.name,
       exportEligible: detail.exportEligible,
       checkpoint: !detail.exportEligible,
+      versionId: detail.uid,
       sourceVersionId: revision.sourceVersionId || detail.sourceVersionId,
-      parentSourceVersionId: revisionParentSource(revisions, revision.previousRevision || detail.previousRevisionName),
+      parentSourceVersionId: revisionParentId(revisions, revision.previousRevision || detail.previousRevisionName),
+      createdAt: timestamp(revision.createTime) || detail.createdAt,
     }, context);
   });
   if (current.lifecycle === Lifecycle.DRAFT) {
-    values.push(requirementVersion(current, current.candidateVersionLabel || '1.0.0', {
+    values.push(requirementVersion(current, current.candidateVersionLabel || '0.0.1', {
       exportEligible: false,
+      versionId: current.uid,
       sourceVersionId: current.candidateSourceVersionId,
-      parentSourceVersionId: revisionParentSource(revisions, current.currentRevision),
+      parentSourceVersionId: revisionParentId(revisions, current.currentRevision),
+      createdAt: timestamp(current.candidateCreateTime) || timestamp(current.updateTime) || timestamp(current.createTime),
     }, context));
   }
   return values.sort(compareVersions);

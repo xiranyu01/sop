@@ -306,6 +306,7 @@ message TaskSop {
     (google.api.field_behavior) = OUTPUT_ONLY,
     (buf.validate.field).string.pattern = "^[a-f0-9]{64}$"
   ];
+  google.protobuf.Timestamp candidate_create_time = 23 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // TaskSopRevision is an immutable historical snapshot of a TaskSop.

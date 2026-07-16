@@ -54,7 +54,7 @@ describe('sealed export bundle codec', () => {
     expect(() => decodeExportBundle(JSON.stringify(size))).toThrow('content size mismatch');
   });
 
-  it('exports missing optional attachment URL, hash, and size without provider checks', () => {
+  it('omits attachments that have no public URL', () => {
     const data = structuredClone(seedData);
     data.scenes[0].subscenes[0].versions[0].attachments = [{
       id: 'optional-metadata',
@@ -76,7 +76,8 @@ describe('sealed export bundle codec', () => {
       versionLabel: '0.0.1',
     }));
     const yaml = serializeExportBundleYaml(bundle);
-    expect(yaml).toContain('filename: optional.txt');
+    expect(yaml).toContain('attachments: []');
+    expect(yaml).not.toContain('optional.txt');
     expect(yaml).not.toContain('public_uri:');
     expect(yaml).not.toContain('sha256:');
     expect(yaml).not.toContain('size_bytes:');

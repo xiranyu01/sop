@@ -27,6 +27,34 @@ async function harness() {
 }
 
 describe('Pages resource API adapter', () => {
+  it('resolves confirmed revision and current draft UUIDs to shareable routes', async () => {
+    const { db, data, repository, request } = await harness();
+    const preparedRevision = data.revisions.find((item) => item.protoSchema.endsWith('.TaskSopRevision'))!;
+    const revision = (await repository.getRevision(preparedRevision.name))!;
+    const confirmed = await request(`/api/version-routes/${revision.uid}`);
+    expect(confirmed.status).toBe(200);
+    await expect(confirmed.json()).resolves.toMatchObject({
+      kind: 'taskSops',
+      ownerName: revision.ownerName,
+      versionLabel: revision.versionLabel,
+      versionUid: revision.uid,
+      draft: false,
+    });
+
+    const preparedDraft = data.currents.find((item) => item.protoSchema.endsWith('.Requirement') && item.candidateVersionLabel)!;
+    const draft = (await repository.getCurrent(preparedDraft.name))!;
+    const current = await request(`/api/version-routes/${draft.uid}`);
+    expect(current.status).toBe(200);
+    await expect(current.json()).resolves.toMatchObject({
+      kind: 'requirements',
+      ownerName: draft.name,
+      versionLabel: draft.candidateVersionLabel,
+      versionUid: draft.uid,
+      draft: true,
+    });
+    db.close();
+  });
+
   it('pages summaries, fetches one detail, and returns only the mutated resource with its fresh etag', async () => {
     const { db, repository, data, request } = await harness();
     const source = data.catalogs.find((item) => item.protoSchema.endsWith('.Material'))!;
@@ -35,6 +63,7 @@ describe('Pages resource API adapter', () => {
     expect(list.status).toBe(200);
     const page = await list.json() as { items: Array<Record<string, unknown>>; nextCursor?: string };
     expect(page.items).toHaveLength(1);
+    expect(page.items[0].createdAt).toEqual(expect.any(String));
     expect(page.items[0]).not.toHaveProperty('resource');
     expect(page.items[0]).not.toHaveProperty('protoJson');
 
@@ -156,7 +185,13 @@ describe('Pages resource API adapter', () => {
       label: string;
       value: string;
     };
-    const robotResource = JSON.parse(robot.protoJson) as { currentRevision: string };
+    const robotResource = JSON.parse(robot.protoJson) as {
+      currentRevision: string;
+      manufacturer?: string;
+      modelCode?: string;
+      endEffector?: string;
+      topics?: unknown[];
+    };
     const taskSopResource = JSON.parse(taskSop.protoJson) as {
       sourceId: string; scene: string; currentRevision?: string;
     };
@@ -197,6 +232,12 @@ describe('Pages resource API adapter', () => {
     });
     await expect(fetchSummary('robotModels', robot.name)).resolves.toMatchObject({
       currentRevision: robotResource.currentRevision,
+      listView: expect.objectContaining({
+        manufacturer: robotResource.manufacturer,
+        modelCode: robotResource.modelCode,
+        endEffector: robotResource.endEffector,
+        topics: robotResource.topics,
+      }),
     });
     await expect(fetchSummary('taskSops', taskSop.name)).resolves.toMatchObject({
       sourceId: taskSopResource.sourceId,
@@ -216,6 +257,40 @@ describe('Pages resource API adapter', () => {
       ].join('-'),
       productionItemCount: requirementResource.spec.productionItems?.length ?? 0,
       aggregateDuration: requirementResource.spec.aggregateTarget?.duration,
+    });
+    db.close();
+  });
+
+  it('scopes GlobalField identity by group and reports same-group duplicates clearly', async () => {
+    const { db, request } = await harness();
+    const create = (group: string) => request('/api/resources/globalFields', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        resource: {
+          group,
+          label: 'E2E 后侧同名分组',
+          value: 'E2E 后侧同名分组',
+          status: 'GLOBAL_FIELD_STATUS_ACTIVE',
+        },
+      }),
+    });
+
+    const relative = await create('GLOBAL_FIELD_GROUP_RELATIVE_POSITION');
+    const region = await create('GLOBAL_FIELD_GROUP_REGION');
+    expect(relative.status).toBe(201);
+    expect(region.status).toBe(201);
+    const relativeBody = await relative.json() as { resource: { name: string } };
+    const regionBody = await region.json() as { resource: { name: string } };
+    expect(relativeBody.resource.name).not.toBe(regionBody.resource.name);
+
+    const duplicate = await create('GLOBAL_FIELD_GROUP_REGION');
+    expect(duplicate.status).toBe(409);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      error: {
+        kind: 'ALREADY_EXISTS',
+        message: '当前分组中已存在同名字段，请直接编辑已有字段',
+      },
     });
     db.close();
   });
@@ -346,7 +421,7 @@ describe('Pages resource API adapter', () => {
     expect(confirmation.exportPath).toBe(`/api/revisions/${encodeURIComponent(confirmation.revision.name)}/export.yaml`);
     const exported = await request(confirmation.exportPath);
     expect(exported.status).toBe(200);
-    expect(await exported.text()).toContain('root_uid:');
+    expect(await exported.text()).toContain('requirement_version_id:');
 
     const nextDraftResponse = await request(
       `/api/resources/requirements/${encodeURIComponent(requirement.name)}/drafts`,
@@ -470,7 +545,7 @@ describe('Pages resource API adapter', () => {
     const exportResponse = await request(`/api/revisions/${encodeURIComponent(exportable.name)}/export.yaml`);
     expect(exportResponse.status).toBe(200);
     expect(exportResponse.headers.get('content-type')).toContain('application/yaml');
-    expect(await exportResponse.text()).toContain('format: coscene.sop.export');
+    expect(await exportResponse.text()).toContain('task_sop:');
 
     const pdfResponse = await request(`/api/revisions/${encodeURIComponent(exportable.name)}/export.pdf`);
     expect(pdfResponse.status).toBe(200);

@@ -71,8 +71,16 @@ import {
   revisionIsCheckpoint,
   revisionNameOf,
 } from './domain/versionedProtoFormMapping';
+import {
+  pageRoutePath,
+  parseAppRoute,
+  requirementRoutePath,
+  taskSopRoutePath,
+  type AppPage,
+  type AppRoute,
+} from './routing';
 
-type Page = 'requirements' | 'scenes' | 'globalFields' | 'customers' | 'materials' | 'robots';
+type Page = AppPage;
 
 const pageStorageKey = 'sop-manager-current-page';
 const authStorageKey = 'sop-manager-api-password';
@@ -272,8 +280,10 @@ const defaultAttachmentStorageStatus: AttachmentStorageStatus = { enabled: true,
 
 type ResourceBound = {
   __resourceName: string;
+  __resourceUid: string;
   __resourceEtag: string;
   __resourceLoaded: boolean;
+  __resourceCreatedAt?: string;
   __resourceDraftSyncToken?: number;
   __summaryProductionItemCount?: number;
 };
@@ -307,8 +317,10 @@ function ResourceLoadMoreButton({
 function bindResource<T extends object>(value: T, summary: ResourceSummary, loaded: boolean): Bound<T> {
   return Object.assign(value, {
     __resourceName: summary.name,
+    __resourceUid: summary.uid,
     __resourceEtag: summary.etag,
     __resourceLoaded: loaded,
+    __resourceCreatedAt: summary.createdAt,
     __summaryProductionItemCount: summary.productionItemCount,
   });
 }
@@ -317,6 +329,12 @@ function resourceNameOf(value: unknown): string | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const name = (value as Partial<ResourceBound>).__resourceName;
   return typeof name === 'string' && name ? name : undefined;
+}
+
+function resourceUidOf(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const uid = (value as Partial<ResourceBound>).__resourceUid;
+  return typeof uid === 'string' && uid ? uid : undefined;
 }
 
 function resourceLoaded(value: unknown): boolean {
@@ -356,10 +374,36 @@ export function replaceResourceInPlace<T>(items: T[], value: T): T[] {
   const name = resourceNameOf(value);
   if (!name) return items;
   const index = items.findIndex((item) => resourceNameOf(item) === name);
-  if (index < 0) return [...items, value];
+  if (index < 0) return sortResourcesByCreationTime([...items, value]);
   const next = [...items];
   next[index] = value;
-  return next;
+  return sortResourcesByCreationTime(next);
+}
+
+function sortResourcesByCreationTime<T>(items: T[]): T[] {
+  return [...items].sort((left, right) => {
+    const leftCreatedAt = (left as Partial<ResourceBound>)?.__resourceCreatedAt || '';
+    const rightCreatedAt = (right as Partial<ResourceBound>)?.__resourceCreatedAt || '';
+    return compareCreationTime(
+      leftCreatedAt,
+      rightCreatedAt,
+      resourceNameOf(left) || '',
+      resourceNameOf(right) || '',
+    );
+  });
+}
+
+function compareCreationTime(
+  leftCreatedAt: string | undefined,
+  rightCreatedAt: string | undefined,
+  leftName: string,
+  rightName: string,
+): number {
+  if (!leftCreatedAt && !rightCreatedAt) return 0;
+  if (!leftCreatedAt) return 1;
+  if (!rightCreatedAt) return -1;
+  const byCreationTime = rightCreatedAt.localeCompare(leftCreatedAt);
+  return byCreationTime || leftName.localeCompare(rightName, 'en');
 }
 
 function markResourceDraftSync<T extends object>(value: T, token: number): T {
@@ -374,17 +418,18 @@ export function sourceLikeId(summary: ResourceSummary): string {
   return summary.sourceId ?? resourceTail(summary.name);
 }
 
-/** Appends summary pages by canonical resource name while preserving first-seen order. */
+/** Merges summary pages and keeps the creation-time ordering stable. */
 export function appendUniqueResourceSummaries(
   current: ResourceSummary[],
   incoming: ResourceSummary[],
 ): ResourceSummary[] {
   const seen = new Set<string>();
-  return [...current, ...incoming].filter((summary) => {
+  const unique = [...current, ...incoming].filter((summary) => {
     if (seen.has(summary.name)) return false;
     seen.add(summary.name);
     return true;
   });
+  return unique.sort((left, right) => compareCreationTime(left.createdAt, right.createdAt, left.name, right.name));
 }
 
 function materialStateRulePlaceholder(summary: ResourceSummary): Bound<MaterialStateRule> {
@@ -418,7 +463,7 @@ export function appendMaterialStateRuleSummaries(
     ids.add(id);
     next.push(materialStateRulePlaceholder(summary));
   }
-  return next;
+  return sortResourcesByCreationTime(next);
 }
 
 const attachmentResourceNames = new Map<string, string>();
@@ -478,7 +523,11 @@ export function loadReferencedAttachmentMetadata(
     try {
       return await getMetadata(uid);
     } catch (error) {
-      if (!(error instanceof ApiClientError && error.status === 404)) throw error;
+      const unavailableToOwner = error instanceof ApiClientError && (
+        error.status === 404 ||
+        (error.status === 400 && error.message.includes('attachment owner does not match'))
+      );
+      if (!unavailableToOwner) throw error;
       return undefined;
     }
   }).then((results) => results.filter((item): item is AttachmentMetadata => item !== undefined));
@@ -491,21 +540,14 @@ export function attachmentFormFromMetadata(metadata: AttachmentMetadata): Requir
     size: metadata.sizeBytes,
     contentType: metadata.mediaType,
     storageKey: metadata.publicUrl || metadata.objectKey,
-    uploadedAt: new Date(0).toISOString(),
+    uploadedAt: metadata.uploadedAt || '',
   };
 }
 
-function attachmentFormFromName(name: string): RequirementAttachment {
+function attachmentFormFromName(name: string): RequirementAttachment | undefined {
   const id = resourceTail(name);
   attachmentResourceNames.set(id, name);
-  return attachmentForms.get(id) ?? {
-    id,
-    name: id,
-    size: 0,
-    contentType: 'application/octet-stream',
-    storageKey: '',
-    uploadedAt: new Date(0).toISOString(),
-  };
+  return attachmentForms.get(id);
 }
 
 function rememberAttachment(metadata: AttachmentMetadata): RequirementAttachment {
@@ -528,7 +570,7 @@ function statusFromLifecycle(lifecycle?: string): EntityStatus {
 }
 
 function summaryVersionLabel(summary: ResourceSummary): string {
-  return summary.candidateVersionLabel || summary.currentVersionLabel || '1.0.0';
+  return summary.candidateVersionLabel || summary.currentVersionLabel || '0.0.1';
 }
 
 function requirementProductionItemCount(requirement: Requirement): number {
@@ -552,9 +594,10 @@ function materialPlaceholder(summary: ResourceSummary): Bound<Material> {
 }
 
 function robotPlaceholder(summary: ResourceSummary): Bound<RobotModel> {
-  return bindResource({
+  const robot = summary.listView ? decodeRobotModelForm(summary.listView).value : {
     id: sourceLikeId(summary), brand: '', model: summary.displayName, terminal: '', topics: {}, extraTopicRequirements: {},
-  }, summary, false);
+  };
+  return bindResource(robot, summary, false);
 }
 
 function scenePlaceholder(summary: ResourceSummary): Bound<Scene> {
@@ -596,7 +639,7 @@ function taskPlaceholder(summary: ResourceSummary): Bound<Subscene> {
   const version = Object.assign(
     {
       ...emptySubsceneVersionDraft(summary.displayName),
-      version: summaryVersionLabel(summary),
+      version: summary.candidateVersionLabel || summary.currentVersionLabel || '0.0.1',
       status: statusFromLifecycle(summary.lifecycle),
     } as SubsceneVersion,
     {
@@ -623,7 +666,9 @@ export function appendTaskSopSummariesToScenes(scenes: Scene[], summaries: Resou
       existing.add(summary.name);
       additions.push(taskPlaceholder(summary));
     }
-    return additions.length ? { ...scene, subscenes: [...scene.subscenes, ...additions] } : scene;
+    return additions.length
+      ? { ...scene, subscenes: sortResourcesByCreationTime([...scene.subscenes, ...additions]) }
+      : scene;
   });
 }
 
@@ -676,6 +721,35 @@ async function hydrateOwnerAttachmentReferences(
   const metadata = await loadReferencedAttachmentMetadata(
     resources,
     (uid) => resourceClient.getAttachment(kind, ownerName, uid),
+    { concurrency: 4, shouldLoad: (uid) => !attachmentForms.has(uid) },
+  );
+  metadata.forEach(rememberAttachment);
+}
+
+export async function loadSummaryAttachmentMetadata(
+  summaries: ResourceSummary[],
+  getMetadata: (ownerName: string, uid: string) => Promise<AttachmentMetadata>,
+  options: { concurrency?: number; shouldLoad?: (uid: string) => boolean } = {},
+): Promise<AttachmentMetadata[]> {
+  const groups = summaries.flatMap((summary) => summary.listView
+    ? [{ ownerName: summary.name, resource: summary.listView }]
+    : []);
+  const results = await mapWithConcurrency(groups, options.concurrency ?? 4, ({ ownerName, resource }) =>
+    loadReferencedAttachmentMetadata(
+      [resource],
+      (uid) => getMetadata(ownerName, uid),
+      { concurrency: 2, shouldLoad: options.shouldLoad },
+    ));
+  return results.flat();
+}
+
+async function hydrateSummaryAttachmentReferences(
+  kind: AttachmentOwnerResourceKind,
+  summaries: ResourceSummary[],
+): Promise<void> {
+  const metadata = await loadSummaryAttachmentMetadata(
+    summaries,
+    (ownerName, uid) => resourceClient.getAttachment(kind, ownerName, uid),
     { concurrency: 4, shouldLoad: (uid) => !attachmentForms.has(uid) },
   );
   metadata.forEach(rememberAttachment);
@@ -810,13 +884,23 @@ async function uploadOwnerAttachment(
     for (let index = 0; index < session.partCount; index += 1) {
       const start = index * session.partSizeBytes;
       const end = Math.min(file.size, start + session.partSizeBytes);
-      await resourceClient.uploadAttachmentPart(
-        kind,
-        ownerName,
-        session.uid,
-        index + 1,
-        file.slice(start, end, file.type || 'application/octet-stream'),
-      );
+      const partNumber = index + 1;
+      const chunk = file.slice(start, end, file.type || 'application/octet-stream');
+      if (session.uploadMode === 'direct') {
+        const { uploadUrl } = await resourceClient.createAttachmentPartUploadUrl(
+          kind,
+          ownerName,
+          session.uid,
+          partNumber,
+        );
+        const etag = await resourceClient.uploadAttachmentPartDirect(uploadUrl, chunk);
+        await resourceClient.recordDirectAttachmentPart(kind, ownerName, session.uid, partNumber, {
+          etag,
+          sizeBytes: chunk.size,
+        });
+      } else {
+        await resourceClient.uploadAttachmentPart(kind, ownerName, session.uid, partNumber, chunk);
+      }
       onProgress(Math.round(((index + 1) / session.partCount) * 100));
     }
     completion = {
@@ -866,6 +950,8 @@ const emptyData = createEmptyAppViewModel();
 
 function initialPage(): Page {
   if (typeof window === 'undefined') return 'requirements';
+  const route = parseAppRoute(window.location.pathname);
+  if (route) return route.page;
   const stored = window.localStorage.getItem(pageStorageKey);
   return isPage(stored) ? stored : 'requirements';
 }
@@ -889,11 +975,25 @@ function statusText(status: string): string {
 }
 
 function shouldShowSuccessToast(message: string): boolean {
-  return !message.includes('已保存');
+  return Boolean(message) && !message.includes('已保存');
 }
 
 function formatShortDate(value?: string): string {
   return value ? value.slice(0, 10) : '-';
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date).replaceAll('/', '-');
 }
 
 function safeFileName(value: string): string {
@@ -1357,10 +1457,14 @@ export default function App() {
   const [sceneDetailOpen, setSceneDetailOpen] = useState(false);
   const [returnToRequirement, setReturnToRequirement] = useState<RequirementReturnTarget | null>(null);
   const [attachmentStorageStatus, setAttachmentStorageStatus] = useState<AttachmentStorageStatus>(defaultAttachmentStorageStatus);
+  const [routeReady, setRouteReady] = useState(false);
   const resourceDetails = useRef(new Map<string, ResourceDetail>());
   const saveQueues = useRef(new ResourceSaveQueueRegistry());
   const masterDraftSyncSequence = useRef(0);
   const reviewFlows = useRef(new Map<string, DependencyReviewFlow>());
+  const applyingRoute = useRef(false);
+  const routeInitializing = useRef(false);
+  const applyRouteRef = useRef<(route: AppRoute) => Promise<void>>(async () => undefined);
   const dataRef = useRef(data);
   const [, setSaveStateEpoch] = useState(0);
 
@@ -1482,7 +1586,10 @@ export default function App() {
     }, detail, true);
     setData((current) => ({
       ...current,
-      requirements: [...current.requirements.filter((item) => resourceNameOf(item) !== detail.name), requirement],
+      requirements: sortResourcesByCreationTime([
+        ...current.requirements.filter((item) => resourceNameOf(item) !== detail.name),
+        requirement,
+      ]),
     }));
     return requirement;
   }
@@ -1501,7 +1608,10 @@ export default function App() {
         if (resourceNameOf(scene) !== identity.sceneName) return scene;
         return {
           ...scene,
-          subscenes: [...scene.subscenes.filter((item) => resourceNameOf(item) !== detail.name), subscene],
+          subscenes: sortResourcesByCreationTime([
+            ...scene.subscenes.filter((item) => resourceNameOf(item) !== detail.name),
+            subscene,
+          ]),
         };
       }),
     }));
@@ -1535,6 +1645,63 @@ export default function App() {
     setSelectedSubsceneCode(loaded.identity.code);
     return loaded.subscene;
   }
+
+  async function applyAppRoute(route: AppRoute): Promise<void> {
+    applyingRoute.current = true;
+    try {
+      setPageState(route.page);
+      window.localStorage.setItem(pageStorageKey, route.page);
+      setRequirementDetailOpen(false);
+      setSceneDetailOpen(false);
+      setReturnToRequirement(null);
+      if (!route.detail) return;
+
+      const target = await resourceClient.resolveVersionRoute(route.detail.versionId);
+      if (route.detail.kind === 'requirement') {
+        if (target.kind !== 'requirements') throw new Error('该版本 ID 不属于客户需求');
+        const [detail, revisions] = await Promise.all([
+          resourceClient.get('requirements', target.ownerName),
+          loadRevisionDetails('requirements', target.ownerName),
+        ]);
+        await hydrateOwnerAttachmentReferences('requirements', target.ownerName, [
+          detail.resource,
+          ...revisions.map((revision) => revision.resource),
+        ]);
+        const loaded = replaceRequirementResource(detail, revisions);
+        if (!loaded.versions.some((version) => version.version === target.versionLabel)) {
+          throw new Error(`找不到客户需求版本 v${target.versionLabel}`);
+        }
+        setSelectedRequirementId(loaded.id);
+        setSelectedRequirementVersion(target.versionLabel);
+        setRequirementDetailOpen(true);
+        return;
+      }
+
+      if (target.kind !== 'taskSops') throw new Error('该版本 ID 不属于任务 SOP');
+      const [detail, revisions] = await Promise.all([
+        resourceClient.get('taskSops', target.ownerName),
+        loadRevisionDetails('taskSops', target.ownerName),
+      ]);
+      await hydrateOwnerAttachmentReferences('taskSops', target.ownerName, [
+        detail.resource,
+        ...revisions.map((revision) => revision.resource),
+      ]);
+      const loaded = replaceTaskSopResource(detail, revisions);
+      if (!loaded.subscene.versions.some((version) => version.version === target.versionLabel)) {
+        throw new Error(`找不到任务 SOP 版本 v${target.versionLabel}`);
+      }
+      const scene = dataRef.current.scenes.find((item) => resourceNameOf(item) === loaded.identity.sceneName);
+      if (!scene) throw new Error('找不到任务 SOP 所属场景');
+      setSelectedSceneId(scene.id);
+      setSelectedSubsceneCode(loaded.subscene.code);
+      setSelectedSubsceneVersion(target.versionLabel);
+      setSceneDetailOpen(true);
+    } finally {
+      applyingRoute.current = false;
+    }
+  }
+
+  applyRouteRef.current = applyAppRoute;
 
   function taskSopContext() {
     return {
@@ -1864,6 +2031,7 @@ export default function App() {
     }));
     try {
       const page = await resourceClient.list(kind, { cursor: currentPage.nextCursor });
+      if (kind === 'materials') await hydrateSummaryAttachmentReferences('materials', page.items);
       setResourcePages((current) => ({
         ...current,
         [kind]: {
@@ -1883,7 +2051,13 @@ export default function App() {
           replaceMasterValue(kind as MasterResourceKind, value);
         }
       } else if (kind === 'requirements') {
-        setData((current) => ({ ...current, requirements: [...current.requirements, ...page.items.map(requirementPlaceholder)] }));
+        setData((current) => ({
+          ...current,
+          requirements: sortResourcesByCreationTime([
+            ...current.requirements,
+            ...page.items.map(requirementPlaceholder),
+          ]),
+        }));
       } else if (kind === 'materialStateRules') {
         setData((current) => ({
           ...current,
@@ -1930,6 +2104,8 @@ export default function App() {
     if (saveQueues.current.hasUnsavedChanges &&
       !window.confirm('仍有尚未保存的本地修改，确定重新加载服务器数据吗？')) return;
     setLoading(true);
+    setRouteReady(false);
+    routeInitializing.current = false;
     setError('');
     setLoadFailure('');
     try {
@@ -1953,6 +2129,10 @@ export default function App() {
         summaries: result.items,
         nextCursor: result.nextCursor,
       }])) as Partial<Record<ResourceKind, ResourcePageState>>;
+      resourceDetails.current.clear();
+      attachmentResourceNames.clear();
+      attachmentForms.clear();
+      await hydrateSummaryAttachmentReferences('materials', pages.materials?.summaries ?? []);
       const next = createEmptyAppViewModel();
       next.customers = (pages.customers?.summaries ?? []).map(customerPlaceholder);
       next.materials = (pages.materials?.summaries ?? []).map(materialPlaceholder);
@@ -1964,9 +2144,6 @@ export default function App() {
 
       next.scenes = appendTaskSopSummariesToScenes(next.scenes, pages.taskSops?.summaries ?? []);
 
-      resourceDetails.current.clear();
-      attachmentResourceNames.clear();
-      attachmentForms.clear();
       saveQueues.current.clear(true);
       reviewFlows.current.clear();
       setResourcePages(pages);
@@ -1998,6 +2175,28 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (loading || locked || loadFailure || routeReady || routeInitializing.current) return;
+    routeInitializing.current = true;
+    const route = parseAppRoute(window.location.pathname) ?? { page: initialPage() };
+    void applyRouteRef.current(route)
+      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => {
+        routeInitializing.current = false;
+        setRouteReady(true);
+      });
+  }, [loading, locked, loadFailure, routeReady]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const route = parseAppRoute(window.location.pathname) ?? { page: 'requirements' as const };
+      void applyRouteRef.current(route)
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
     if (!message && !error) return;
     const timer = window.setTimeout(() => {
       setMessage('');
@@ -2012,12 +2211,40 @@ export default function App() {
     (selectedRequirement ? latest(selectedRequirement.versions) : undefined);
 
   useEffect(() => {
+    if (!routeReady || applyingRoute.current) return;
+    let path = pageRoutePath(page);
+    if (page === 'requirements' && requirementDetailOpen && selectedRequirement && requirementVersion) {
+      const versionId = requirementVersion.versionId || resourceUidOf(selectedRequirement);
+      if (versionId) path = requirementRoutePath(versionId);
+    } else if (page === 'scenes' && sceneDetailOpen) {
+      const scene = data.scenes.find((item) => item.id === selectedSceneId);
+      const subscene = scene?.subscenes.find((item) => item.code === selectedSubsceneCode);
+      const version = subscene?.versions.find((item) => item.version === selectedSubsceneVersion) ||
+        (subscene?.versions.length ? latest(subscene.versions) : undefined);
+      const versionId = version?.versionId || resourceUidOf(subscene);
+      if (versionId) path = taskSopRoutePath(versionId);
+    }
+    if (window.location.pathname !== path) window.history.pushState(null, '', path);
+  }, [
+    routeReady,
+    page,
+    requirementDetailOpen,
+    selectedRequirement,
+    requirementVersion,
+    sceneDetailOpen,
+    data.scenes,
+    selectedSceneId,
+    selectedSubsceneCode,
+    selectedSubsceneVersion,
+  ]);
+
+  useEffect(() => {
     if (selectedRequirement && !selectedRequirementVersion) {
       setSelectedRequirementVersion(latest(selectedRequirement.versions).version);
     }
   }, [selectedRequirement, selectedRequirementVersion]);
 
-  async function run<T>(action: () => Promise<T>, success: string): Promise<T | undefined> {
+  async function run<T>(action: () => Promise<T>, success = ''): Promise<T | undefined> {
     setError('');
     setMessage('');
     try {
@@ -2194,7 +2421,7 @@ export default function App() {
             }}
             onConfirm={async () => {
               if (!selectedRequirement || !requirementVersion) return;
-              await run(() => confirmRoot('requirements', selectedRequirement), '客户需求版本已确认');
+              await run(() => confirmRoot('requirements', selectedRequirement));
             }}
             onExport={async () => {
               if (!selectedRequirement || !requirementVersion) return undefined;
@@ -2209,25 +2436,24 @@ export default function App() {
             }}
             onRun={run}
             attachmentStorageStatus={attachmentStorageStatus}
-            onOpenSubscene={(sceneId, code, version) => {
-              const targetScene = data.scenes.find((item) => item.id === sceneId);
-              const targetSubscene = targetScene?.subscenes.find((item) => item.code === code);
-              if (!targetScene || !targetSubscene || !selectedRequirement || !requirementVersion) return;
-              setReturnToRequirement({ requirementId: selectedRequirement.id, version: requirementVersion.version });
-              setSelectedSceneId(targetScene.id);
-              setSelectedSubsceneCode(targetSubscene.code);
-              setSelectedSubsceneVersion(version);
+            onOpenSubscene={async (sceneId, code, version) => {
+              if (!selectedRequirement || !requirementVersion) return;
+              const returnTarget = { requirementId: selectedRequirement.id, version: requirementVersion.version };
+              const loaded = await run(() => openTaskSopResource(sceneId, code));
+              const targetVersion = loaded?.versions.find((item) => item.version === version);
+              if (!loaded || !targetVersion) {
+                setError(`找不到需求引用的任务 SOP 版本 v${version}`);
+                return;
+              }
+              setReturnToRequirement(returnTarget);
+              setSelectedSceneId(sceneId);
+              setSelectedSubsceneCode(loaded.code);
+              setSelectedSubsceneVersion(targetVersion.version);
               setSceneDetailOpen(true);
               setPage('scenes', { keepDetail: true });
             }}
             pageState={resourcePages.requirements}
             onLoadMore={() => void loadMoreResources('requirements')}
-            customerPageState={resourcePages.customers}
-            onLoadMoreCustomers={() => void loadMoreResources('customers')}
-            robotPageState={resourcePages.robotModels}
-            onLoadMoreRobots={() => void loadMoreResources('robotModels')}
-            globalFieldPageState={resourcePages.globalFields}
-            onLoadMoreGlobalFields={() => void loadMoreResources('globalFields')}
             taskSopPageState={resourcePages.taskSops}
             onLoadMoreTaskSops={() => void loadMoreResources('taskSops')}
           />
@@ -2280,7 +2506,7 @@ export default function App() {
                 const draft = {
                   ...emptySubsceneVersionDraft(patch.title || '新的任务 SOP'),
                   ...patch,
-                  version: '1.0.0',
+                  version: patch.version || '0.0.1',
                   status: 'draft',
                   sceneName: scene.name,
                   subsceneName: patch.title || '新的任务 SOP',
@@ -2331,7 +2557,7 @@ export default function App() {
             onConfirmSubscene={async (sceneId, code, _version) => {
               const subscene = dataRef.current.scenes.find((item) => item.id === sceneId)?.subscenes.find((item) => item.code === code);
               if (!subscene) return;
-              await run(() => confirmRoot('taskSops', subscene), '任务 SOP 版本已确认');
+              await run(() => confirmRoot('taskSops', subscene));
             }}
             onExportSubscene={async (subscene, version) => run(
               () => exportTaskSopYaml(subscene, version),
@@ -2351,8 +2577,6 @@ export default function App() {
             onLoadMoreTaskSops={() => void loadMoreResources('taskSops')}
             materialPageState={resourcePages.materials}
             onLoadMoreMaterials={() => void loadMoreResources('materials')}
-            globalFieldPageState={resourcePages.globalFields}
-            onLoadMoreGlobalFields={() => void loadMoreResources('globalFields')}
           />
         )}
 
@@ -2363,7 +2587,7 @@ export default function App() {
             pageState={resourcePages.globalFields}
             onLoadMore={() => void loadMoreResources('globalFields')}
             onSaveField={async (field) => {
-              await run(() => saveMaster('globalFields', field), '全局字段已保存');
+              return run(() => saveMaster('globalFields', field), '全局字段已保存');
             }}
           />
         )}
@@ -2657,6 +2881,66 @@ function ExportMenu({ items }: { items: Array<{ label: string; disabled?: boolea
   );
 }
 
+function VersionMenu({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selected = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  return (
+    <div className="version-menu" ref={menuRef}>
+      <span className="version-menu-label">版本</span>
+      <button
+        type="button"
+        className="version-menu-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="task-sop-version-trigger"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>{selected?.label || `v${value}`}</span>
+        <span aria-hidden="true">⌄</span>
+      </button>
+      {open && (
+        <div className="version-menu-list" role="menu" aria-label="任务 SOP 版本">
+          {options.map((option) => (
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={option.value === value}
+              className={option.value === value ? 'selected' : ''}
+              data-testid={`task-sop-version-${option.value}`}
+              key={option.value}
+              onClick={() => {
+                setOpen(false);
+                onChange(option.value);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Modal({
   title,
   children,
@@ -2793,7 +3077,7 @@ function SingleEnumSelect({
     return (
       <div className="single-enum-select disabled">
         <div className="single-enum-summary">
-          <span>{selectedValue || '暂无可选项'}</span>
+          <span className={selectedValue ? '' : 'single-enum-placeholder'}>{selectedValue || '暂无可选项'}</span>
         </div>
       </div>
     );
@@ -3068,12 +3352,6 @@ function RequirementPage({
   onOpenSubscene,
   pageState,
   onLoadMore,
-  customerPageState,
-  onLoadMoreCustomers,
-  robotPageState,
-  onLoadMoreRobots,
-  globalFieldPageState,
-  onLoadMoreGlobalFields,
   taskSopPageState,
   onLoadMoreTaskSops,
 }: {
@@ -3093,15 +3371,9 @@ function RequirementPage({
   onExportPdf: () => Promise<void>;
   onRun: <T>(action: () => Promise<T>, success: string) => Promise<T | undefined>;
   attachmentStorageStatus: AttachmentStorageStatus;
-  onOpenSubscene: (sceneId: string, code: string, version: string) => void;
+  onOpenSubscene: (sceneId: string, code: string, version: string) => Promise<void>;
   pageState?: ResourcePageState;
   onLoadMore: () => void;
-  customerPageState?: ResourcePageState;
-  onLoadMoreCustomers: () => void;
-  robotPageState?: ResourcePageState;
-  onLoadMoreRobots: () => void;
-  globalFieldPageState?: ResourcePageState;
-  onLoadMoreGlobalFields: () => void;
   taskSopPageState?: ResourcePageState;
   onLoadMoreTaskSops: () => void;
 }) {
@@ -3370,7 +3642,7 @@ function RequirementPage({
             onClick={() => {
               const target = findTaskSop(data.scenes, item);
               const version = taskSopVersion(item);
-              if (target && version) onOpenSubscene(target.scene.id, target.subscene.code, version);
+              if (target && version) void onOpenSubscene(target.scene.id, target.subscene.code, version);
             }}
           >
             查看
@@ -3660,9 +3932,6 @@ function RequirementPage({
             <button className="ghost-button" onClick={closeRequirementDetail}>
               返回需求列表
             </button>
-            <ResourceLoadMoreButton state={customerPageState} onLoadMore={onLoadMoreCustomers} label="加载更多客户" />
-            <ResourceLoadMoreButton state={robotPageState} onLoadMore={onLoadMoreRobots} label="加载更多机器人" />
-            <ResourceLoadMoreButton state={globalFieldPageState} onLoadMore={onLoadMoreGlobalFields} label="加载更多全局字段" />
           </div>
           <span>客户需求 / v{selectedVersion.version}</span>
         </div>
@@ -3670,8 +3939,10 @@ function RequirementPage({
           <div className="panel-header">
           <div>
             <h2>{selectedVersion.title}</h2>
-            <p>
+            <p className="version-time-meta">
               v{selectedVersion.version} · {statusText(selectedVersion.status)}
+              <span>创建时间 {formatDateTime(selectedVersion.createdAt || selectedVersion.updatedAt)}</span>
+              <span>更新时间 {formatDateTime(selectedVersion.updatedAt)}</span>
             </p>
           </div>
           <div className="button-row">
@@ -4078,8 +4349,6 @@ function ScenePage({
   onLoadMoreTaskSops,
   materialPageState,
   onLoadMoreMaterials,
-  globalFieldPageState,
-  onLoadMoreGlobalFields,
 }: {
   globalFields: GlobalField[];
   materials: Material[];
@@ -4109,8 +4378,6 @@ function ScenePage({
   onLoadMoreTaskSops: () => void;
   materialPageState?: ResourcePageState;
   onLoadMoreMaterials: () => void;
-  globalFieldPageState?: ResourcePageState;
-  onLoadMoreGlobalFields: () => void;
 }) {
   const [sceneQuery, setSceneQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
@@ -4240,7 +4507,7 @@ function ScenePage({
         );
       },
     },
-    { key: 'type', title: '物料类型', width: 'minmax(140px, 1.2fr)', render: (item) => item.type },
+    { key: 'type', title: '物料名称', width: 'minmax(140px, 1.2fr)', render: (item) => item.type },
     {
       key: 'quantity',
       title: '数量',
@@ -4313,7 +4580,7 @@ function ScenePage({
       width: '130px',
       render: (item) => <strong className="table-link">{item.skuId}</strong>,
     },
-    { key: 'type', title: '物料类型', width: 'minmax(140px, 1.2fr)', render: (item) => item.type || '-' },
+    { key: 'type', title: '物料名称', width: 'minmax(140px, 1.2fr)', render: (item) => item.type || '-' },
     { key: 'color', title: '颜色', width: '110px', render: (item) => item.color || '-' },
     { key: 'material', title: '材质', width: '120px', render: (item) => item.material || '-' },
     { key: 'packageType', title: '包装类型', width: '120px', render: (item) => item.packageType || '-' },
@@ -4552,7 +4819,7 @@ function ScenePage({
         title="物料库"
         description="点击物料行添加到当前任务 SOP"
         query={materialQuery}
-        placeholder="搜索 SKU、物料类型、颜色、材质"
+        placeholder="搜索 SKU、物料名称、颜色、材质"
         count={filteredMaterials.length}
         onQueryChange={setMaterialQuery}
         actions={(
@@ -4587,11 +4854,6 @@ function ScenePage({
               <button className="ghost-button" onClick={closeSubsceneDetail}>
                 返回任务 SOP 列表
               </button>
-              <ResourceLoadMoreButton
-                state={globalFieldPageState}
-                onLoadMore={onLoadMoreGlobalFields}
-                label="加载更多全局字段"
-              />
             </div>
             <span>{scene.name} / v{version.version}</span>
           </div>
@@ -4599,21 +4861,21 @@ function ScenePage({
             <div className="panel-header">
               <div>
                 <h2>{version.title || subscene.name}</h2>
-                <p>
+                <p className="version-time-meta">
                   v{version.version} · {statusText(version.status)}
+                  <span>创建时间 {formatDateTime(version.createdAt || version.updatedAt)}</span>
+                  <span>更新时间 {formatDateTime(version.updatedAt)}</span>
                 </p>
               </div>
               <div className="button-row">
-                <label className="version-select">
-                  <span>版本</span>
-                  <select value={version.version} onChange={(event) => onSelectVersion(event.target.value)}>
-                    {subscene.versions.map((item) => (
-                      <option value={item.version} key={item.version}>
-                        v{item.version} · {statusText(item.status)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <VersionMenu
+                  value={version.version}
+                  options={subscene.versions.map((item) => ({
+                    value: item.version,
+                    label: `v${item.version} · ${statusText(item.status)}`,
+                  }))}
+                  onChange={onSelectVersion}
+                />
                 <ExportMenu
                   items={[
                     {
@@ -4980,7 +5242,7 @@ function GlobalFieldPage({
   onLoadMore,
 }: {
   globalFields: GlobalField[];
-  onSaveField: (field: GlobalField) => Promise<void>;
+  onSaveField: (field: GlobalField) => Promise<GlobalField | undefined>;
   onOpenField: (field: GlobalField) => Promise<GlobalField>;
   pageState?: ResourcePageState;
   onLoadMore: () => void;
@@ -4990,6 +5252,7 @@ function GlobalFieldPage({
   const [statusFilter, setStatusFilter] = useState<GlobalFieldStatus | 'all'>('all');
   const [fieldDraft, setFieldDraft] = useState<GlobalField>(emptyGlobalField('reference_object'));
   const [editorOpen, setEditorOpen] = useState(false);
+  const [savingField, setSavingField] = useState(false);
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(globalFieldCategories.map((category) => [category.id, category.groups.includes('reference_object')])),
   );
@@ -5038,7 +5301,7 @@ function GlobalFieldPage({
     setOpenCategories((current) => ({ ...current, [categoryId]: !current[categoryId] }));
   }
 
-  function saveFieldDraft(patch: Partial<GlobalField> = {}): boolean {
+  async function saveFieldDraft(patch: Partial<GlobalField> = {}): Promise<boolean> {
     const label = (patch.label ?? fieldDraft.label).trim();
     const next = {
       ...fieldDraft,
@@ -5048,9 +5311,15 @@ function GlobalFieldPage({
       value: label,
     };
     if (!next.label) return false;
-    void onSaveField(next);
-    setFieldDraft(emptyGlobalField(next.group));
-    return true;
+    setSavingField(true);
+    try {
+      const saved = await onSaveField(next);
+      if (!saved) return false;
+      setFieldDraft(emptyGlobalField(next.group));
+      return true;
+    } finally {
+      setSavingField(false);
+    }
   }
 
   function selectGroup(group: GlobalFieldGroup) {
@@ -5080,8 +5349,8 @@ function GlobalFieldPage({
     setEditorOpen(true);
   }
 
-  function saveFieldAndClose(patch: Partial<GlobalField> = {}) {
-    if (saveFieldDraft(patch)) {
+  async function saveFieldAndClose(patch: Partial<GlobalField> = {}) {
+    if (await saveFieldDraft(patch)) {
       setEditorOpen(false);
     }
   }
@@ -5208,13 +5477,14 @@ function GlobalFieldPage({
               />
             </div>
             <div className="form-actions">
-              <button className="primary-button" onClick={() => saveFieldAndClose()}>
-                保存字段
+              <button className="primary-button" disabled={savingField} onClick={() => void saveFieldAndClose()}>
+                {savingField ? '保存中…' : '保存字段'}
               </button>
               {fieldDraft.id && (
                 <button
                   className="ghost-button"
-                  onClick={() => saveFieldAndClose({ status: fieldDraft.status === 'active' ? 'inactive' : 'active' })}
+                  disabled={savingField}
+                  onClick={() => void saveFieldAndClose({ status: fieldDraft.status === 'active' ? 'inactive' : 'active' })}
                 >
                   {fieldDraft.status === 'active' ? '停用字段' : '启用字段'}
                 </button>
@@ -5365,7 +5635,12 @@ function SelectFieldInline({
   return (
     <label className="field">
       <span>{label}</span>
-      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+      <select
+        className={value ? '' : 'placeholder-value'}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
         <option value="" hidden={hideEmptyOption}>请选择</option>
         {options.map((option) => (
           <option value={option.value} key={option.value}>
@@ -5723,7 +5998,13 @@ function LongTextDialogEditor({
 
   return (
     <>
-      <button type="button" className="summary-edit-button" disabled={disabled} onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className={`summary-edit-button ${value ? '' : 'placeholder-value'}`}
+        aria-label={`编辑${title}`}
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
         <span>{value || placeholder}</span>
       </button>
       {open && (
@@ -6222,7 +6503,17 @@ function SubsceneStateEditor({
           <div className="state-card-top">
             <label>
               <span>物料</span>
-              <select value={row.object} disabled={readOnly} onChange={(event) => update(index, { object: event.target.value } as Partial<T>)}>
+              <select
+                className={row.object ? '' : 'placeholder-value'}
+                value={row.object}
+                disabled={readOnly}
+                onChange={(event) => {
+                  const nextRow = kind === 'initial'
+                    ? emptyInitialLocationRow(event.target.value)
+                    : emptyTargetStateRow(event.target.value);
+                  update(index, nextRow as Partial<T>);
+                }}
+              >
                 <option value="">选择物料</option>
                 {Array.from(new Set([...materialOptions, row.object].filter(Boolean))).map((option) => (
                   <option value={option} key={option}>
@@ -6591,7 +6882,7 @@ function MaterialPage({
         </span>
       ),
     },
-    { key: 'type', title: '物料类型', width: 'minmax(140px, 1.2fr)', render: (item) => item.type || '-' },
+    { key: 'type', title: '物料名称', width: 'minmax(140px, 1.2fr)', render: (item) => item.type || '-' },
     { key: 'color', title: '颜色', width: '110px', render: (item) => item.color || '-' },
     { key: 'material', title: '材质', width: '130px', render: (item) => item.material || '-' },
     { key: 'packageType', title: '包装类型', width: '130px', render: (item) => item.packageType || '-' },
@@ -6644,7 +6935,7 @@ function MaterialPage({
             onDelete={deleteMaterialImage}
           />
           <div className="material-detail-grid">
-            <Field label="物料类型" value={draft.type} autoFocus={!draft.id} onChange={(type) => setDraft({ ...draft, type })} />
+            <Field label="物料名称" value={draft.type} autoFocus={!draft.id} onChange={(type) => setDraft({ ...draft, type })} />
             <Field label="颜色" value={draft.color} onChange={(color) => setDraft({ ...draft, color })} />
             <Field label="材质" value={draft.material} onChange={(material) => setDraft({ ...draft, material })} />
             <Field label="包装类型" value={draft.packageType} onChange={(packageType) => setDraft({ ...draft, packageType })} />
@@ -7100,7 +7391,12 @@ function SelectField({
   return (
     <label className="field">
       <span>{label}</span>
-      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+      <select
+        className={value ? '' : 'placeholder-value'}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
         {options.map((option) => (
           <option value={option.value} key={option.value}>
             {option.label}
@@ -7291,7 +7587,10 @@ function AttachmentPreviewThumb({
       type="button"
       className={`attachment-preview-thumb ${compact ? 'compact' : ''}`}
       aria-label={`预览附件 ${attachment.name}`}
-      onClick={onPreview}
+      onClick={(event) => {
+        event.stopPropagation();
+        onPreview();
+      }}
       title="点击预览"
     >
       {isImage && url ? <img src={url} alt={attachment.name} /> : <span>{isVideo ? '视频' : isImage ? '图片' : '文件'}</span>}
@@ -7635,8 +7934,11 @@ function materialInitialRandomizationFromRows(rows: MaterialInitialRandomization
 }
 
 function emptySubsceneVersionDraft(title = '新的任务 SOP'): Partial<SubsceneVersion> {
+  const now = new Date().toISOString();
   return {
     version: '0.0.1',
+    createdAt: now,
+    updatedAt: now,
     status: 'draft',
     title,
     description: '',
@@ -7678,8 +7980,9 @@ function emptySubsceneVersionDraft(title = '新的任务 SOP'): Partial<Subscene
 }
 
 function emptyRequirementVersion(title = '新的客户需求', status: EntityStatus = 'draft'): RequirementVersion {
+  const now = new Date().toISOString();
   return {
-    version: '1.0.0',
+    version: '0.0.1',
     status,
     title,
     projectName: '',
@@ -7698,7 +8001,8 @@ function emptyRequirementVersion(title = '新的客户需求', status: EntitySta
     delivery: { formats: [], method: '', languages: [], dataStructureUrl: '' },
     selectedSubscenes: [],
     attachments: [],
-    updatedAt: new Date(0).toISOString(),
+    createdAt: now,
+    updatedAt: now,
   };
 }
 

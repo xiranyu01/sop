@@ -7,6 +7,8 @@ import type {
   AttachmentObjectStore,
   AttachmentPartInput,
   AttachmentPartOutput,
+  AttachmentPartUploadUrlInput,
+  AttachmentPartUploadUrlOutput,
   AttachmentUploadInput,
   AttachmentUploadSession,
 } from './domain/attachmentObjectStore';
@@ -24,12 +26,14 @@ export type S3AttachmentConfig = {
   bucket?: string;
   accessKeyId?: string;
   secretAccessKey?: string;
+  directUploadEnabled?: boolean;
   /** Injectable signed-request transport for adapter contract tests. */
   request?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 type S3ClientContext = {
   request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  sign: (input: RequestInfo | URL, init?: RequestInit & { aws?: { signQuery?: boolean } }) => Promise<Request>;
   endpoint: string;
   bucket: string;
 };
@@ -54,6 +58,7 @@ function requireS3Context(config: S3AttachmentConfig): S3ClientContext {
     });
   return {
     request: config.request ?? ((input, init) => aws.fetch(input, init)),
+    sign: (input, init) => aws.sign(input, init),
     endpoint: normalizeEndpoint(config.endpoint || ''),
     bucket: config.bucket || '',
   };
@@ -158,6 +163,26 @@ export function createS3AttachmentStore(config: S3AttachmentConfig): AttachmentO
       });
       await assertOk(response, '初始化附件上传');
       return { uploadId: parseUploadId(await response.text()), storageKey: input.storageKey };
+    },
+    createAttachmentPartUploadUrl: config.directUploadEnabled === false ? undefined : async (
+      input: AttachmentPartUploadUrlInput,
+    ): Promise<AttachmentPartUploadUrlOutput> => {
+      validateUploadSession(input);
+      if (!Number.isInteger(input.partNumber) || input.partNumber < 1) throw new Error('part number is invalid');
+      if (!Number.isInteger(input.expiresInSeconds) || input.expiresInSeconds < 1 || input.expiresInSeconds > 3600) {
+        throw new Error('upload URL expiry is invalid');
+      }
+      const context = requireS3Context(config);
+      const search = `?partNumber=${input.partNumber}&uploadId=${encodeURIComponent(input.uploadId)}` +
+        `&X-Amz-Expires=${input.expiresInSeconds}`;
+      const request = await context.sign(objectUrl(context, input.storageKey, search), {
+        method: 'PUT',
+        aws: { signQuery: true },
+      });
+      return {
+        uploadUrl: request.url,
+        expiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString(),
+      };
     },
     async uploadAttachmentPart(input: AttachmentPartInput): Promise<AttachmentPartOutput> {
       validateAttachmentPart(input);

@@ -5,6 +5,7 @@ import {
   attachmentReferenceNames,
   findTaskSop,
   loadReferencedAttachmentMetadata,
+  loadSummaryAttachmentMetadata,
   sourceLikeId,
 } from '../../src/App';
 import { ApiClientError, type AttachmentMetadata } from '../../src/api/client';
@@ -77,6 +78,52 @@ describe('resource detail hydration', () => {
     expect(maximumActive).toBeLessThanOrEqual(2);
     expect(metadata).toHaveLength(6);
     expect(metadata.map((item) => item.uid)).not.toContain('item-3');
+  });
+
+  it('does not block detail hydration when a dependency attachment belongs to another owner', async () => {
+    const resources = [{ attachments: ['attachments/owned-elsewhere'] }] as JsonValue[];
+    const getMetadata = vi.fn(async () => {
+      throw new ApiClientError(400, {
+        error: { kind: 'VALIDATION', message: 'Attachment boundary: attachment owner does not match' },
+      });
+    });
+
+    await expect(loadReferencedAttachmentMetadata(resources, getMetadata)).resolves.toEqual([]);
+  });
+
+  it('hydrates material list attachments with their owning resource before list rendering', async () => {
+    const summaries = [
+      {
+        kind: 'materials', name: 'materials/sink', uid: 'material-1', displayName: '洗手盆', etag: 'etag', archived: false,
+        listView: { images: ['attachments/sink-photo'] },
+      },
+      {
+        kind: 'materials', name: 'materials/toothbrush', uid: 'material-2', displayName: '牙刷', etag: 'etag', archived: false,
+        listView: { images: [] },
+      },
+    ] as ResourceSummary[];
+    const getMetadata = vi.fn(async (ownerName: string, uid: string): Promise<AttachmentMetadata> => ({
+      owner: { scope: 'material', uid: ownerName.split('/').at(-1)! },
+      uid,
+      objectKey: `attachments/material/${ownerName.split('/').at(-1)}/${uid}`,
+      filename: '洗手盆.png',
+      mediaType: 'image/png',
+      sizeBytes: 2048,
+      publicUrl: 'https://assets.example.test/sink-photo',
+      uploadedAt: '2026-07-15T08:30:00.000Z',
+      metadata: {},
+    }));
+
+    const metadata = await loadSummaryAttachmentMetadata(summaries, getMetadata);
+
+    expect(getMetadata).toHaveBeenCalledOnce();
+    expect(getMetadata).toHaveBeenCalledWith('materials/sink', 'sink-photo');
+    expect(metadata.map(attachmentFormFromMetadata)).toEqual([
+      expect.objectContaining({
+        name: '洗手盆.png', contentType: 'image/png', size: 2048,
+        uploadedAt: '2026-07-15T08:30:00.000Z',
+      }),
+    ]);
   });
 
   it('resolves a duplicated legacy task code inside the referenced scene', () => {

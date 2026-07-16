@@ -20,6 +20,7 @@ type Env = {
   R2_S3_BUCKET?: string;
   R2_S3_ACCESS_KEY_ID?: string;
   R2_S3_SECRET_ACCESS_KEY?: string;
+  R2_DIRECT_UPLOAD_ENABLED?: string;
   [binding: string]: unknown;
 };
 
@@ -32,7 +33,10 @@ type PagesContext = {
 function operationName(method: string, pathname: string): string {
   if (pathname === '/api/health') return 'health.read';
   if (pathname === '/api/readiness') return 'readiness.read';
+  if (/^\/api\/version-routes\/[^/]+$/.test(pathname)) return 'version-route.read';
   if (/\/export\.(?:yaml|pdf)$/.test(pathname)) return `export.${pathname.endsWith('.pdf') ? 'pdf' : 'yaml'}`;
+  if (/\/attachments\/[^/]+\/parts\/[^/]+\/upload-url\/?$/.test(pathname)) return 'attachment.sign-part';
+  if (/\/attachments\/[^/]+\/parts\/[^/]+\/receipt\/?$/.test(pathname)) return 'attachment.record-part';
   if (/\/attachments\/[^/]+\/parts\/[^/]+\/?$/.test(pathname)) return 'attachment.upload-part';
   if (/\/attachments\/[^/]+\/complete\/?$/.test(pathname)) return 'attachment.complete';
   if (/\/attachments\/[^/]+\/abort\/?$/.test(pathname)) return 'attachment.abort';
@@ -132,6 +136,7 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
       bucket: context.env.R2_S3_BUCKET,
       accessKeyId: context.env.R2_S3_ACCESS_KEY_ID,
       secretAccessKey: context.env.R2_S3_SECRET_ACCESS_KEY,
+      directUploadEnabled: context.env.R2_DIRECT_UPLOAD_ENABLED === 'true',
     };
     const response = await handleResourceApiRequest(context.request, repository, {
       requestId,
@@ -146,7 +151,14 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
     });
     logResult({ requestId, operation, status: response.status, startedAt, warning, ...resource });
     return response;
-  } catch {
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: 'sop_operation_error',
+      requestId,
+      operation,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      message: error instanceof Error ? error.message : String(error),
+    }));
     const response = Response.json(
       apiError('STORAGE_UNAVAILABLE', '资源存储暂时不可用', { retryable: true }, requestId),
       { status: 500 },

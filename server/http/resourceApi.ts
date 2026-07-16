@@ -12,6 +12,7 @@ import {
 import { Lifecycle } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { RequirementSchema } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
 import { TaskSopSchema } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
+import { RootKind } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
 import { apiError, type ApiErrorBody } from '../../shared/transport/errors';
 import type {
   ResourceDetail,
@@ -20,6 +21,7 @@ import type {
   ResourcePage,
   RevisionDetail,
   RevisionSummary as TransportRevisionSummary,
+  VersionRouteTarget,
   SaveWarning,
   DependencyReviewResult,
   ConfirmationResult,
@@ -64,7 +66,7 @@ import {
   type createAttachmentService,
 } from '../domain/services/attachment';
 import { decodeExportBundle } from '../export/codec';
-import { serializeExportBundleYaml } from '../export/yaml';
+import { serializeExportBundleYaml, type DomainYamlOptions } from '../export/yaml';
 import { renderFrozenPdfModel } from '../../src/export/pdf';
 import { repositoryReleaseManifest } from '../bootstrap/releaseManifest';
 import {
@@ -219,6 +221,7 @@ function resourceSummary(kind: ResourceKind, record: ResourceSummary): ResourceD
     deadline: record.deadline,
     productionItemCount: record.productionItemCount,
     aggregateDuration: record.aggregateDuration,
+    createdAt: record.createdAt,
     archived: record.archivedAt !== undefined,
     resource: {},
   };
@@ -247,6 +250,7 @@ function exportResponse(
   bundle: ReturnType<typeof decodeExportBundle>,
   format: 'yaml' | 'pdf',
   versionLabel: string,
+  yamlOptions: DomainYamlOptions = {},
 ): Response {
   if (!bundle.content) throw new CanonicalDataError('导出包缺少内容');
   if (format === 'pdf') {
@@ -258,13 +262,76 @@ function exportResponse(
       },
     });
   }
-  return new Response(serializeExportBundleYaml(bundle), {
+  return new Response(serializeExportBundleYaml(bundle, yamlOptions), {
     status: 200,
     headers: {
       'content-type': 'application/yaml; charset=utf-8',
       'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${versionLabel}.yaml`)}`,
     },
   });
+}
+
+async function findRevisionByVersion(
+  repository: ResourceRepository,
+  ownerName: string,
+  versionLabel: string,
+): Promise<RevisionSummary | undefined> {
+  let cursor: string | undefined;
+  do {
+    const page = await repository.listRevisions(ownerName, { cursor, limit: 100 });
+    const found = page.items.find((item) => item.versionLabel === versionLabel);
+    if (found) return found;
+    cursor = page.nextCursor;
+  } while (cursor);
+  return undefined;
+}
+
+async function domainYamlOptions(
+  repository: ResourceRepository,
+  bundle: ReturnType<typeof decodeExportBundle>,
+): Promise<DomainYamlOptions> {
+  const content = bundle.content;
+  if (!content) throw new CanonicalDataError('导出包缺少内容');
+  const requirementTaskSops = new Map<string, {
+    content: NonNullable<typeof content>;
+    taskSop: NonNullable<typeof content>['taskSops'][number];
+  }>();
+
+  if (content.root?.kind === RootKind.REQUIREMENT) {
+    const requirement = content.requirements.find((item) => item.ref === content.root?.ref);
+    if (!requirement) throw new CanonicalDataError('需求导出缺少根版本');
+    for (const item of requirement.spec?.productionItems || []) {
+      const referenced = content.taskSops.find((task) => task.ref === item.taskSopRef);
+      if (!referenced?.revision) throw new CanonicalDataError(`生产需求项缺少任务 SOP 版本：${item.displayName}`);
+      const requestedVersion = item.legacyVersionLabel || referenced.revision.versionLabel;
+      if (requestedVersion === referenced.revision.versionLabel) continue;
+      const ownerName = referenced.revision.revisionName.split('/revisions/')[0];
+      const revision = await findRevisionByVersion(repository, ownerName, requestedVersion);
+      if (!revision) throw new CanonicalDataError(`找不到任务 SOP 历史版本：${referenced.displayName} v${requestedVersion}`);
+      const stored = await repository.getExportBundle(revision.name);
+      if (!stored) throw new CanonicalDataError(`任务 SOP 历史版本没有冻结导出包：${revision.name}`);
+      const resolvedContent = decodeExportBundle(stored.bundleProtoJson).content;
+      const taskSop = resolvedContent?.taskSops.find((task) => task.ref === resolvedContent.root?.ref);
+      if (!resolvedContent || !taskSop) throw new CanonicalDataError(`任务 SOP 冻结导出包不完整：${revision.name}`);
+      requirementTaskSops.set(item.id, { content: resolvedContent, taskSop });
+    }
+  }
+
+  const revisionNames = new Set<string>([
+    ...content.requirements.map((item) => item.revision?.revisionName || ''),
+    ...content.taskSops.map((item) => item.revision?.revisionName || ''),
+    ...[...requirementTaskSops.values()].map((item) => item.taskSop.revision?.revisionName || ''),
+  ].filter(Boolean));
+  const revisions = await repository.getRevisions([...revisionNames]);
+  const previousNames = revisions.map((item) => item.previousRevisionName).filter((name): name is string => Boolean(name));
+  const previousRevisions = await repository.getRevisions(previousNames);
+  const previousByName = new Map(previousRevisions.map((item) => [item.name, item]));
+  const parentRevisionUids = new Map<string, string>();
+  for (const revision of revisions) {
+    const parent = revision.previousRevisionName ? previousByName.get(revision.previousRevisionName) : undefined;
+    if (parent) parentRevisionUids.set(revision.name, parent.uid);
+  }
+  return { parentRevisionUids, requirementTaskSops };
 }
 
 function sourceVersionId(protoJson: string): string | undefined {
@@ -283,6 +350,7 @@ function revisionSummary(record: RevisionSummary, sourceId?: string): TransportR
     lifecycle: record.lifecycle,
     exportEligible: record.exportEligible,
     sourceVersionId: sourceId,
+    createdAt: record.createdAt,
   };
 }
 
@@ -355,6 +423,7 @@ type VersionedDraftMessage = {
   candidateVersionSequence?: bigint;
   candidateVersionLabel?: string;
   candidateSourceVersionId?: string;
+  candidateCreateTime?: Timestamp;
   reviewedDependencyDigest?: string;
   createTime?: Timestamp;
   updateTime?: Timestamp;
@@ -379,6 +448,7 @@ function draftUpdateProtoJson(
   requested.candidateVersionSequence = authoritative.candidateVersionSequence;
   requested.candidateVersionLabel = authoritative.candidateVersionLabel;
   requested.candidateSourceVersionId = authoritative.candidateSourceVersionId;
+  requested.candidateCreateTime = authoritative.candidateCreateTime;
   requested.reviewedDependencyDigest = authoritative.reviewedDependencyDigest;
   requested.createTime = authoritative.createTime;
   requested.updateTime = timestampFromDate(now);
@@ -427,6 +497,7 @@ function createProtoJson(
       ['candidateVersionSequence', 'candidate_version_sequence'],
       ['candidateVersionLabel', 'candidate_version_label'],
       ['candidateSourceVersionId', 'candidate_source_version_id'],
+      ['candidateCreateTime', 'candidate_create_time'],
       ['reviewedDependencyDigest', 'reviewed_dependency_digest'],
     ]) {
       if (clientSupplied(input, camel, snake)) throw new TypeError(`${camel} is allocated by the server`);
@@ -434,7 +505,12 @@ function createProtoJson(
   }
 
   const message = fromDomainJson(item.value.schema, input) as unknown as JsonObject;
-  const seed = [input.sourceId, input.source_id, input.displayName, input.display_name, input.label,
+  const explicitSeed = [input.sourceId, input.source_id]
+    .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim() !== '');
+  const globalFieldSeed = item.kind === 'globalFields' && typeof input.label === 'string' && typeof input.group === 'string'
+    ? `${input.group}:${input.label}`
+    : undefined;
+  const seed = explicitSeed ?? globalFieldSeed ?? [input.displayName, input.display_name, input.label,
     input.filename, input.materialType, input.material_type]
     .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim() !== '') ?? crypto.randomUUID();
   message.name = resourceName(item.kind, seed);
@@ -450,8 +526,9 @@ function createProtoJson(
     message.lifecycle = Lifecycle.DRAFT;
     message.currentRevision = '';
     message.candidateVersionSequence = 1n;
-    message.candidateVersionLabel = '1.0.0';
+    message.candidateVersionLabel = '0.0.1';
     message.candidateSourceVersionId = undefined;
+    message.candidateCreateTime = timestampFromDate(now);
     message.reviewedDependencyDigest = undefined;
   }
   assertValidDomainMessage(item.value.schema, message as never);
@@ -552,10 +629,11 @@ async function attachmentResponse(
   const owner = await attachmentOwner(repository, item, ownerName);
   const uid = route[3] ? decodeSegment(route[3], 'attachment uid') : undefined;
   const part = route[4];
-  const action = route[5];
+  const partAction = route[5];
+  const action = route[6];
   const method = request.method.toUpperCase();
 
-  if (!uid && !part && !action && method === 'POST') {
+  if (!uid && !part && !partAction && !action && method === 'POST') {
     const body = await requestObject(request);
     for (const field of ['owner', 'uid', 'key', 'objectKey', 'storageKey']) {
       if (Object.prototype.hasOwnProperty.call(body, field)) {
@@ -579,7 +657,22 @@ async function attachmentResponse(
   }
   if (!uid) return errorResponse(404, apiError('NOT_FOUND', '附件 API 路由不存在', undefined, options.requestId));
 
-  if (part && !action && method === 'PUT') {
+  if (part && partAction === 'upload-url' && method === 'POST') {
+    if (!/^\d+$/.test(part)) throw new TypeError('part number must be a positive integer');
+    return json(await service.createPartUploadUrl({ owner, uid, partNumber: Number(part) }));
+  }
+  if (part && partAction === 'receipt' && method === 'POST') {
+    if (!/^\d+$/.test(part)) throw new TypeError('part number must be a positive integer');
+    const body = await requestObject(request);
+    return json(await service.recordDirectPart({
+      owner,
+      uid,
+      partNumber: Number(part),
+      etag: requiredString(body.etag, 'etag'),
+      sizeBytes: requiredSafeInteger(body.sizeBytes ?? body.size_bytes, 'sizeBytes'),
+    }));
+  }
+  if (part && !partAction && !action && method === 'PUT') {
     if (!/^\d+$/.test(part)) throw new TypeError('part number must be a positive integer');
     const contentLength = request.headers.get('content-length');
     if (contentLength && (!/^\d+$/.test(contentLength) || Number(contentLength) > ATTACHMENT_PART_BYTES)) {
@@ -626,6 +719,11 @@ async function listResources(
     const listViews = new Map(records.map((record) => [record.name, parseProtoJson(record.protoJson)]));
     return json(resourcePage(item.kind, result, listViews));
   }
+  if (item.kind === 'robotModels') {
+    const records = await repository.getCurrents(result.items.map((resource) => resource.name));
+    const listViews = new Map(records.map((record) => [record.name, parseProtoJson(record.protoJson)]));
+    return json(resourcePage(item.kind, result, listViews));
+  }
   return json(resourcePage(item.kind, result));
 }
 
@@ -642,6 +740,23 @@ async function createResource(
   const now = new Date();
   const protoJson = createProtoJson(item, body.resource, now);
   const writeTime = now.toISOString();
+  if (item.kind === 'globalFields') {
+    const requested = parseObject(parseProtoJson(protoJson), 'global field');
+    const requestedName = requiredString(requested.name, 'global field name');
+    const candidates = [requestedName];
+    if (typeof requested.label === 'string' && requested.label) {
+      candidates.push(resourceName(item.kind, requested.label));
+    }
+    for (const candidate of [...new Set(candidates)]) {
+      const existing = await loadResource(repository, item, candidate);
+      if (!existing) continue;
+      const stored = parseObject(parseProtoJson(existing.protoJson), 'stored global field');
+      if (stored.group !== requested.group || stored.label !== requested.label) continue;
+      return errorResponse(409, apiError('ALREADY_EXISTS', '当前分组中已存在同名字段，请直接编辑已有字段', {
+        resourceName: existing.name,
+      }, options.requestId));
+    }
+  }
   const record = item.kind === 'robotModels'
     ? (await createRobotModel(repository, { resourceProtoJson: protoJson, now })).root
     : item.value.persistence === 'catalog'
@@ -801,12 +916,13 @@ export async function handleResourceApiRequest(
       return json({ ready: true });
     }
 
+    const versionRoute = /^\/api\/version-routes\/([^/]+)$/.exec(pathname);
     const revisionExport = /^\/api\/revisions\/([^/]+)\/export\.(yaml|pdf)$/.exec(pathname);
     const draftExport = /^\/api\/resources\/(taskSops|requirements)\/([^/]+)\/export\.(yaml|pdf)$/.exec(pathname);
     const revisionDetailRoute = /^\/api\/revisions\/([^/]+)$/.exec(pathname);
-    const attachmentRoute = /^\/api\/resources\/([^/]+)\/([^/]+)\/attachments(?:\/([^/]+)(?:\/parts\/([^/]+)|\/(complete|abort))?)?$/.exec(pathname);
+    const attachmentRoute = /^\/api\/resources\/([^/]+)\/([^/]+)\/attachments(?:\/([^/]+)(?:\/parts\/([^/]+)(?:\/(upload-url|receipt))?|\/(complete|abort))?)?$/.exec(pathname);
     const resourceRoute = /^\/api\/resources\/([^/]+)(?:\/([^/]+))?(?:\/(archive|revisions|drafts|review-proposal|review-acknowledgements|confirmations))?$/.exec(pathname);
-    if (!revisionExport && !draftExport && !revisionDetailRoute && !attachmentRoute && !resourceRoute) {
+    if (!versionRoute && !revisionExport && !draftExport && !revisionDetailRoute && !attachmentRoute && !resourceRoute) {
       return errorResponse(404, apiError('NOT_FOUND', 'API 路由不存在', undefined, options.requestId));
     }
 
@@ -820,6 +936,36 @@ export async function handleResourceApiRequest(
     }
 
     await requireReady(repository, options.expectedBootstrapMarker);
+
+    if (versionRoute && method === 'GET') {
+      const uid = decodeSegment(versionRoute[1], 'version uid');
+      const revision = await repository.getRevisionByUid(uid);
+      if (revision && (revision.kind === 'REQUIREMENT_REVISION' || revision.kind === 'TASK_SOP_REVISION')) {
+        const target: VersionRouteTarget = {
+          kind: revision.kind === 'REQUIREMENT_REVISION' ? 'requirements' : 'taskSops',
+          ownerName: revision.ownerName,
+          versionLabel: revision.versionLabel,
+          versionUid: revision.uid,
+          draft: false,
+        };
+        return json(target);
+      }
+      const current = await repository.getCurrentByUid(uid);
+      if (!current || (current.kind !== 'REQUIREMENT' && current.kind !== 'TASK_SOP')) {
+        throw new ResourceNotFoundError(`version uid ${uid}`);
+      }
+      const currentRevision = current.currentRevisionName
+        ? await repository.getRevision(current.currentRevisionName)
+        : undefined;
+      const target: VersionRouteTarget = {
+        kind: current.kind === 'REQUIREMENT' ? 'requirements' : 'taskSops',
+        ownerName: current.name,
+        versionLabel: current.candidateVersionLabel || currentRevision?.versionLabel || '0.0.1',
+        versionUid: current.candidateVersionLabel ? current.uid : currentRevision?.uid || current.uid,
+        draft: Boolean(current.candidateVersionLabel),
+      };
+      return json(target);
+    }
 
     if (revisionExport && method === 'GET') {
       const name = decodeSegment(revisionExport[1], 'revision name');
@@ -849,7 +995,9 @@ export async function handleResourceApiRequest(
         : revision.kind === 'TASK_SOP_REVISION'
           ? await buildTaskSopCheckpointExportBundle(repository, name)
           : await buildRequirementCheckpointExportBundle(repository, name);
-      return exportResponse(bundle, revisionExport[2] as 'yaml' | 'pdf', revision.versionLabel);
+      const format = revisionExport[2] as 'yaml' | 'pdf';
+      const yamlOptions = format === 'yaml' ? await domainYamlOptions(repository, bundle) : undefined;
+      return exportResponse(bundle, format, revision.versionLabel, yamlOptions);
     }
 
     if (draftExport && method === 'GET') {

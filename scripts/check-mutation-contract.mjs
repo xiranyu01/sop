@@ -80,8 +80,10 @@ function handlerRoutePath(condition) {
   if (literalPath) return literalPath;
 
   const action = /\baction\s*===\s*(['"])([^'"]+)\1/.exec(condition)?.[2];
+  const partAction = /\bpartAction\s*===\s*(['"])([^'"]+)\1/.exec(condition)?.[2];
   const attachmentCondition = /\b(?:uid|part)\b/.test(condition);
   if (attachmentCondition) {
+    if (partAction) return `/api/resources/:kind/:name/attachments/:uid/parts/:part/${partAction}`;
     if (negates(condition, 'uid') && negates(condition, 'part') && negates(condition, 'action')) {
       return '/api/resources/:kind/:name/attachments';
     }
@@ -197,8 +199,11 @@ const repositoryMethodExceptions = new Set([
   'getCatalogs',
   'listCatalog',
   'getCurrent',
+  'getCurrentByUid',
+  'getCurrents',
   'listCurrent',
   'getRevision',
+  'getRevisionByUid',
   'getRevisions',
   'listRevisions',
   'getExportBundle',

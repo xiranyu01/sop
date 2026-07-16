@@ -1,7 +1,7 @@
 import { ExportNotFoundError } from '../domain/errors';
 import { buildExportBundle } from './bundle';
 import { resolveExportClosure, type ExportClosureSource } from './closure';
-import { serializeExportBundleYaml } from './yaml';
+import { serializeExportBundleYaml, type DomainYamlOptions } from './yaml';
 
 export {
   canonicalFrozenContentProtoJson,
@@ -11,13 +11,24 @@ export {
   verifyExportBundle,
 } from './codec';
 
+function sourceYamlOptions(sourceRecords: ExportClosureSource): DomainYamlOptions {
+  const revisions = [...sourceRecords.requirementRevisions, ...sourceRecords.taskSopRevisions];
+  const byName = new Map(revisions.map((item) => [item.name, item]));
+  const parentRevisionUids = new Map<string, string>();
+  for (const revision of revisions) {
+    const parent = revision.previousRevision ? byName.get(revision.previousRevision) : undefined;
+    if (parent) parentRevisionUids.set(revision.name, parent.uid);
+  }
+  return { parentRevisionUids };
+}
+
 export function exportRequirementYaml(sourceRecords: ExportClosureSource, sourceId: string, versionLabel: string): string {
   const exists = sourceRecords.requirementRevisions.some((revision) =>
     revision.snapshot?.sourceId === sourceId && revision.versionLabel === versionLabel);
   if (!exists) throw new ExportNotFoundError(`找不到客户需求版本：${sourceId} v${versionLabel}`);
   return serializeExportBundleYaml(buildExportBundle(resolveExportClosure(sourceRecords, {
     kind: 'requirement', sourceId, versionLabel,
-  })));
+  })), sourceYamlOptions(sourceRecords));
 }
 
 export function exportTaskSopYaml(
@@ -39,5 +50,5 @@ export function exportTaskSopYaml(
   const sourceId = candidates[0].snapshot!.sourceId || candidates[0].snapshot!.name.split('/').at(-1)!;
   return serializeExportBundleYaml(buildExportBundle(resolveExportClosure(sourceRecords, {
     kind: 'task_sop', sourceId, versionLabel,
-  })));
+  })), sourceYamlOptions(sourceRecords));
 }

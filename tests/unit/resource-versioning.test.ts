@@ -1,4 +1,5 @@
 import { create } from '@bufbuild/protobuf';
+import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { describe, expect, it } from 'vitest';
 import { FrozenDependencyContextSchema, RobotModelRevisionSchema, RobotModelSchema } from '../../gen/coscene/sop/v1alpha1/catalog_pb';
 import { Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
@@ -35,6 +36,7 @@ describe('resource-scoped versioning', () => {
       lifecycle: Lifecycle.DRAFT, currentRevision: base.revision.name,
       candidateVersionSequence: 2n, candidateVersionLabel: '1.0.1',
     });
+    expect(draft.candidateCreateTime).toEqual(timestampFromDate(now));
     const first = buildTaskSopConfirmation(draft, frozen, now);
     const retry = buildTaskSopConfirmation(draft, frozen, now);
     expect(retry).toEqual(first);
@@ -43,6 +45,7 @@ describe('resource-scoped versioning', () => {
       versionLabel: '1.0.1', previousRevision: base.revision.name,
       origin: RevisionOrigin.RUNTIME_CONFIRMED, exportEligible: true,
     });
+    expect(first.revision.createTime).toEqual(draft.candidateCreateTime);
   });
 
   it('never promotes an imported draft checkpoint as a base revision', () => {
@@ -70,8 +73,10 @@ describe('resource-scoped versioning', () => {
     });
     const draft = startNextRequirementDraft(current, base, 2n, now);
     const result = buildRequirementConfirmation(draft, frozen, now);
+    expect(draft.candidateCreateTime).toEqual(timestampFromDate(now));
     expect(result.current.lifecycle).toBe(Lifecycle.CONFIRMED);
     expect(result.revision.previousRevision).toBe(base.name);
+    expect(result.revision.createTime).toEqual(draft.candidateCreateTime);
   });
 
   it('atomically prepares one next RobotModel revision and pointer', () => {

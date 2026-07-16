@@ -193,23 +193,35 @@ function changes(result: D1RunResultLike | undefined): number {
   return result?.meta?.changes ?? result?.changes ?? 0;
 }
 
-function encodeCursor(name: string): string {
-  const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, name }));
+type ResourceCursor = { createdAt: string; name: string };
+
+function encodeCursor(createdAt: string, name: string): string {
+  const bytes = new TextEncoder().encode(JSON.stringify({ version: 2, createdAt, name }));
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
 }
 
-function decodeCursor(cursor?: string): string {
-  if (!cursor) return '';
+function decodeCursor(cursor?: string): ResourceCursor {
+  if (!cursor) return { createdAt: '', name: '' };
   try {
     const standard = cursor.replaceAll('-', '+').replaceAll('_', '/');
     const padded = standard.padEnd(Math.ceil(standard.length / 4) * 4, '=');
     const binary = atob(padded);
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    const value = JSON.parse(new TextDecoder().decode(bytes)) as { version?: unknown; name?: unknown };
-    if (value.version !== 1 || typeof value.name !== 'string' || value.name === '') throw new Error('invalid');
-    return value.name;
+    const value = JSON.parse(new TextDecoder().decode(bytes)) as {
+      version?: unknown;
+      createdAt?: unknown;
+      name?: unknown;
+    };
+    if (
+      value.version !== 2
+      || typeof value.createdAt !== 'string'
+      || value.createdAt === ''
+      || typeof value.name !== 'string'
+      || value.name === ''
+    ) throw new Error('invalid');
+    return { createdAt: value.createdAt, name: value.name };
   } catch {
     throw new InvalidCursorError();
   }
@@ -256,11 +268,12 @@ function pageLimit(request?: PageRequest): number {
   return Math.min(requested, 200);
 }
 
-function toPage<T extends { name: string }>(rows: T[], limit: number): PageResult<T> {
+function toPage<T extends { name: string; createdAt?: string }>(rows: T[], limit: number): PageResult<T> {
   const items = rows.slice(0, limit);
+  const last = items.at(-1);
   return {
     items,
-    ...(rows.length > limit && items.length > 0 ? { nextCursor: encodeCursor(items.at(-1)!.name) } : {}),
+    ...(rows.length > limit && last?.createdAt ? { nextCursor: encodeCursor(last.createdAt, last.name) } : {}),
   };
 }
 
@@ -782,12 +795,15 @@ export function createD1ResourceRepository(
     const limit = pageLimit(page);
     const cursor = decodeCursor(page?.cursor);
     const result = await db.prepare(`SELECT name, uid, kind, source_id, display_name,
-      sku, field_group, field_status, etag, archived_at
+      sku, field_group, field_status, etag, archived_at, created_at
       FROM SOP_CATALOG_RESOURCES
-      WHERE kind = ? AND archived_at IS NULL AND name > ?
-      ORDER BY name ASC LIMIT ?`).bind(kind, cursor, limit + 1).all<Pick<CatalogRow,
+      WHERE kind = ? AND archived_at IS NULL
+        AND (? = '' OR created_at < ? OR (created_at = ? AND name > ?))
+      ORDER BY created_at DESC, name ASC LIMIT ?`).bind(
+        kind, cursor.createdAt, cursor.createdAt, cursor.createdAt, cursor.name, limit + 1,
+      ).all<Pick<CatalogRow,
         'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'sku' | 'field_group'
-        | 'field_status' | 'etag' | 'archived_at'>>();
+        | 'field_status' | 'etag' | 'archived_at' | 'created_at'>>();
     return toPage(result.results.map((row) => ({
       name: row.name,
       uid: row.uid,
@@ -799,6 +815,7 @@ export function createD1ResourceRepository(
       fieldStatus: optional(row.field_status),
       etag: row.etag,
       archivedAt: optional(row.archived_at),
+      createdAt: row.created_at,
     })), limit);
   }
 
@@ -856,6 +873,27 @@ export function createD1ResourceRepository(
     return currentRecord(row);
   }
 
+  async function getCurrentByUid(uid: string): Promise<CurrentResourceRecord | undefined> {
+    const row = (await db.prepare(`SELECT ${CURRENT_DETAIL_COLUMNS}
+      FROM SOP_CURRENT_RESOURCES WHERE uid = ?`).bind(uid).first<CurrentRow>()) ?? undefined;
+    if (!row) return undefined;
+    assertCurrentParity(row);
+    return currentRecord(row);
+  }
+
+  async function getCurrents(names: readonly string[]): Promise<CurrentResourceRecord[]> {
+    const normalized = bulkNames(names);
+    if (normalized.length === 0) return [];
+    const result = await db.prepare(`SELECT ${CURRENT_DETAIL_COLUMNS}
+      FROM SOP_CURRENT_RESOURCES
+      WHERE name IN (SELECT value FROM json_each(?))
+      ORDER BY name ASC`).bind(JSON.stringify(normalized)).all<CurrentRow>();
+    return result.results.map((row) => {
+      assertCurrentParity(row);
+      return currentRecord(row);
+    });
+  }
+
   async function listCurrent(kind: CurrentResourceKind, page?: PageRequest): Promise<PageResult<ResourceSummary>> {
     const limit = pageLimit(page);
     const cursor = decodeCursor(page?.cursor);
@@ -863,14 +901,18 @@ export function createD1ResourceRepository(
       current.display_name, current.scene_name, current.customer_name, current.robot_model_revision_name,
       current.lifecycle, current.current_revision_name, current.candidate_version_label,
       current.etag, current.archived_at, revision.version_label AS current_version_label,
-      current.project_display_name, current.deadline, current.production_item_count, current.aggregate_duration
+      current.project_display_name, current.deadline, current.production_item_count, current.aggregate_duration,
+      current.created_at
       FROM SOP_CURRENT_RESOURCES AS current
       LEFT JOIN SOP_REVISIONS AS revision ON revision.name = current.current_revision_name
-      WHERE current.kind = ? AND current.archived_at IS NULL AND current.name > ?
-      ORDER BY current.name ASC LIMIT ?`).bind(kind, cursor, limit + 1).all<Pick<CurrentRow,
+      WHERE current.kind = ? AND current.archived_at IS NULL
+        AND (? = '' OR current.created_at < ? OR (current.created_at = ? AND current.name > ?))
+      ORDER BY current.created_at DESC, current.name ASC LIMIT ?`).bind(
+        kind, cursor.createdAt, cursor.createdAt, cursor.createdAt, cursor.name, limit + 1,
+      ).all<Pick<CurrentRow,
         'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'scene_name' | 'customer_name'
         | 'robot_model_revision_name' | 'lifecycle' | 'current_revision_name' | 'candidate_version_label'
-        | 'etag' | 'archived_at'> & {
+        | 'etag' | 'archived_at' | 'created_at'> & {
           current_version_label: string | null;
           project_display_name: string | null;
           deadline: string | null;
@@ -896,6 +938,7 @@ export function createD1ResourceRepository(
       aggregateDuration: optional(row.aggregate_duration),
       etag: row.etag,
       archivedAt: optional(row.archived_at),
+      createdAt: row.created_at,
     })), limit);
   }
 
@@ -963,6 +1006,14 @@ export function createD1ResourceRepository(
 
   async function getRevision(name: string): Promise<RevisionRecord | undefined> {
     const row = await rawRevision(name);
+    if (!row) return undefined;
+    assertRevisionParity(row);
+    return revisionRecord(row);
+  }
+
+  async function getRevisionByUid(uid: string): Promise<RevisionRecord | undefined> {
+    const row = (await db.prepare(`SELECT ${REVISION_DETAIL_COLUMNS}
+      FROM SOP_REVISIONS WHERE uid = ?`).bind(uid).first<RevisionRow>()) ?? undefined;
     if (!row) return undefined;
     assertRevisionParity(row);
     return revisionRecord(row);
@@ -1627,11 +1678,14 @@ export function createD1ResourceRepository(
     updateCatalog: (name, expectedEtag, input) => writeCatalog(name, expectedEtag, input, false),
     archiveCatalog: (name, expectedEtag, input) => writeCatalog(name, expectedEtag, input, true),
     getCurrent,
+    getCurrentByUid,
+    getCurrents,
     listCurrent,
     createCurrent,
     updateCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, false),
     archiveCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, true),
     getRevision,
+    getRevisionByUid,
     getRevisions,
     listRevisions,
     createRevision,

@@ -171,14 +171,23 @@ test('Material attachment upload and unlink are both triggered from the page', a
   // A full reload clears the in-memory attachment cache. Re-enter through the
   // authenticated material list and prove the persisted reference hydrates
   // its owner-scoped metadata before driving unlink.
-  await page.reload();
-  await expect(page.getByRole('heading', { name: '物料信息' })).toBeVisible();
-  await page.getByPlaceholder('搜索物料名称、编号或字段').fill(sku);
   const metadataResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === `${attachmentPath}/${encodeURIComponent(initialized.uid)}` &&
     response.request().method() === 'GET');
-  await page.getByRole('table').getByRole('button', { name: anchoredRowName(sku) }).click();
+  await page.reload();
   expect((await metadataResponse).status()).toBe(200);
+  await expect(page.getByRole('heading', { name: '物料信息' })).toBeVisible();
+  await page.getByPlaceholder('搜索物料名称、编号或字段').fill(sku);
+  const materialTable = page.getByRole('table');
+  const listThumbnail = materialTable.locator('button.attachment-preview-thumb');
+  await expect(listThumbnail).toBeVisible();
+  await expect(listThumbnail.locator('img')).toHaveAttribute('alt', filename);
+  await listThumbnail.click();
+  const previewDialog = page.getByRole('dialog', { name: `预览：${filename}` });
+  await expect(previewDialog).toBeVisible();
+  await expect(previewDialog).not.toContainText('1970-01-01');
+  await previewDialog.getByRole('button', { name: '关闭' }).click();
+  await materialTable.getByRole('button', { name: anchoredRowName(sku) }).click();
   dialog = page.getByRole('dialog', { name: '物料详情' });
   const attachmentName = dialog.locator('button.attachment-name-button', { hasText: filename });
   await expect(attachmentName).toBeVisible();

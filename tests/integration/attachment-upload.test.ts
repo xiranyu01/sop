@@ -123,7 +123,8 @@ class MemoryAttachmentState implements AttachmentStateStore {
 }
 
 class FakeAttachmentProvider implements Pick<AttachmentObjectStore,
-  'createAttachmentUpload' | 'uploadAttachmentPart' | 'completeAttachmentUpload' | 'abortAttachmentUpload' | 'headAttachment'> {
+  'createAttachmentUpload' | 'createAttachmentPartUploadUrl' | 'uploadAttachmentPart' |
+  'completeAttachmentUpload' | 'abortAttachmentUpload' | 'headAttachment'> {
   readonly uploads = new Map<string, { key: string; parts: Map<number, { body: ArrayBuffer; etag: string }> }>();
   readonly objects = new Map<string, number>();
   createCalls = 0;
@@ -152,6 +153,15 @@ class FakeAttachmentProvider implements Pick<AttachmentObjectStore,
     const etag = `etag-${input.partNumber}-${input.body.byteLength}`;
     upload.parts.set(input.partNumber, { body: input.body, etag });
     return { etag };
+  }
+
+  async createAttachmentPartUploadUrl(input: { storageKey: string; uploadId: string; partNumber: number; expiresInSeconds: number }) {
+    const upload = this.uploads.get(input.uploadId);
+    if (!upload || upload.key !== input.storageKey) throw new Error('provider upload mismatch');
+    return {
+      uploadUrl: `https://r2.example.test/${input.storageKey}?partNumber=${input.partNumber}&uploadId=${input.uploadId}`,
+      expiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString(),
+    };
   }
 
   async completeAttachmentUpload(input: AttachmentCompleteInput) {
@@ -383,6 +393,44 @@ describe('lightweight attachment upload boundary', () => {
     expect(mismatched.state.partReservations.size).toBe(0);
   });
 
+  it('signs a direct part upload and records its receipt without proxying bytes through the service', async () => {
+    const { service, state, provider } = fixture('attachment-direct');
+    const initialized = await service.initialize({
+      owner,
+      filename: 'direct.bin',
+      mediaType: 'application/octet-stream',
+      sizeBytes: 4,
+    });
+    expect(initialized.uploadMode).toBe('direct');
+    await expect(service.createPartUploadUrl({ owner, uid: initialized.uid, partNumber: 1 })).resolves.toMatchObject({
+      uploadUrl: expect.stringContaining('partNumber=1'),
+    });
+
+    // This provider call represents the browser PUT to the presigned R2 URL.
+    const uploaded = await provider.uploadAttachmentPart({
+      storageKey: initialized.objectKey,
+      uploadId: initialized.uploadId,
+      partNumber: 1,
+      body: new ArrayBuffer(4),
+    });
+    await expect(service.recordDirectPart({
+      owner,
+      uid: initialized.uid,
+      partNumber: 1,
+      etag: uploaded.etag,
+      sizeBytes: 4,
+    })).resolves.toEqual({ partNumber: 1, etag: uploaded.etag, sizeBytes: 4 });
+    await expect(service.recordDirectPart({
+      owner,
+      uid: initialized.uid,
+      partNumber: 1,
+      etag: uploaded.etag,
+      sizeBytes: 4,
+    })).resolves.toEqual({ partNumber: 1, etag: uploaded.etag, sizeBytes: 4 });
+    expect((await state.getUpload(initialized.uid))?.parts).toHaveLength(1);
+    await expect(service.complete({ owner, uid: initialized.uid })).resolves.toMatchObject({ uid: initialized.uid });
+  });
+
   it('releases its exact reservation after persistent receipt persistence failure', async () => {
     const { service, state, provider } = fixture('attachment-part-persistent');
     const initialized = await service.initialize({
@@ -518,6 +566,7 @@ describe('D1 attachment state', () => {
       uid: initialized.uid,
       objectKey: initialized.objectKey,
       publicUrl: 'https://assets.example.test/persisted.bin',
+      uploadedAt: '2026-07-14T10:01:00.000Z',
       metadata: { purpose: 'restart-test' },
     });
     await expect(restartedState.completeUpload(initialized.uid, initialized.uploadId, completed))
@@ -531,6 +580,7 @@ describe('D1 attachment state', () => {
       owner,
       uid: initialized.uid,
       sizeBytes: 4,
+      uploadedAt: '2026-07-14T10:01:00.000Z',
     });
     expect(db.database.prepare('SELECT count(*) AS count FROM SOP_ATTACHMENT_UPLOADS').get()).toEqual({ count: 0 });
     expect(db.database.prepare('SELECT count(*) AS count FROM SOP_ATTACHMENT_METADATA').get()).toEqual({ count: 1 });
@@ -660,10 +710,11 @@ describe('owner-scoped attachment resource API', () => {
       }),
     });
     expect(initializedResponse.status).toBe(201);
-    const initialized = await initializedResponse.json() as { uid: string; objectKey: string };
+    const initialized = await initializedResponse.json() as { uid: string; objectKey: string; uploadId: string; uploadMode: string };
     expect(initialized).toMatchObject({
       uid: '00000000-0000-4000-8000-000000000001',
       objectKey: `attachments/material/${root.uid}/00000000-0000-4000-8000-000000000001`,
+      uploadMode: 'direct',
     });
 
     let streamedChunks = 0;
@@ -726,6 +777,30 @@ describe('owner-scoped attachment resource API', () => {
     const metadata = await request(`/${initialized.uid}`);
     expect(metadata.status).toBe(200);
     await expect(metadata.json()).resolves.toMatchObject({ uid: initialized.uid, metadata: { label: 'trace' } });
+
+    const directInitResponse = await request('', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: 'direct.bin', mediaType: 'application/octet-stream', sizeBytes: 4 }),
+    });
+    const directInit = await directInitResponse.json() as { uid: string; objectKey: string; uploadId: string };
+    const uploadUrl = await request(`/${directInit.uid}/parts/1/upload-url`, { method: 'POST' });
+    expect(uploadUrl.status).toBe(200);
+    await expect(uploadUrl.json()).resolves.toMatchObject({ uploadUrl: expect.stringContaining('partNumber=1') });
+    const directProviderPart = await provider.uploadAttachmentPart({
+      storageKey: directInit.objectKey,
+      uploadId: directInit.uploadId,
+      partNumber: 1,
+      body: new ArrayBuffer(4),
+    });
+    const directReceipt = await request(`/${directInit.uid}/parts/1/receipt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ etag: directProviderPart.etag, sizeBytes: 4 }),
+    });
+    expect(directReceipt.status).toBe(200);
+    await expect(directReceipt.json()).resolves.toEqual({ partNumber: 1, etag: directProviderPart.etag, sizeBytes: 4 });
+    expect((await request(`/${directInit.uid}/complete`, { method: 'POST' })).status).toBe(200);
 
     const unlinked = await request(`/${initialized.uid}`, { method: 'DELETE' });
     expect(unlinked.status).toBe(204);

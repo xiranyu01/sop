@@ -1,6 +1,7 @@
 export type ApiErrorKind =
   | 'UNAUTHORIZED'
   | 'VALIDATION'
+  | 'ALREADY_EXISTS'
   | 'STALE_RESOURCE'
   | 'DEPENDENCY_CHANGED'
   | 'ROW_SIZE_REJECTED'
@@ -43,4 +44,3 @@ export function isApiErrorBody(value: unknown): value is ApiErrorBody {
     typeof (error as { kind?: unknown }).kind === 'string' &&
     typeof (error as { message?: unknown }).message === 'string');
 }
-

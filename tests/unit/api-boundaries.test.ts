@@ -55,7 +55,7 @@ describe('resource API boundaries', () => {
     await expect(client.list('materials')).resolves.toEqual({ items: [] });
   });
 
-  it('keeps attachment upload state owner-scoped and uploads binary parts directly', async () => {
+  it('keeps the binary proxy path as a fallback when direct upload is unavailable', async () => {
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
       status,
       headers: { 'content-type': 'application/json' },
@@ -63,7 +63,7 @@ describe('resource API boundaries', () => {
     const requestFetch = vi.fn()
       .mockResolvedValueOnce(json({
         uid: 'attachment-1', uploadId: 'upload-1', objectKey: 'server/allocated',
-        partSizeBytes: 10, partCount: 1, maxSizeBytes: 100,
+        partSizeBytes: 10, partCount: 1, maxSizeBytes: 100, uploadMode: 'proxy',
       }, 201))
       .mockResolvedValueOnce(json({ partNumber: 1, etag: 'part-etag', sizeBytes: 4 }))
       .mockResolvedValueOnce(json({
@@ -99,5 +99,34 @@ describe('resource API boundaries', () => {
     expect(requestFetch.mock.calls[1][1].body).toBe(chunk);
     expect(requestFetch.mock.calls[1][1].headers.get('content-type')).toBe('application/octet-stream');
     expect(requestFetch.mock.calls[1][1].headers.get('authorization')).toBe('Bearer secret');
+  });
+
+  it('uploads attachment bytes to a presigned R2 URL without sending the app password', async () => {
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+    const requestFetch = vi.fn()
+      .mockResolvedValueOnce(json({ uploadUrl: 'https://r2.example.test/signed', expiresAt: '2026-07-15T00:15:00.000Z' }))
+      .mockResolvedValueOnce(new Response(null, { headers: { etag: '"direct-etag"' } }))
+      .mockResolvedValueOnce(json({ partNumber: 1, etag: '"direct-etag"', sizeBytes: 4 }));
+    const client = new ApiClient({ baseUrl: 'https://sop.test', getPassword: () => 'secret', fetch: requestFetch });
+    const chunk = new Blob(['test'], { type: 'image/png' });
+
+    const signed = await client.createAttachmentPartUploadUrl('materials', 'materials/cup', 'attachment-1', 1);
+    const etag = await client.uploadAttachmentPartDirect(signed.uploadUrl, chunk);
+    await client.recordDirectAttachmentPart('materials', 'materials/cup', 'attachment-1', 1, {
+      etag,
+      sizeBytes: chunk.size,
+    });
+
+    expect(requestFetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://sop.test/api/resources/materials/materials%2Fcup/attachments/attachment-1/parts/1/upload-url',
+      'https://r2.example.test/signed',
+      'https://sop.test/api/resources/materials/materials%2Fcup/attachments/attachment-1/parts/1/receipt',
+    ]);
+    expect(requestFetch.mock.calls[1][1].headers).toBeUndefined();
+    expect(requestFetch.mock.calls[1][1].body).toBe(chunk);
+    expect(requestFetch.mock.calls[2][1].headers.get('authorization')).toBe('Bearer secret');
   });
 });

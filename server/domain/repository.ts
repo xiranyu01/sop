@@ -33,6 +33,7 @@ export type ResourceSummary = {
   productionItemCount?: number;
   aggregateDuration?: string;
   currentRevisionName?: string;
+  createdAt?: string;
 };
 
 export type CatalogResourceRecord = ResourceSummary & {
@@ -247,12 +248,15 @@ export interface ResourceRepository {
   archiveCatalog(name: string, expectedEtag: string, input: ResourceWriteInput): Promise<CatalogResourceRecord>;
 
   getCurrent(name: string): Promise<CurrentResourceRecord | undefined>;
+  getCurrentByUid(uid: string): Promise<CurrentResourceRecord | undefined>;
+  getCurrents(names: readonly string[]): Promise<CurrentResourceRecord[]>;
   listCurrent(kind: CurrentResourceKind, page?: PageRequest): Promise<PageResult<ResourceSummary>>;
   createCurrent(input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
   updateCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
   archiveCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
 
   getRevision(name: string): Promise<RevisionRecord | undefined>;
+  getRevisionByUid(uid: string): Promise<RevisionRecord | undefined>;
   getRevisions(names: readonly string[]): Promise<RevisionRecord[]>;
   listRevisions(ownerName: string, page?: PageRequest): Promise<PageResult<RevisionSummary>>;
   createRevision(input: RevisionWriteInput): Promise<RevisionRecord>;

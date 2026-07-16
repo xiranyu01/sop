@@ -185,6 +185,7 @@ message Requirement {
     (google.api.field_behavior) = OUTPUT_ONLY,
     (buf.validate.field).string.pattern = "^[a-f0-9]{64}$"
   ];
+  google.protobuf.Timestamp candidate_create_time = 17 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // RequirementRevision is an immutable historical snapshot of a Requirement.

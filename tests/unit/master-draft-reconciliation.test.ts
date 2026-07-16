@@ -7,6 +7,7 @@ type Draft = {
   __resourceName?: string;
   __resourceEtag?: string;
   __resourceLoaded?: boolean;
+  __resourceCreatedAt?: string;
   __resourceDraftSyncToken?: number;
 };
 
@@ -57,5 +58,16 @@ describe('master editor draft reconciliation', () => {
     expect(replaced).toEqual([first, updated, last]);
     expect(replaceResourceInPlace(replaced, bound('materials/new', 'new', true)))
       .toEqual([first, updated, last, bound('materials/new', 'new', true)]);
+  });
+
+  it('places a newly created resource by creation time without waiting for a refresh', () => {
+    const older = Object.assign(bound('materials/older', 'older', true), {
+      __resourceCreatedAt: '2026-07-14T10:00:00.000Z',
+    });
+    const newer = Object.assign(bound('materials/newer', 'newer', true), {
+      __resourceCreatedAt: '2026-07-15T10:00:00.000Z',
+    });
+
+    expect(replaceResourceInPlace([older], newer)).toEqual([newer, older]);
   });
 });

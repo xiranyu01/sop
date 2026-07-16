@@ -40,9 +40,13 @@ describe('resource save queue registry', () => {
       removeEventListener: vi.fn((name: string) => listeners.delete(name)),
     };
     const uninstall = registry.installNavigationWarning(target as unknown as Window);
-    const event = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    const event = {
+      preventDefault: vi.fn(),
+      returnValue: true,
+    } as unknown as BeforeUnloadEvent;
     listeners.get('beforeunload')?.(event);
-    expect(event.defaultPrevented).toBe(true);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.returnValue).toBe('');
     expect(registry.remove('materials/cup')).toBe(false);
     uninstall();
     expect(target.removeEventListener).toHaveBeenCalled();

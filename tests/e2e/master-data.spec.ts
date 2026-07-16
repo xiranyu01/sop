@@ -91,10 +91,10 @@ test('new material shows its SKU and stages an image until save', async ({ page,
   await page.getByRole('button', { name: /^物料\s+\d+$/ }).click();
   await page.getByRole('button', { name: '新建物料' }).click();
   const dialog = page.getByRole('dialog', { name: '物料详情' });
-  await expect(dialog.getByLabel('物料类型')).toBeFocused();
+  await expect(dialog.getByLabel('物料名称')).toBeFocused();
   const sku = await dialog.getByLabel('SKU 编号').inputValue();
   expect(sku).toMatch(/^SKU\d{3,}$/);
-  await dialog.getByLabel('物料类型').fill(type);
+  await dialog.getByLabel('物料名称').fill(type);
 
   await dialog.locator('input[type="file"]').setInputFiles({
     name: 'before-save.png',
@@ -138,8 +138,14 @@ test('RobotModel edit is submitted by the page and persists through the resource
 
   await openAuthenticated(page);
   await page.getByRole('button', { name: /^机器型号\s+\d+$/ }).click();
+  await expect(page).toHaveURL(/\/robot-models$/);
+  await page.reload();
   await page.getByPlaceholder('搜索机器型号名称、编号或字段').fill(modelCode);
-  await page.getByRole('table').getByRole('button').first().click();
+  const robotRow = page.getByRole('table').getByRole('button').first();
+  await expect(robotRow).toContainText('E2E');
+  await expect(robotRow).toContainText('基线末端');
+  await expect(robotRow).toContainText('1');
+  await robotRow.click();
   const dialog = page.getByRole('dialog', { name: '机器型号详情' });
   await expect(dialog).toBeVisible();
   await page.locator('.modal-backdrop').click({ position: { x: 5, y: 5 } });
@@ -192,6 +198,32 @@ test('GlobalField edit is submitted by the field dialog and persists', async ({ 
   await expect(getResource(request, 'globalFields', field.name)).resolves.toMatchObject({
     resource: { label, description },
   });
+});
+
+test('GlobalField allows the same label in different groups and closes only after save succeeds', async ({ page, request }, testInfo) => {
+  const label = `E2E 后侧 R${testInfo.retry}`;
+  await createResource(request, 'globalFields', {
+    group: 'GLOBAL_FIELD_GROUP_RELATIVE_POSITION',
+    label,
+    value: label,
+    status: 'GLOBAL_FIELD_STATUS_ACTIVE',
+  });
+
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^全局字段\s+\d+$/ }).click();
+  await page.getByRole('button', { name: /^区域\s+\d+$/ }).click();
+  await page.getByRole('button', { name: '新建字段' }).click();
+  const dialog = page.getByRole('dialog', { name: '字段详情' });
+  await dialog.getByLabel('字段分组').selectOption('region');
+  await dialog.getByLabel('字段名称').fill(label);
+
+  const createResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === resourcePath('globalFields') &&
+    response.request().method() === 'POST');
+  await dialog.getByRole('button', { name: '保存字段' }).click();
+  expect((await createResponse).status()).toBe(201);
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('table').getByRole('button', { name: anchoredRowName(label) })).toBeVisible();
 });
 
 test('resource APIs allocate identity, use ETags, project summaries, and append RobotModel revisions', async ({ request }, testInfo) => {

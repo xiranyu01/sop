@@ -39,6 +39,7 @@ export type ResourceSummary = {
   deadline?: string;
   productionItemCount?: number;
   aggregateDuration?: string;
+  createdAt?: string;
   /** List-visible fields for compact catalog resources such as customers, materials, and global fields. */
   listView?: JsonValue;
   archived: boolean;
@@ -64,6 +65,7 @@ export type RevisionSummary = {
   lifecycle: string;
   exportEligible: boolean;
   sourceVersionId?: string;
+  createdAt?: string;
 };
 
 export type RevisionDetail = RevisionSummary & {
@@ -71,6 +73,14 @@ export type RevisionDetail = RevisionSummary & {
   kind: 'ROBOT_MODEL_REVISION' | 'TASK_SOP_REVISION' | 'REQUIREMENT_REVISION';
   previousRevisionName?: string;
   resource: JsonValue;
+};
+
+export type VersionRouteTarget = {
+  kind: 'requirements' | 'taskSops';
+  ownerName: string;
+  versionLabel: string;
+  versionUid: string;
+  draft: boolean;
 };
 
 export type DependencyChange = {

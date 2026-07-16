@@ -9,6 +9,15 @@ export type AttachmentPartInput = {
   partNumber: number;
   body: ArrayBuffer;
 };
+
+export type AttachmentPartUploadUrlInput = Omit<AttachmentPartInput, 'body'> & {
+  expiresInSeconds: number;
+};
+
+export type AttachmentPartUploadUrlOutput = {
+  uploadUrl: string;
+  expiresAt: string;
+};
 export type AttachmentPartOutput = { etag: string };
 export type AttachmentCompleteInput = {
   storageKey: string;
@@ -99,6 +108,7 @@ export function assertExpectedObjectSize(metadata: AttachmentObjectMetadata | nu
 /** Owns object bytes only. Domain metadata and references belong in AppStore. */
 export interface AttachmentObjectStore {
   createAttachmentUpload(input: AttachmentUploadInput): Promise<AttachmentUploadSession>;
+  createAttachmentPartUploadUrl?(input: AttachmentPartUploadUrlInput): Promise<AttachmentPartUploadUrlOutput>;
   uploadAttachmentPart(input: AttachmentPartInput): Promise<AttachmentPartOutput>;
   completeAttachmentUpload(input: AttachmentCompleteInput): Promise<void>;
   abortAttachmentUpload(input: AttachmentAbortInput): Promise<void>;

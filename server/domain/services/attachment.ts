@@ -3,6 +3,7 @@ import type { AttachmentObjectStore } from '../attachmentObjectStore';
 export const ATTACHMENT_PART_BYTES = 10 * 1024 * 1024;
 export const ATTACHMENT_MAX_PARTS = 10;
 export const ATTACHMENT_TOTAL_MAX_BYTES = ATTACHMENT_PART_BYTES * ATTACHMENT_MAX_PARTS;
+export const ATTACHMENT_UPLOAD_URL_TTL_SECONDS = 15 * 60;
 export const ATTACHMENT_FILENAME_MAX_BYTES = 255;
 export const ATTACHMENT_METADATA_MAX_BYTES = 16 * 1024;
 
@@ -17,6 +18,8 @@ export type AttachmentPartReceipt = {
   sizeBytes: number;
 };
 
+export type DirectAttachmentPartReceiptInput = AttachmentIdentityInput & AttachmentPartReceipt;
+
 export type AttachmentUploadSession = {
   owner: AttachmentOwner;
   uid: string;
@@ -30,7 +33,9 @@ export type AttachmentUploadSession = {
   parts: AttachmentPartReceipt[];
 };
 
-export type AttachmentMetadata = Omit<AttachmentUploadSession, 'uploadId' | 'parts'>;
+export type AttachmentMetadata = Omit<AttachmentUploadSession, 'uploadId' | 'parts'> & {
+  uploadedAt?: string;
+};
 
 /**
  * Persistence is deliberately narrow: upload session state and completed
@@ -54,7 +59,8 @@ export interface AttachmentStateStore {
 }
 
 export type AttachmentByteProvider = Pick<AttachmentObjectStore,
-  'createAttachmentUpload' | 'uploadAttachmentPart' | 'completeAttachmentUpload' | 'abortAttachmentUpload' | 'headAttachment'>;
+  'createAttachmentUpload' | 'createAttachmentPartUploadUrl' | 'uploadAttachmentPart' |
+  'completeAttachmentUpload' | 'abortAttachmentUpload' | 'headAttachment'>;
 
 export type InitializeAttachmentInput = {
   owner: AttachmentOwner;
@@ -246,6 +252,16 @@ function partReceiptsMatch(left: AttachmentPartReceipt, right: AttachmentPartRec
   return left.partNumber === right.partNumber && left.etag === right.etag && left.sizeBytes === right.sizeBytes;
 }
 
+function validateDirectPartReceipt(receipt: AttachmentPartReceipt, expectedBytes: number): void {
+  if (!Number.isInteger(receipt.partNumber) || receipt.partNumber < 1 || receipt.partNumber > ATTACHMENT_MAX_PARTS) {
+    throw boundaryError('attachment part number is invalid');
+  }
+  if (receipt.sizeBytes !== expectedBytes) throw boundaryError(`part ${receipt.partNumber} size is invalid`);
+  if (!receipt.etag || receipt.etag.length > 1024 || /[\u0000-\u001f\u007f]/.test(receipt.etag)) {
+    throw boundaryError(`part ${receipt.partNumber} ETag is invalid`);
+  }
+}
+
 async function releasePartReservation(
   state: AttachmentStateStore,
   upload: AttachmentUploadSession,
@@ -359,8 +375,56 @@ export function createAttachmentService(options: {
         partSizeBytes: ATTACHMENT_PART_BYTES,
         partCount: expectedPartCount(input.sizeBytes),
         maxSizeBytes: ATTACHMENT_TOTAL_MAX_BYTES,
+        uploadMode: options.provider.createAttachmentPartUploadUrl ? 'direct' : 'proxy',
         publicUrl,
       };
+    },
+
+    async createPartUploadUrl(input: AttachmentIdentityInput & { partNumber: number }) {
+      assertNoClientObjectKey(input);
+      const upload = await requireUpload(options.state, input);
+      const partCount = expectedPartCount(upload.sizeBytes);
+      if (!Number.isInteger(input.partNumber) || input.partNumber < 1 || input.partNumber > partCount) {
+        throw boundaryError(`part number must be between 1 and ${partCount}`);
+      }
+      if (upload.parts.some((part) => part.partNumber === input.partNumber)) {
+        throw boundaryError(`part ${input.partNumber} was already uploaded`);
+      }
+      if (!options.provider.createAttachmentPartUploadUrl) {
+        throw boundaryError('direct attachment upload is not available');
+      }
+      return options.provider.createAttachmentPartUploadUrl({
+        storageKey: upload.objectKey,
+        uploadId: upload.uploadId,
+        partNumber: input.partNumber,
+        expiresInSeconds: ATTACHMENT_UPLOAD_URL_TTL_SECONDS,
+      });
+    },
+
+    async recordDirectPart(input: DirectAttachmentPartReceiptInput): Promise<AttachmentPartReceipt> {
+      assertNoClientObjectKey(input);
+      const upload = await requireUpload(options.state, input);
+      const partCount = expectedPartCount(upload.sizeBytes);
+      if (!Number.isInteger(input.partNumber) || input.partNumber < 1 || input.partNumber > partCount) {
+        throw boundaryError(`part number must be between 1 and ${partCount}`);
+      }
+      const expectedBytes = expectedPartBytes(upload.sizeBytes, input.partNumber);
+      const receipt = { partNumber: input.partNumber, etag: input.etag, sizeBytes: input.sizeBytes };
+      validateDirectPartReceipt(receipt, expectedBytes);
+      const existing = upload.parts.find((part) => part.partNumber === input.partNumber);
+      if (existing) {
+        if (partReceiptsMatch(existing, receipt)) return existing;
+        throw boundaryError(`stored receipt for part ${input.partNumber} does not match the direct upload`);
+      }
+      const reservationToken = crypto.randomUUID();
+      if (!await options.state.reservePart(upload.uid, upload.uploadId, input.partNumber, reservationToken)) {
+        const current = await options.state.getUpload(upload.uid);
+        const raced = current?.parts.find((part) => part.partNumber === input.partNumber);
+        if (raced && partReceiptsMatch(raced, receipt)) return raced;
+        throw boundaryError(`part ${input.partNumber} is already being recorded`);
+      }
+      await persistPartReceipt(options.state, upload, reservationToken, receipt);
+      return receipt;
     },
 
     async uploadPart(input: UploadAttachmentPartInput): Promise<AttachmentPartReceipt> {
@@ -440,7 +504,7 @@ export function createAttachmentService(options: {
         if (completed) return completed;
         throw error;
       }
-      return metadata;
+      return await completedAttachment(options.state, input) ?? metadata;
     },
 
     async abort(input: AttachmentIdentityInput): Promise<void> {

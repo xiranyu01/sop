@@ -224,6 +224,7 @@ export interface SubsceneVersion {
   version: string;
   versionId?: string;
   parentVersionId?: string;
+  createdAt?: string;
   status: EntityStatus;
   title: string;
   sceneName?: string;
@@ -339,6 +340,7 @@ export interface RequirementVersion {
   version: string;
   versionId?: string;
   parentVersionId?: string;
+  createdAt?: string;
   status: EntityStatus;
   title: string;
   projectName: string;

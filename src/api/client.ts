@@ -8,6 +8,7 @@ import type {
   ResourcePage,
   RevisionDetail,
   RevisionSummary,
+  VersionRouteTarget,
 } from '../../shared/transport/resourceDto';
 
 export type { ConfirmationResult } from '../../shared/transport/resourceDto';
@@ -47,7 +48,13 @@ export type AttachmentUploadSession = {
   partSizeBytes: number;
   partCount: number;
   maxSizeBytes: number;
+  uploadMode: 'direct' | 'proxy';
   publicUrl?: string;
+};
+
+export type AttachmentPartUploadUrl = {
+  uploadUrl: string;
+  expiresAt: string;
 };
 
 export type AttachmentPartReceipt = {
@@ -66,6 +73,7 @@ export type AttachmentMetadata = {
   publicUrl?: string;
   metadata: Record<string, unknown>;
   name?: string;
+  uploadedAt?: string;
 };
 
 export class ApiClientError extends Error {
@@ -190,6 +198,10 @@ export class ApiClient {
     return this.request(`/api/revisions/${encodeURIComponent(name)}`);
   }
 
+  resolveVersionRoute(uid: string): Promise<VersionRouteTarget> {
+    return this.request(`/api/version-routes/${encodeURIComponent(uid)}`);
+  }
+
   startDraft(
     kind: 'taskSops' | 'requirements',
     name: string,
@@ -259,6 +271,42 @@ export class ApiClient {
     return this.requestBinary(
       `${this.attachmentBase(kind, ownerName)}/${encodeURIComponent(uid)}/parts/${partNumber}`,
       body,
+    );
+  }
+
+  createAttachmentPartUploadUrl(
+    kind: AttachmentOwnerResourceKind,
+    ownerName: string,
+    uid: string,
+    partNumber: number,
+  ): Promise<AttachmentPartUploadUrl> {
+    return this.request(
+      `${this.attachmentBase(kind, ownerName)}/${encodeURIComponent(uid)}/parts/${partNumber}/upload-url`,
+      { method: 'POST' },
+    );
+  }
+
+  async uploadAttachmentPartDirect(uploadUrl: string, body: Blob): Promise<string> {
+    const response = await this.requestFetch(uploadUrl, { method: 'PUT', body });
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).slice(0, 240);
+      throw new Error(`R2 直传失败（HTTP ${response.status}）${detail ? `：${detail}` : ''}`);
+    }
+    const etag = response.headers.get('etag');
+    if (!etag) throw new Error('R2 直传成功，但响应中缺少 ETag；请检查 Bucket CORS 的 ExposeHeaders');
+    return etag;
+  }
+
+  recordDirectAttachmentPart(
+    kind: AttachmentOwnerResourceKind,
+    ownerName: string,
+    uid: string,
+    partNumber: number,
+    receipt: { etag: string; sizeBytes: number },
+  ): Promise<AttachmentPartReceipt> {
+    return this.request(
+      `${this.attachmentBase(kind, ownerName)}/${encodeURIComponent(uid)}/parts/${partNumber}/receipt`,
+      { method: 'POST', body: receipt },
     );
   }
 

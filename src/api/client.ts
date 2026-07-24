@@ -98,6 +98,8 @@ type PaginationOptions = {
   pageSize?: number;
   cursor?: string;
   signal?: AbortSignal;
+  view?: 'active' | 'archived';
+  query?: string;
 };
 
 export class ApiClient {
@@ -117,6 +119,8 @@ export class ApiClient {
     const query = new URLSearchParams();
     if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
     if (options.cursor) query.set('cursor', options.cursor);
+    if (options.view === 'archived') query.set('view', 'archived');
+    if (options.query?.trim()) query.set('q', options.query.trim());
     return this.request(`/api/resources/${kind}${query.size ? `?${query}` : ''}`, { signal: options.signal });
   }
 
@@ -126,7 +130,7 @@ export class ApiClient {
    */
   async *listPages(
     kind: ResourceKind,
-    options: { pageSize?: number; signal?: AbortSignal } = {},
+    options: { pageSize?: number; signal?: AbortSignal; view?: 'active' | 'archived'; query?: string } = {},
   ): AsyncGenerator<ResourcePage, void, void> {
     yield* this.paginate(
       (cursor) => this.list(kind, { ...options, cursor }),
@@ -152,6 +156,16 @@ export class ApiClient {
     return this.request(`/api/resources/${kind}/${encodeURIComponent(name)}/archive`, {
       method: 'POST', body: { expectedEtag },
     });
+  }
+
+  restore(kind: 'requirements' | 'taskSops', name: string, expectedEtag: string): Promise<ResourceMutationResult> {
+    return this.request(`/api/resources/${kind}/${encodeURIComponent(name)}/restore`, {
+      method: 'POST', body: { expectedEtag },
+    });
+  }
+
+  replaceGlobalFields(resources: JsonValue[]): Promise<{ importedCount: number }> {
+    return this.request('/api/resources/globalFields/import', { method: 'POST', body: { resources } });
   }
 
   revisions(

@@ -8,6 +8,7 @@ import type {
   CatalogResourceRecord,
   CurrentResourceKind,
   CurrentResourceRecord,
+  CurrentArchiveState,
   CurrentResourceWriteInput,
   ExportBundleRecord,
   ExportBundleWriteInput,
@@ -114,6 +115,28 @@ type CurrentRow = {
   created_at: string;
   updated_at: string;
 };
+
+type CurrentArchiveRow = {
+  resource_name: string;
+  resource_kind: 'TASK_SOP' | 'REQUIREMENT';
+  archived_from_lifecycle: CurrentArchiveState['archivedFromLifecycle'];
+  candidate_version_sequence: number | null;
+  candidate_version_label: string | null;
+  candidate_source_version_id: string | null;
+  archived_at: string;
+};
+
+type ArchivedCurrentListRow = Pick<CurrentRow,
+  'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'scene_name' | 'customer_name'
+  | 'robot_model_revision_name' | 'current_revision_name' | 'etag' | 'archived_at' | 'created_at'
+  | 'project_display_name' | 'deadline' | 'production_item_count' | 'aggregate_duration'> & {
+    current_version_label: string | null;
+    archived_from_lifecycle: CurrentArchiveState['archivedFromLifecycle'];
+    archive_candidate_version_sequence: number | null;
+    archive_candidate_version_label: string | null;
+    archive_candidate_source_version_id: string | null;
+    archive_archived_at: string;
+  };
 
 type RevisionRow = {
   name: string;
@@ -277,6 +300,17 @@ function toPage<T extends { name: string; createdAt?: string }>(rows: T[], limit
   };
 }
 
+function toArchivedPage<T extends { name: string; archiveState?: CurrentArchiveState }>(rows: T[], limit: number): PageResult<T> {
+  const items = rows.slice(0, limit);
+  const last = items.at(-1);
+  return {
+    items,
+    ...(rows.length > limit && last?.archiveState
+      ? { nextCursor: encodeCursor(last.archiveState.archivedAt, last.name) }
+      : {}),
+  };
+}
+
 function toRevisionPage(rows: RevisionSummary[], limit: number): PageResult<RevisionSummary> {
   const items = rows.slice(0, limit);
   const last = items.at(-1);
@@ -307,7 +341,17 @@ function catalogRecord(row: CatalogRow): CatalogResourceRecord {
   };
 }
 
-function currentRecord(row: CurrentRow): CurrentResourceRecord {
+function archiveState(row: CurrentArchiveRow): CurrentArchiveState {
+  return {
+    archivedAt: row.archived_at,
+    archivedFromLifecycle: row.archived_from_lifecycle,
+    candidateVersionSequence: optional(row.candidate_version_sequence),
+    candidateVersionLabel: optional(row.candidate_version_label),
+    candidateSourceVersionId: optional(row.candidate_source_version_id),
+  };
+}
+
+function currentRecord(row: CurrentRow, archived?: CurrentArchiveState): CurrentResourceRecord {
   return {
     name: row.name,
     uid: row.uid,
@@ -331,6 +375,7 @@ function currentRecord(row: CurrentRow): CurrentResourceRecord {
     protoSchema: row.proto_schema,
     protoJson: row.proto_json,
     archivedAt: optional(row.archived_at),
+    archiveState: archived,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -834,6 +879,89 @@ export function createD1ResourceRepository(
     return record;
   }
 
+  async function replaceGlobalFields(inputs: ResourceWriteInput[]): Promise<CatalogResourceRecord[]> {
+    if (inputs.length === 0) throw new TypeError('GlobalField replacement must contain at least one resource');
+    if (inputs.length > MAX_BULK_RESOURCE_NAMES) {
+      throw new RangeError(`GlobalField replacement limit exceeded: ${inputs.length} > ${MAX_BULK_RESOURCE_NAMES}`);
+    }
+    const writeTime = now();
+    const projectedNames = inputs.map((input) => {
+      const parsed = JSON.parse(input.protoJson) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+        typeof (parsed as { name?: unknown }).name !== 'string') {
+        throw new TypeError('GlobalField replacement resource name is missing');
+      }
+      return (parsed as { name: string }).name;
+    });
+    if (new Set(projectedNames).size !== projectedNames.length) throw new TypeError('GlobalField replacement names must be unique');
+    const existing = new Map((await getCatalogs(projectedNames)).map((record) => [record.name, record]));
+    const records = inputs.map((input, index) => {
+      const record = buildCatalog({ ...input, now: writeTime, archivedAt: undefined }, existing.get(projectedNames[index])?.createdAt ?? writeTime);
+      if (record.kind !== 'GLOBAL_FIELD') throw new TypeError(`${record.name} is not a GlobalField`);
+      return record;
+    });
+    const identities = records.flatMap((record) => [record.name, record.uid, record.sourceId ? `source:${record.sourceId}` : '']);
+    const nonEmptyIdentities = identities.filter(Boolean);
+    if (new Set(nonEmptyIdentities).size !== nonEmptyIdentities.length) {
+      throw new TypeError('GlobalField replacement identities must be unique');
+    }
+
+    const payload = JSON.stringify(records.map((record) => ({
+      name: record.name,
+      uid: record.uid,
+      kind: record.kind,
+      sourceId: record.sourceId ?? null,
+      displayName: record.displayName,
+      sku: record.sku ?? null,
+      fieldGroup: record.fieldGroup ?? null,
+      fieldStatus: record.fieldStatus ?? null,
+      etag: record.etag,
+      protoSchema: record.protoSchema,
+      protoJson: record.protoJson,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    })));
+    const results = await db.batch([
+      db.prepare(`UPDATE SOP_CATALOG_RESOURCES
+        SET archived_at = ?, updated_at = ?
+        WHERE kind = 'GLOBAL_FIELD' AND archived_at IS NULL`).bind(writeTime, writeTime),
+      db.prepare(`INSERT INTO SOP_CATALOG_RESOURCES (
+        name, uid, kind, source_id, display_name, sku, field_group, field_status,
+        etag, proto_schema, proto_json, archived_at, created_at, updated_at
+      )
+      SELECT
+        json_extract(value, '$.name'),
+        json_extract(value, '$.uid'),
+        json_extract(value, '$.kind'),
+        json_extract(value, '$.sourceId'),
+        json_extract(value, '$.displayName'),
+        json_extract(value, '$.sku'),
+        json_extract(value, '$.fieldGroup'),
+        json_extract(value, '$.fieldStatus'),
+        json_extract(value, '$.etag'),
+        json_extract(value, '$.protoSchema'),
+        json_extract(value, '$.protoJson'),
+        NULL,
+        json_extract(value, '$.createdAt'),
+        json_extract(value, '$.updatedAt')
+      FROM json_each(?)
+      WHERE 1
+      ON CONFLICT(name) DO UPDATE SET
+        source_id = excluded.source_id,
+        display_name = excluded.display_name,
+        sku = excluded.sku,
+        field_group = excluded.field_group,
+        field_status = excluded.field_status,
+        etag = excluded.etag,
+        proto_schema = excluded.proto_schema,
+        proto_json = excluded.proto_json,
+        archived_at = NULL,
+        updated_at = excluded.updated_at`).bind(payload),
+    ]);
+    if (results.some((result) => result.success === false)) throw new Error('GlobalField replacement transaction failed');
+    return records;
+  }
+
   async function writeCatalog(
     name: string,
     expectedEtag: string,
@@ -866,11 +994,18 @@ export function createD1ResourceRepository(
     return record;
   }
 
+  async function getCurrentArchiveState(name: string): Promise<CurrentArchiveState | undefined> {
+    const row = (await db.prepare(`SELECT resource_name, resource_kind, archived_from_lifecycle,
+      candidate_version_sequence, candidate_version_label, candidate_source_version_id, archived_at
+      FROM SOP_CURRENT_ARCHIVES WHERE resource_name = ?`).bind(name).first<CurrentArchiveRow>()) ?? undefined;
+    return row ? archiveState(row) : undefined;
+  }
+
   async function getCurrent(name: string): Promise<CurrentResourceRecord | undefined> {
     const row = await rawCurrent(name);
     if (!row) return undefined;
     assertCurrentParity(row);
-    return currentRecord(row);
+    return currentRecord(row, row.archived_at ? await getCurrentArchiveState(name) : undefined);
   }
 
   async function getCurrentByUid(uid: string): Promise<CurrentResourceRecord | undefined> {
@@ -878,7 +1013,7 @@ export function createD1ResourceRepository(
       FROM SOP_CURRENT_RESOURCES WHERE uid = ?`).bind(uid).first<CurrentRow>()) ?? undefined;
     if (!row) return undefined;
     assertCurrentParity(row);
-    return currentRecord(row);
+    return currentRecord(row, row.archived_at ? await getCurrentArchiveState(row.name) : undefined);
   }
 
   async function getCurrents(names: readonly string[]): Promise<CurrentResourceRecord[]> {
@@ -942,6 +1077,74 @@ export function createD1ResourceRepository(
     })), limit);
   }
 
+  async function listArchivedCurrent(
+    kind: Exclude<CurrentResourceKind, 'ROBOT_MODEL'>,
+    page?: PageRequest,
+  ): Promise<PageResult<ResourceSummary>> {
+    const limit = pageLimit(page);
+    const cursor = decodeCursor(page?.cursor);
+    const query = page?.query?.trim() ?? '';
+    const pattern = `%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    const result = await db.prepare(`SELECT current.name, current.uid, current.kind, current.source_id,
+      current.display_name, current.scene_name, current.customer_name, current.robot_model_revision_name,
+      current.current_revision_name, current.etag, current.archived_at, current.created_at,
+      current.project_display_name, current.deadline, current.production_item_count, current.aggregate_duration,
+      revision.version_label AS current_version_label,
+      archive.archived_from_lifecycle,
+      archive.candidate_version_sequence AS archive_candidate_version_sequence,
+      archive.candidate_version_label AS archive_candidate_version_label,
+      archive.candidate_source_version_id AS archive_candidate_source_version_id,
+      archive.archived_at AS archive_archived_at
+      FROM SOP_CURRENT_ARCHIVES AS archive
+      JOIN SOP_CURRENT_RESOURCES AS current ON current.name = archive.resource_name
+      LEFT JOIN SOP_REVISIONS AS revision ON revision.name = current.current_revision_name
+      LEFT JOIN SOP_CATALOG_RESOURCES AS related
+        ON related.name = COALESCE(current.customer_name, current.scene_name)
+      WHERE archive.resource_kind = ? AND current.archived_at IS NOT NULL
+        AND (? = '' OR current.display_name LIKE ? ESCAPE '\\'
+          OR COALESCE(related.display_name, '') LIKE ? ESCAPE '\\'
+          OR COALESCE(current.customer_name, current.scene_name, '') LIKE ? ESCAPE '\\'
+          OR COALESCE(archive.candidate_version_label, revision.version_label, '') LIKE ? ESCAPE '\\')
+        AND (? = '' OR archive.archived_at < ? OR (archive.archived_at = ? AND current.name > ?))
+      ORDER BY archive.archived_at DESC, current.name ASC LIMIT ?`).bind(
+        kind, query, pattern, pattern, pattern, pattern,
+        cursor.createdAt, cursor.createdAt, cursor.createdAt, cursor.name, limit + 1,
+      ).all<ArchivedCurrentListRow>();
+    return toArchivedPage(result.results.map((row) => {
+      const archived = archiveState({
+        resource_name: row.name,
+        resource_kind: kind,
+        archived_from_lifecycle: row.archived_from_lifecycle,
+        candidate_version_sequence: row.archive_candidate_version_sequence,
+        candidate_version_label: row.archive_candidate_version_label,
+        candidate_source_version_id: row.archive_candidate_source_version_id,
+        archived_at: row.archive_archived_at,
+      });
+      return {
+        name: row.name,
+        uid: row.uid,
+        kind: row.kind,
+        sourceId: optional(row.source_id),
+        displayName: row.display_name,
+        sceneName: optional(row.scene_name),
+        customerName: optional(row.customer_name),
+        robotModelRevisionName: optional(row.robot_model_revision_name),
+        lifecycle: 'ARCHIVED',
+        currentRevisionName: optional(row.current_revision_name),
+        candidateVersionLabel: archived.candidateVersionLabel,
+        currentVersionLabel: optional(row.current_version_label),
+        projectDisplayName: optional(row.project_display_name),
+        deadline: optional(row.deadline),
+        productionItemCount: row.production_item_count ?? 0,
+        aggregateDuration: optional(row.aggregate_duration),
+        etag: row.etag,
+        archivedAt: optional(row.archived_at),
+        archiveState: archived,
+        createdAt: row.created_at,
+      } satisfies ResourceSummary;
+    }), limit);
+  }
+
   async function createCurrent(input: CurrentResourceWriteInput): Promise<CurrentResourceRecord> {
     const createdAt = input.now ?? now();
     const record = buildCurrent(input, createdAt);
@@ -1002,6 +1205,151 @@ export function createD1ResourceRepository(
     ).run();
     if (changes(result) !== 1) return stale(name, expectedEtag, 'SOP_CURRENT_RESOURCES');
     return record;
+  }
+
+  async function archiveCurrentForLibrary(
+    name: string,
+    expectedEtag: string,
+    input: CurrentResourceWriteInput,
+  ): Promise<CurrentResourceRecord> {
+    const stored = await getCurrent(name);
+    if (!stored) throw new ResourceNotFoundError(name);
+    if (stored.etag !== expectedEtag) throw new ResourceConflictError(name, expectedEtag, stored.etag);
+    if (stored.archivedAt || stored.archiveState) throw new Error(`Resource is already archived: ${name}`);
+    if (stored.kind === 'ROBOT_MODEL' || !['DRAFT', 'CONFIRMED'].includes(stored.lifecycle)) {
+      throw new Error(`Resource cannot enter the archive library: ${name}`);
+    }
+    if (stored.lifecycle === 'DRAFT' && (!stored.candidateVersionSequence || !stored.candidateVersionLabel)) {
+      throw new Error(`Draft archive metadata is incomplete: ${name}`);
+    }
+    const archivedAt = input.now ?? now();
+    const record = buildCurrent({ ...input, archivedAt }, stored.createdAt, stored.archivedAt);
+    if (record.lifecycle !== 'ARCHIVED') projectionError(name, ['lifecycle']);
+    const identityDifferences = projectionDifferences(
+      { name: stored.name, uid: stored.uid, kind: stored.kind },
+      { name: record.name, uid: record.uid, kind: record.kind },
+    );
+    if (identityDifferences.length > 0) projectionError(name, identityDifferences);
+    const results = await db.batch([
+      db.prepare(`INSERT INTO SOP_CURRENT_ARCHIVES (
+        resource_name, resource_kind, archived_from_lifecycle,
+        candidate_version_sequence, candidate_version_label, candidate_source_version_id, archived_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(
+        name, stored.kind, stored.lifecycle,
+        stored.lifecycle === 'DRAFT' ? stored.candidateVersionSequence ?? null : null,
+        stored.lifecycle === 'DRAFT' ? stored.candidateVersionLabel ?? null : null,
+        stored.lifecycle === 'DRAFT' ? stored.candidateSourceVersionId ?? null : null,
+        archivedAt,
+      ),
+      db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
+        source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
+        robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
+        aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
+        candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
+        reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
+        WHERE name = ? AND etag = ?`).bind(
+        record.sourceId ?? null, record.displayName, record.sceneName ?? null, record.customerName ?? null,
+        record.robotModelRevisionName ?? null, record.projectDisplayName ?? null, record.deadline ?? null,
+        record.productionItemCount ?? null, record.aggregateDuration ?? null,
+        record.lifecycle, record.candidateVersionSequence ?? null,
+        record.candidateVersionLabel ?? null, record.candidateSourceVersionId ?? null,
+        record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, record.etag,
+        record.protoSchema, record.protoJson, record.archivedAt ?? null, record.updatedAt, name, expectedEtag,
+      ),
+    ]);
+    if (results.some((result) => result.success === false) || changes(results[1]) !== 1) {
+      return stale(name, expectedEtag, 'SOP_CURRENT_RESOURCES');
+    }
+    return { ...record, archiveState: {
+      archivedAt,
+      archivedFromLifecycle: stored.lifecycle as 'DRAFT' | 'CONFIRMED',
+      candidateVersionSequence: stored.lifecycle === 'DRAFT' ? stored.candidateVersionSequence : undefined,
+      candidateVersionLabel: stored.lifecycle === 'DRAFT' ? stored.candidateVersionLabel : undefined,
+      candidateSourceVersionId: stored.lifecycle === 'DRAFT' ? stored.candidateSourceVersionId : undefined,
+    } };
+  }
+
+  async function restoreCurrentFromLibrary(
+    name: string,
+    expectedEtag: string,
+    input: CurrentResourceWriteInput,
+  ): Promise<CurrentResourceRecord> {
+    const stored = await getCurrent(name);
+    if (!stored) throw new ResourceNotFoundError(name);
+    if (stored.etag !== expectedEtag) throw new ResourceConflictError(name, expectedEtag, stored.etag);
+    const archived = stored.archiveState;
+    if (!stored.archivedAt || !archived) throw new Error(`Resource is not in the archive library: ${name}`);
+    const record = buildCurrent({ ...input, archivedAt: undefined }, stored.createdAt, undefined);
+    if (record.lifecycle !== archived.archivedFromLifecycle) projectionError(name, ['lifecycle']);
+    if (record.lifecycle === 'DRAFT' && (
+      record.candidateVersionSequence !== archived.candidateVersionSequence
+      || record.candidateVersionLabel !== archived.candidateVersionLabel
+      || record.candidateSourceVersionId !== archived.candidateSourceVersionId
+    )) projectionError(name, ['candidateVersion']);
+    const identityDifferences = projectionDifferences(
+      { name: stored.name, uid: stored.uid, kind: stored.kind },
+      { name: record.name, uid: record.uid, kind: record.kind },
+    );
+    if (identityDifferences.length > 0) projectionError(name, identityDifferences);
+    const statements = [
+      db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
+        source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
+        robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
+        aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
+        candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
+        reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = NULL, updated_at = ?
+        WHERE name = ? AND etag = ?`).bind(
+        record.sourceId ?? null, record.displayName, record.sceneName ?? null, record.customerName ?? null,
+        record.robotModelRevisionName ?? null, record.projectDisplayName ?? null, record.deadline ?? null,
+        record.productionItemCount ?? null, record.aggregateDuration ?? null,
+        record.lifecycle, record.candidateVersionSequence ?? null,
+        record.candidateVersionLabel ?? null, record.candidateSourceVersionId ?? null,
+        record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, record.etag,
+        record.protoSchema, record.protoJson, record.updatedAt, name, expectedEtag,
+      ),
+      ...(record.lifecycle === 'DRAFT'
+        ? [db.prepare('DELETE FROM SOP_REVIEWED_DEPENDENCIES WHERE root_name = ?').bind(name)]
+        : []),
+      db.prepare('DELETE FROM SOP_CURRENT_ARCHIVES WHERE resource_name = ?').bind(name),
+    ];
+    const results = await db.batch(statements);
+    if (results.some((result) => result.success === false) || changes(results[0]) !== 1) {
+      return stale(name, expectedEtag, 'SOP_CURRENT_RESOURCES');
+    }
+    return { ...record, archivedAt: undefined, archiveState: undefined };
+  }
+
+  async function findActiveRequirementReferrers(taskOwnerName: string): Promise<ResourceSummary[]> {
+    const result = await db.prepare(`SELECT DISTINCT requirement.name, requirement.uid, requirement.kind,
+      requirement.source_id, requirement.display_name, requirement.customer_name,
+      requirement.lifecycle, requirement.current_revision_name, requirement.candidate_version_label,
+      requirement.etag, requirement.archived_at, requirement.created_at,
+      requirement.project_display_name, requirement.deadline, requirement.production_item_count,
+      requirement.aggregate_duration, current_revision.version_label AS current_version_label
+      FROM SOP_CURRENT_RESOURCES AS requirement
+      JOIN json_each(requirement.proto_json, '$.spec.productionItems') AS production
+      JOIN SOP_REVISIONS AS task_revision
+        ON task_revision.name = json_extract(production.value, '$.taskSopRevision')
+      LEFT JOIN SOP_REVISIONS AS current_revision
+        ON current_revision.name = requirement.current_revision_name
+      WHERE requirement.kind = 'REQUIREMENT' AND requirement.archived_at IS NULL
+        AND task_revision.owner_name = ?
+      ORDER BY requirement.created_at DESC, requirement.name ASC LIMIT 50`).bind(taskOwnerName).all<{
+        name: string; uid: string; kind: CurrentResourceKind; source_id: string | null; display_name: string;
+        customer_name: string | null; lifecycle: CurrentResourceRecord['lifecycle']; current_revision_name: string | null;
+        candidate_version_label: string | null; etag: string; archived_at: string | null; created_at: string;
+        project_display_name: string | null; deadline: string | null; production_item_count: number | null;
+        aggregate_duration: string | null; current_version_label: string | null;
+      }>();
+    return result.results.map((row) => ({
+      name: row.name, uid: row.uid, kind: row.kind, sourceId: optional(row.source_id),
+      displayName: row.display_name, customerName: optional(row.customer_name), lifecycle: row.lifecycle,
+      currentRevisionName: optional(row.current_revision_name), candidateVersionLabel: optional(row.candidate_version_label),
+      currentVersionLabel: optional(row.current_version_label), projectDisplayName: optional(row.project_display_name),
+      deadline: optional(row.deadline), productionItemCount: row.production_item_count ?? 0,
+      aggregateDuration: optional(row.aggregate_duration), etag: row.etag,
+      archivedAt: optional(row.archived_at), createdAt: row.created_at,
+    }));
   }
 
   async function getRevision(name: string): Promise<RevisionRecord | undefined> {
@@ -1677,13 +2025,18 @@ export function createD1ResourceRepository(
     createCatalog,
     updateCatalog: (name, expectedEtag, input) => writeCatalog(name, expectedEtag, input, false),
     archiveCatalog: (name, expectedEtag, input) => writeCatalog(name, expectedEtag, input, true),
+    replaceGlobalFields,
     getCurrent,
     getCurrentByUid,
     getCurrents,
     listCurrent,
+    listArchivedCurrent,
     createCurrent,
     updateCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, false),
     archiveCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, true),
+    archiveCurrentForLibrary,
+    restoreCurrentFromLibrary,
+    findActiveRequirementReferrers,
     getRevision,
     getRevisionByUid,
     getRevisions,

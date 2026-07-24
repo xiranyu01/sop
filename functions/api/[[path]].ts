@@ -33,6 +33,7 @@ type PagesContext = {
 function operationName(method: string, pathname: string): string {
   if (pathname === '/api/health') return 'health.read';
   if (pathname === '/api/readiness') return 'readiness.read';
+  if (method === 'POST' && pathname === '/api/resources/globalFields/import') return 'global-fields.replace';
   if (/^\/api\/version-routes\/[^/]+$/.test(pathname)) return 'version-route.read';
   if (/\/export\.(?:yaml|pdf)$/.test(pathname)) return `export.${pathname.endsWith('.pdf') ? 'pdf' : 'yaml'}`;
   if (/\/attachments\/[^/]+\/parts\/[^/]+\/upload-url\/?$/.test(pathname)) return 'attachment.sign-part';
@@ -51,6 +52,7 @@ function operationName(method: string, pathname: string): string {
   if (/\/confirmations\/?$/.test(pathname)) return 'lifecycle.confirm';
   if (/\/revisions\/?$/.test(pathname)) return 'revision.list';
   if (/\/archive\/?$/.test(pathname)) return 'resource.archive';
+  if (/\/restore\/?$/.test(pathname)) return 'resource.restore';
   if (/\/drafts\/?$/.test(pathname)) {
     return method === 'DELETE' ? 'lifecycle.discard-draft' : 'lifecycle.start-draft';
   }

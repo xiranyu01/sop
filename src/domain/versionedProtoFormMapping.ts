@@ -408,7 +408,7 @@ function requirementVersion(
     acceptableOperations: operationRows(spec.globalRequirements?.collectionPolicy?.acceptable ?? []),
     forbiddenOperations: [...forbidden].map(([category, operations]) => ({ category, operations })),
     annotation: {
-      required: spec.annotation?.required ?? true,
+      required: spec.annotation?.required,
       types: [...(spec.annotation?.types ?? [])],
       allowedOperations: operationRows(spec.globalRequirements?.annotationPolicy?.allowed ?? []),
       forbiddenOperations: operationRows(spec.globalRequirements?.annotationPolicy?.forbidden ?? []),

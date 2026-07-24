@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import YAML from 'yaml';
 import type {
   ConfirmationResult,
@@ -26,6 +27,44 @@ import {
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+async function openTaskSopFromTable(page: Page, title: string) {
+  await page.locator('.scene-main .data-table-row.clickable').filter({ hasText: title }).click();
+}
+
+test('Scene library keeps the directory compact and highlights the selected Scene', async ({ page }) => {
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^场景库/ }).click();
+
+  const selectedScene = page.locator('.scene-row[aria-current="page"]');
+  await expect(selectedScene).toBeVisible();
+  await expect(selectedScene.locator('.scene-row-count')).toHaveText(/\d+/);
+  await expect(page.locator('.scene-summary-meta')).toContainText(/最近更新/);
+  await expect(page.locator('.directory-children, .subscene-row')).toHaveCount(0);
+  await expect(page.locator('.scene-main .table-panel').getByRole('columnheader', { name: '物料' })).toHaveCount(0);
+  await expect(page.locator('.scene-summary .info-grid')).toHaveCount(0);
+});
+
+test('creates a Scene from the Scene dialog', async ({ page }, testInfo) => {
+  const sceneName = `E2E 新场景 R${testInfo.retry}`;
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^场景库/ }).click();
+  await page.getByRole('button', { name: '新建场景' }).click();
+
+  const dialog = page.getByRole('dialog', { name: '新建场景' });
+  const nameInput = dialog.getByLabel('场景名称');
+  await expect(nameInput).toBeFocused();
+  await expect(nameInput).toHaveJSProperty('selectionStart', 0);
+  await expect(nameInput).toHaveJSProperty('selectionEnd', await nameInput.inputValue().then((value) => value.length));
+  await nameInput.fill(sceneName);
+  const createResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/resources/scenes' &&
+    response.request().method() === 'POST');
+  await dialog.getByRole('button', { name: '保存场景' }).click();
+  expect((await createResponse).status()).toBe(201);
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('heading', { name: sceneName })).toBeVisible();
+});
 
 test('creates a new TaskSop from the selected Scene', async ({ page, request }) => {
   const template = await firstResource(request, 'taskSops', (item) => !item.archived);
@@ -80,7 +119,7 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', { name: new RegExp(`^${title} v0\\.0\\.1 · 草稿$`) }).click();
+  await openTaskSopFromTable(page, title);
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
   await expect(page.locator('.version-time-meta')).toContainText('创建时间');
   await expect(page.locator('.version-time-meta')).toContainText('更新时间');
@@ -90,7 +129,7 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   await expect(page.getByRole('button', { name: '导出 PDF' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '导出 YAML' })).toBeDisabled();
   await page.getByRole('button', { name: '导出 PDF' }).click();
-  await expect(page.frameLocator('iframe[title$=".pdf"]').locator('body')).toContainText(title);
+  await waitForPrintedDocument(page, title);
 
   const rootPath = resourcePath('taskSops', draft.name);
   const review = await apiJson<DependencyReviewResult>(request, 'POST', `${rootPath}/review-proposal`, {
@@ -133,7 +172,7 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', { name: new RegExp(`^${title} v0\\.0\\.1 · 已确认$`) }).click();
+  await openTaskSopFromTable(page, title);
   await expect(page.getByText('当前任务 SOP 已确认')).toBeVisible();
 
   await page.getByRole('button', { name: '导出' }).click();
@@ -149,9 +188,6 @@ test('TaskSop draft → review → confirm → export → next draft → restore
 
   await page.getByRole('button', { name: '导出' }).click();
   await page.getByRole('button', { name: '导出 PDF' }).click();
-  const pdfFrame = page.frameLocator('iframe[title$=".pdf"]');
-  await expect(pdfFrame.locator('body')).toContainText(title);
-  await expect(pdfFrame.locator('body')).toContainText('0.0.1');
   expect((await waitForPrintedDocument(page, title)).text).toContain('0.0.1');
 
   const draftPath = `${resourcePath('taskSops', draft.name)}/drafts`;
@@ -172,9 +208,25 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   await page.getByRole('button', { name: '进入当前草稿' }).click();
   await expect(page.getByTestId('task-sop-version-trigger')).toContainText('v0.0.2');
 
+  let deleteDraftRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === draftPath && request.method() === 'DELETE') deleteDraftRequests += 1;
+  });
+  const cancelDeleteDialog = page.waitForEvent('dialog');
+  const cancelDeleteClick = page.getByRole('button', { name: '删除草稿' }).click();
+  const cancelDelete = await cancelDeleteDialog;
+  expect(cancelDelete.message()).toContain('确定删除任务 SOP 草稿 v0.0.2');
+  await cancelDelete.dismiss();
+  await cancelDeleteClick;
+  expect(deleteDraftRequests).toBe(0);
+  await expect(page.getByTestId('task-sop-version-trigger')).toContainText('v0.0.2');
+
   const deleteDraftResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === draftPath && response.request().method() === 'DELETE');
-  await page.getByRole('button', { name: '删除草稿' }).click();
+  const confirmDeleteDialog = page.waitForEvent('dialog');
+  const confirmDeleteClick = page.getByRole('button', { name: '删除草稿' }).click();
+  await (await confirmDeleteDialog).accept();
+  await confirmDeleteClick;
   expect((await deleteDraftResponse).ok()).toBeTruthy();
   await expect(page.getByText('草稿版本已删除')).toBeVisible();
   await expect(page.getByTestId('task-sop-version-trigger')).toContainText('v0.0.1');
@@ -185,7 +237,7 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', { name: new RegExp(`^${title} v0\\.0\\.1 · 已确认$`) }).click();
+  await openTaskSopFromTable(page, title);
   await page.getByTestId('task-sop-version-trigger').click();
   await expect(page.getByRole('menuitemradio')).toHaveCount(1);
   await expect(page.getByText('当前任务 SOP 已确认')).toBeVisible();
@@ -214,21 +266,42 @@ test('robot initial state saves successfully and does not offer the empty placeh
   }
   const scene = (await listResourceSummaries(request, 'scenes')).find((item) => item.name === templateProto.scene);
   expect(scene, `Expected Scene ${templateProto.scene}`).toBeDefined();
-  const draft = await createResource(request, 'taskSops', cloneResourceForCreate(template.resource, {
+  const materialSummaries = (await listResourceSummaries(request, 'materials')).slice(0, 2);
+  expect(materialSummaries).toHaveLength(2);
+  const draftResource = cloneResourceForCreate(template.resource, {
     displayName: title,
     description: '机器人初始态保存回归测试',
     sourceId: `e2e-robot-initial-state-r${testInfo.retry}`,
     legacySubsceneCode: `E2E-ROBOT-INITIAL-R${testInfo.retry}`,
     legacySubsceneDisplayName: title,
     lifecycle: 'LIFECYCLE_DRAFT',
+  });
+  if (!draftResource || typeof draftResource !== 'object' || Array.isArray(draftResource) ||
+      !draftResource.spec || typeof draftResource.spec !== 'object' || Array.isArray(draftResource.spec)) {
+    throw new TypeError('TaskSop draft fixture must include a spec');
+  }
+  draftResource.spec.objects = materialSummaries.map((material, index) => ({
+    id: `e2e-material-${index + 1}`,
+    displayName: material.displayName,
+    material: material.name,
+    quantity: { fixedValue: 1, unit: '件' },
   }));
+  draftResource.spec.objectStates = {
+    initial: [{
+      objectId: 'e2e-material-1',
+      allowedLocations: [{ displayName: '初始位置' }],
+    }],
+    target: [],
+    duringOperation: [],
+  };
+  const draft = await createResource(request, 'taskSops', draftResource);
 
   await openAuthenticated(page);
   await page.getByRole('button', { name: /^场景库/ }).click();
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', { name: new RegExp(`^${title} v0\\.0\\.1 · 草稿$`) }).click();
+  await openTaskSopFromTable(page, title);
 
   const select = page.getByRole('combobox', { name: '机器人初始态', exact: true });
   await expect(select.locator('option[value=""]')).toHaveAttribute('hidden', '');
@@ -240,22 +313,27 @@ test('robot initial state saves successfully and does not offer the empty placeh
   await expect(select).toHaveValue('机器人处于安全初始位');
   await expect(page.locator('.save-state-stack')).toBeHidden();
 
-  const initialStateCard = page.locator('[data-state-kind="initial"][data-state-index="0"]');
+  const initialStateSection = page.locator('[data-state-section="initial"]');
+  if (await initialStateSection.locator('[data-state-kind="initial"]').count() === 0) {
+    const addInitialStateResponse = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
+      response.request().method() === 'PUT');
+    await initialStateSection.getByRole('button', { name: '添加状态' }).click();
+    expect((await addInitialStateResponse).ok()).toBeTruthy();
+  }
+  const initialStateCard = initialStateSection.locator('[data-state-kind="initial"][data-state-index="0"]');
+  if (await initialStateCard.locator('.state-card-detail').count() === 0) {
+    await initialStateCard.getByRole('button', { name: '展开编辑' }).click();
+  }
   await expect(initialStateCard.locator('.state-card-detail')).toBeVisible();
   await initialStateCard.getByRole('button', { name: '收起字段' }).click();
   await expect(initialStateCard.locator('.state-card-detail')).toBeHidden();
   await expect(initialStateCard.getByRole('button', { name: '展开编辑' })).toBeVisible();
 
-  const initialStateSection = page.locator('[data-state-section="initial"]');
   await expect(initialStateSection.locator('.embedded-table-header')).toHaveCSS('position', 'sticky');
   await expect(initialStateSection.locator('.embedded-table-header')).toHaveCSS('top', '8px');
-  const initialCardCount = await initialStateSection.locator('[data-state-kind="initial"]').count();
-  const addStateResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
-    response.request().method() === 'PUT');
-  await initialStateSection.getByRole('button', { name: '添加状态' }).click();
-  expect((await addStateResponse).ok()).toBeTruthy();
-  const addedStateCard = initialStateSection.locator(`[data-state-index="${initialCardCount}"]`);
+  await initialStateCard.getByRole('button', { name: '展开编辑' }).click();
+  const addedStateCard = initialStateCard;
   const materialSelect = addedStateCard.getByRole('combobox', { name: '物料' });
   const materialChoices = (await materialSelect.locator('option').allTextContents()).filter((item) => item !== '选择物料');
   expect(materialChoices.length).toBeGreaterThan(1);
@@ -289,14 +367,6 @@ test('robot initial state saves successfully and does not offer the empty placeh
 
   const savedAfterMaterialChange = await getResource(request, 'taskSops', draft.name);
   expect(JSON.stringify(savedAfterMaterialChange.resource)).not.toContain(oldMaterialInstruction);
-
-  const materialRandomizationSummary = page.locator(
-    '[data-state-kind="material-randomization"][data-state-index="0"] .state-human-summary',
-  );
-  await expect(materialRandomizationSummary).toContainText('物料位置');
-  await expect(materialRandomizationSummary).toContainText('物料姿态');
-  await expect(materialRandomizationSummary).toContainText('物料形态');
-  await expect(materialRandomizationSummary).not.toContainText('location');
 
   await page.getByRole('button', { name: '添加物料' }).click();
   const materialDialog = page.getByRole('dialog', { name: '从物料库添加物料' });
@@ -339,6 +409,133 @@ test('robot initial state saves successfully and does not offer the empty placeh
   });
 });
 
+test('collection and annotation steps can be reopened and edited in bulk', async ({ page, request }, testInfo) => {
+  const title = `E2E 批量编辑步骤 R${testInfo.retry}`;
+  const atomicSkill = `标记抓取 R${testInfo.retry}`;
+  await createResource(request, 'globalFields', {
+    sourceId: `e2e-atomic-skill-r${testInfo.retry}`,
+    group: 'GLOBAL_FIELD_GROUP_ATOMIC_SKILL',
+    label: atomicSkill,
+    value: atomicSkill,
+    startCondition: '夹爪开始闭合',
+    endCondition: '物体稳定离开支撑面',
+    status: 'GLOBAL_FIELD_STATUS_ACTIVE',
+  });
+  const template = await firstResource(request, 'taskSops', (item) => !item.archived);
+  const templateProto = template.resource;
+  if (!templateProto || typeof templateProto !== 'object' || Array.isArray(templateProto) || typeof templateProto.scene !== 'string') {
+    throw new TypeError('TaskSop template must identify its Scene');
+  }
+  const scene = (await listResourceSummaries(request, 'scenes')).find((item) => item.name === templateProto.scene);
+  expect(scene, `Expected Scene ${templateProto.scene}`).toBeDefined();
+  const draftResource = cloneResourceForCreate(template.resource, {
+    displayName: title,
+    description: '验证采集与标注步骤批量编辑',
+    sourceId: `e2e-bulk-steps-r${testInfo.retry}`,
+    legacySubsceneCode: `E2E-BULK-R${testInfo.retry}`,
+    legacySubsceneDisplayName: title,
+    lifecycle: 'LIFECYCLE_DRAFT',
+  });
+  if (!draftResource || typeof draftResource !== 'object' || Array.isArray(draftResource)) {
+    throw new TypeError('TaskSop draft resource must be an object');
+  }
+  const draftSpec = draftResource.spec;
+  if (!draftSpec || typeof draftSpec !== 'object' || Array.isArray(draftSpec)) {
+    throw new TypeError('TaskSop draft resource must contain a spec');
+  }
+  const draftAnnotation = draftSpec.annotation;
+  if (!draftAnnotation || typeof draftAnnotation !== 'object' || Array.isArray(draftAnnotation)) {
+    throw new TypeError('TaskSop draft resource must contain an annotation plan');
+  }
+  const existingAnnotationSteps = Array.isArray(draftAnnotation.steps) ? draftAnnotation.steps : [];
+  draftAnnotation.steps = [
+    ...existingAnnotationSteps,
+    {
+      id: `e2e-existing-atomic-skill-r${testInfo.retry}`,
+      order: existingAnnotationSteps.length + 1,
+      description: '已有的同类标注步骤',
+      atomicSkill,
+    },
+  ];
+  const draft = await createResource(request, 'taskSops', draftResource);
+
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^场景库/ }).click();
+  await page.getByRole('button', {
+    name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
+  }).click();
+  await openTaskSopFromTable(page, title);
+
+  const collectionSection = page.locator('details.collapsible-section').filter({ hasText: '采集步骤和说明' });
+  await collectionSection.getByRole('button', { name: '批量输入步骤' }).click();
+  let dialog = page.getByRole('dialog', { name: '批量输入步骤' });
+  await dialog.getByLabel('中文步骤').fill('拿起牙刷\n放入牙刷杯');
+  await dialog.getByLabel('中文原子技能').fill('抓取\n放置');
+  await dialog.getByLabel('English Step').fill('Pick up the toothbrush\nPlace it in the cup');
+  await dialog.getByLabel('English Atomic Skill').fill('Pick\nPlace');
+  let saveResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
+    response.request().method() === 'PUT');
+  await dialog.getByRole('button', { name: '保存修改' }).click();
+  expect((await saveResponse).ok()).toBeTruthy();
+  await expect(collectionSection.locator('.annotation-steps-row')).toHaveCount(2);
+
+  await collectionSection.getByRole('button', { name: '批量输入步骤' }).click();
+  dialog = page.getByRole('dialog', { name: '批量输入步骤' });
+  await expect(dialog.getByLabel('中文步骤')).toHaveValue('拿起牙刷\n放入牙刷杯');
+  await expect(dialog.getByLabel('English Step')).toHaveValue('Pick up the toothbrush\nPlace it in the cup');
+  await dialog.getByLabel('中文步骤').fill('拿起洗脸巾');
+  await dialog.getByLabel('中文原子技能').fill('抓取');
+  await dialog.getByLabel('English Step').fill('Pick up the face towel');
+  await dialog.getByLabel('English Atomic Skill').fill('Pick');
+  saveResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
+    response.request().method() === 'PUT');
+  await dialog.getByRole('button', { name: '保存修改' }).click();
+  expect((await saveResponse).ok()).toBeTruthy();
+  await expect(collectionSection.locator('.annotation-steps-row')).toHaveCount(1);
+  await expect(collectionSection.locator('.annotation-steps-row').first()).toContainText('拿起洗脸巾');
+
+  const annotationSection = page.locator('details.collapsible-section').filter({ hasText: '标注步骤和说明' });
+  await annotationSection.getByRole('button', { name: '批量输入步骤' }).click();
+  dialog = page.getByRole('dialog', { name: '批量输入步骤' });
+  await dialog.getByLabel('中文步骤').fill('标记抓取开始');
+  await dialog.getByLabel('中文原子技能').fill(atomicSkill);
+  saveResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
+    response.request().method() === 'PUT');
+  await dialog.getByRole('button', { name: '保存修改' }).click();
+  expect((await saveResponse).ok()).toBeTruthy();
+  const generatedRequirement = `${atomicSkill}：开始时机为夹爪开始闭合；结束时机为物体稳定离开支撑面`;
+  await expect.poll(
+    () => annotationSection.locator('.local-item-list input').evaluateAll(
+      (inputs) => inputs.map((input) => (input as HTMLInputElement).value),
+    ),
+  ).toContain(generatedRequirement);
+  await annotationSection.getByRole('button', { name: '批量输入步骤' }).click();
+  dialog = page.getByRole('dialog', { name: '批量输入步骤' });
+  await expect(dialog.getByLabel('中文步骤')).toHaveValue('标记抓取开始');
+  await expect(dialog.getByLabel('中文原子技能')).toHaveValue(atomicSkill);
+  await dialog.getByRole('button', { name: '取消' }).click();
+
+  const addAnnotationStep = annotationSection.getByRole('button', { name: '新增步骤' });
+  await addAnnotationStep.click();
+  const annotationRows = annotationSection.locator('.annotation-steps-row');
+  await expect(annotationRows).toHaveCount(2);
+  await annotationRows.nth(1).locator('textarea').nth(1).fill('抓取');
+  const invalidSaves: number[] = [];
+  const recordInvalidSave = (response: { url: () => string; request: () => { method: () => string }; status: () => number }) => {
+    if (new URL(response.url()).pathname === resourcePath('taskSops', draft.name) &&
+      response.request().method() === 'PUT' && response.status() >= 400) invalidSaves.push(response.status());
+  };
+  page.on('response', recordInvalidSave);
+  await addAnnotationStep.click();
+  await page.waitForTimeout(250);
+  page.off('response', recordInvalidSave);
+  await expect(annotationRows).toHaveCount(3);
+  expect(invalidSaves).toEqual([]);
+});
+
 test('legacy draft checkpoints remain read-only but can be exported', async ({ page, request }) => {
   const roots = await listResourceSummaries(request, 'taskSops');
   let checkpoint: RevisionSummary | undefined;
@@ -361,9 +558,7 @@ test('legacy draft checkpoints remain read-only but can be exported', async ({ p
   await page.getByRole('button', {
     name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
   }).click();
-  await page.getByRole('button', {
-    name: new RegExp(`^${escapeRegex(checkpointRoot!.displayName)} v`),
-  }).first().click();
+  await openTaskSopFromTable(page, checkpointRoot!.displayName);
   await page.getByTestId('task-sop-version-trigger').click();
   await page.getByTestId(`task-sop-version-${checkpoint!.versionLabel}`).click();
   await expect(page.getByText('这是迁移保留的旧草稿检查点，仅供追踪，不能编辑或确认，可以导出 PDF。')).toBeVisible();

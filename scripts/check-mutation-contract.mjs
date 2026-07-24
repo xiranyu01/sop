@@ -13,7 +13,7 @@ const [manifestSource, handlerSource, repositorySource] = await Promise.all([
 ]);
 const manifest = JSON.parse(manifestSource);
 const failures = [];
-const allowedMutationScopes = new Set(['resource', 'lifecycle', 'attachment']);
+const allowedMutationScopes = new Set(['resource', 'collection', 'lifecycle', 'attachment']);
 const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const seenRoutes = new Set();
 const manifestMutationRoutes = new Set();
@@ -153,7 +153,9 @@ if (manifest.version !== 1 || !Array.isArray(manifest.routes) || !Array.isArray(
     // POST may be explicitly classified as a protected query proposal.
     if (route.scope === 'protected-read') continue;
     if (!allowedMutationScopes.has(route.scope)) failures.push(`${id}: mutation scope must be resource, lifecycle, or attachment`);
-    if (!route.resourceParam && route.createsOneResource !== true) {
+    if (route.scope === 'collection' && typeof route.collectionKind !== 'string') {
+      failures.push(`${id}: collection mutation must name its collection kind`);
+    } else if (route.scope !== 'collection' && !route.resourceParam && route.createsOneResource !== true) {
       failures.push(`${id}: mutation must name one resource or create exactly one resource`);
     }
     if (!route.operation) failures.push(`${id}: mutation operation is required`);
@@ -202,6 +204,8 @@ const repositoryMethodExceptions = new Set([
   'getCurrentByUid',
   'getCurrents',
   'listCurrent',
+  'listArchivedCurrent',
+  'findActiveRequirementReferrers',
   'getRevision',
   'getRevisionByUid',
   'getRevisions',

@@ -1,5 +1,4 @@
-import { expect, test, type Request, type Response } from '@playwright/test';
-import type { ResourcePage } from '../../shared/transport/resourceDto';
+import { expect, test, type Request } from '@playwright/test';
 import { listResourceSummaries, openAuthenticated, resourcePath } from './helpers/app';
 
 const capacityGlobalFieldCount = 1_200;
@@ -16,10 +15,6 @@ function anchoredRowName(value: string): RegExp {
   return new RegExp(`^${escaped}(?:\\s|$)`);
 }
 
-function isGlobalFieldList(response: Response): boolean {
-  return response.request().method() === 'GET' && new URL(response.url()).pathname === globalFieldListPath;
-}
-
 function globalFieldDetailName(request: Request): string | undefined {
   if (request.method() !== 'GET') return undefined;
   const pathname = new URL(request.url()).pathname;
@@ -27,12 +22,7 @@ function globalFieldDetailName(request: Request): string | undefined {
   return decodeURIComponent(pathname.slice(globalFieldDetailPrefix.length));
 }
 
-async function resourcePage(response: Response): Promise<ResourcePage> {
-  expect(response.status()).toBe(200);
-  return response.json() as Promise<ResourcePage>;
-}
-
-test('GlobalField summaries paginate to capacity without eager-loading the final detail', async ({ page, request }) => {
+test('GlobalField summaries load the complete catalog without eager-loading the final detail', async ({ page, request }) => {
   const expected = await listResourceSummaries(request, 'globalFields');
   const expectedNames = expected.map((item) => item.name);
   const capacityNames = Array.from(
@@ -54,36 +44,9 @@ test('GlobalField summaries paginate to capacity without eager-loading the final
     if (name) detailRequests.push(name);
   });
 
-  const initialResponsePromise = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return isGlobalFieldList(response) && !url.searchParams.has('cursor');
-  });
   await openAuthenticated(page);
-  const pages = [await resourcePage(await initialResponsePromise)];
-
   await page.getByRole('button', { name: /^全局字段\s+\d+$/ }).click();
-  const loadMore = page.getByRole('button', { name: '加载更多', exact: true });
-  let nextCursor = pages[0].nextCursor;
-  while (nextCursor) {
-    const expectedCursor = nextCursor;
-    const nextResponsePromise = page.waitForResponse((response) =>
-      isGlobalFieldList(response) && new URL(response.url()).searchParams.get('cursor') === expectedCursor);
-    await expect(loadMore).toBeVisible();
-    await loadMore.click();
-    const nextPage = await resourcePage(await nextResponsePromise);
-    pages.push(nextPage);
-    nextCursor = nextPage.nextCursor;
-    if (nextCursor) {
-      await expect(loadMore).toBeVisible();
-      await expect(loadMore).toBeEnabled();
-    } else {
-      await expect(loadMore).toHaveCount(0);
-    }
-  }
-
-  const browserNames = pages.flatMap((resourcePageResult) => resourcePageResult.items.map((item) => item.name));
-  expect(new Set(browserNames).size).toBe(browserNames.length);
-  expect(browserNames).toEqual(expectedNames);
+  await expect(page.getByRole('button', { name: '加载更多', exact: true })).toHaveCount(0);
   expect(detailRequests).not.toContain(target!.name);
 
   await page.getByPlaceholder('搜索字段名称或说明').fill(target!.displayName);

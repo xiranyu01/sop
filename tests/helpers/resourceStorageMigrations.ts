@@ -10,6 +10,10 @@ export const resourceStorageMigrationSql = {
     new URL('../../migrations/0003_backfill_material_skus.sql', import.meta.url),
     'utf8',
   ),
+  currentArchiveLibrary: readFileSync(
+    new URL('../../migrations/0004_current_archive_library.sql', import.meta.url),
+    'utf8',
+  ),
 } as const;
 
 export const resourceStorageMigrationsSql = Object.values(resourceStorageMigrationSql).join('\n');

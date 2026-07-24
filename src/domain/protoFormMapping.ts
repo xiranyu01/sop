@@ -68,6 +68,7 @@ const groupToForm: Record<number, GlobalFieldGroup> = {
   [ProtoGlobalFieldGroup.DELIVERY_LANGUAGE]: 'delivery_language',
   [ProtoGlobalFieldGroup.DELIVERY_METHOD]: 'delivery_method',
   [ProtoGlobalFieldGroup.SAMPLING_POLICY]: 'sampling_policy',
+  [ProtoGlobalFieldGroup.ATOMIC_SKILL]: 'atomic_skill',
 };
 
 const groupToProto = Object.fromEntries(
@@ -235,6 +236,8 @@ export function decodeGlobalFieldForm(resource: JsonValue): MutableResourceForm<
     value: message.value,
     category: message.category,
     description: message.description,
+    startCondition: message.startCondition,
+    endCondition: message.endCondition,
     status: message.status === ProtoGlobalFieldStatus.INACTIVE ? 'inactive' : 'active',
     updatedAt: iso(message),
   });
@@ -249,6 +252,8 @@ export function encodeGlobalFieldForm(form: GlobalField, current: GlobalFieldMes
     value: form.value,
     category: form.category || undefined,
     description: form.description || undefined,
+    startCondition: form.startCondition || undefined,
+    endCondition: form.endCondition || undefined,
     status: form.status === 'inactive' ? ProtoGlobalFieldStatus.INACTIVE : ProtoGlobalFieldStatus.ACTIVE,
   }));
 }

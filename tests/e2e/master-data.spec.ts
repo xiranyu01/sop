@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import type { ResourceMutationResult } from '../../shared/transport/resourceDto';
 import {
@@ -188,7 +189,7 @@ test('GlobalField edit is submitted by the field dialog and persists', async ({ 
   await page.getByRole('table').getByRole('button', { name: anchoredRowName(label) }).click();
   const dialog = page.getByRole('dialog', { name: '字段详情' });
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel('说明').fill(description);
+  await dialog.getByRole('textbox', { name: '说明' }).fill(description);
 
   const updateResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === resourcePath('globalFields', field.name) &&
@@ -198,6 +199,36 @@ test('GlobalField edit is submitted by the field dialog and persists', async ({ 
   await expect(getResource(request, 'globalFields', field.name)).resolves.toMatchObject({
     resource: { label, description },
   });
+});
+
+test('GlobalField CSV export and import confirmation are available', async ({ page }) => {
+  await openAuthenticated(page);
+  await page.getByRole('button', { name: /^全局字段\s+\d+$/ }).click();
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出 CSV' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^全局字段-\d{4}-\d{2}-\d{2}\.csv$/);
+  const csvPath = await download.path();
+  expect(csvPath).toBeTruthy();
+  expect(await readFile(csvPath!, 'utf8')).toContain('字段ID,字段分组,字段名称,开始时机,结束时机,说明,状态');
+
+  let importRequests = 0;
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/resources/globalFields/import') {
+      importRequests += 1;
+    }
+  });
+  const confirmationPromise = page.waitForEvent('dialog');
+  await page.locator('input[type="file"][accept*=".csv"]').setInputFiles({
+    name: 'global-fields.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('字段ID,字段分组,字段名称,开始时机,结束时机,说明,状态\ne2e-import,区域,E2E 导入区域,,,,启用'),
+  });
+  const confirmation = await confirmationPromise;
+  expect(confirmation.message()).toContain('全量替换');
+  await confirmation.dismiss();
+  expect(importRequests).toBe(0);
 });
 
 test('GlobalField allows the same label in different groups and closes only after save succeeds', async ({ page, request }, testInfo) => {

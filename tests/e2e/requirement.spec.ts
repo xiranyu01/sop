@@ -57,6 +57,12 @@ async function firstExportableTaskRevision(
 }
 
 test('new Requirement selects operation vocabularies by default and supports searched bulk selection', async ({ page }) => {
+  const invalidTitleRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'PUT' && request.postData()?.includes('"displayName":""')) {
+      invalidTitleRequests.push(request.url());
+    }
+  });
   await openAuthenticated(page);
   await page.getByRole('button', { name: /^客户需求/ }).click();
   const createResponse = page.waitForResponse((response) =>
@@ -65,6 +71,16 @@ test('new Requirement selects operation vocabularies by default and supports sea
   await page.getByRole('button', { name: '新建需求' }).click();
   expect((await createResponse).status()).toBe(201);
   await expect(page.getByRole('heading', { name: '新的客户需求' })).toBeVisible();
+
+  await expect(page.getByLabel('交付形式')).toHaveValue('');
+  await expect(page.getByLabel('是否需要标注')).toHaveValue('');
+  await expect(page.getByLabel('客户抽检策略')).toHaveValue('');
+
+  const requirementName = page.getByLabel('需求名称');
+  await requirementName.fill('');
+  await page.getByRole('heading', { name: '基础信息' }).click();
+  await expect(requirementName).toHaveValue('新的客户需求');
+  expect(invalidTitleRequests).toEqual([]);
 
   for (const title of [
     '采集操作要求',
@@ -99,6 +115,7 @@ test('new Requirement selects operation vocabularies by default and supports sea
   await forbidden.getByRole('button', { name: '全选结果' }).click();
   expect((await selectResponse).ok()).toBe(true);
   await expect(filtered.locator('input:checked')).toHaveCount(filteredCount);
+  expect(invalidTitleRequests).toEqual([]);
 });
 
 test('Requirement create → ETag update → review → confirm → export → next draft → restore remains stable', async ({ page, request }, testInfo) => {
@@ -170,6 +187,10 @@ test('Requirement create → ETag update → review → confirm → export → n
   await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
   await page.getByRole('button', { name: new RegExp(title) }).first().click();
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'SOP 版本' })).toHaveCount(0);
+  await expect(page.locator('.task-sop-reference-cell')).toContainText(task.taskDisplayName);
+  await expect(page.locator('.task-sop-reference-cell')).toContainText(`v${task.revision.versionLabel}`);
+  await expect(page.locator('.task-sop-reference-cell')).toContainText('已确认');
   await expect(page.locator('.version-time-meta')).toContainText('创建时间');
   await expect(page.locator('.version-time-meta')).toContainText('更新时间');
   await expect(page.getByRole('button', { name: '加载更多客户' })).toHaveCount(0);
@@ -180,7 +201,7 @@ test('Requirement create → ETag update → review → confirm → export → n
   await expect(page.getByRole('button', { name: '导出 YAML' })).toBeDisabled();
   await expect(page.getByRole('button', { name: '导出 PDF' })).toBeEnabled();
   await page.getByRole('button', { name: '导出 PDF' }).click();
-  await expect(page.frameLocator('iframe[title$=".pdf"]').locator('body')).toContainText(title);
+  await waitForPrintedDocument(page, title);
 
   const rootPath = resourcePath('requirements', draft.name);
   const review = await apiJson<DependencyReviewResult>(request, 'POST', `${rootPath}/review-proposal`, {
@@ -245,9 +266,6 @@ test('Requirement create → ETag update → review → confirm → export → n
 
   await page.getByRole('button', { name: '导出' }).click();
   await page.getByRole('button', { name: '导出 PDF' }).click();
-  const pdfFrame = page.frameLocator('iframe[title$=".pdf"]');
-  await expect(pdfFrame.locator('body')).toContainText(title);
-  await expect(pdfFrame.locator('body')).toContainText('0.0.1');
   expect((await waitForPrintedDocument(page, title)).text).toContain('0.0.1');
 
   await page.getByRole('button', { name: '查看' }).last().click();
@@ -272,9 +290,25 @@ test('Requirement create → ETag update → review → confirm → export → n
   await page.getByRole('button', { name: '进入当前草稿' }).click();
   await expect(page.getByLabel('版本')).toHaveValue('0.0.2');
 
+  let deleteDraftRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === draftPath && request.method() === 'DELETE') deleteDraftRequests += 1;
+  });
+  const cancelDeleteDialog = page.waitForEvent('dialog');
+  const cancelDeleteClick = page.getByRole('button', { name: '删除草稿' }).click();
+  const cancelDelete = await cancelDeleteDialog;
+  expect(cancelDelete.message()).toContain('确定删除客户需求草稿 v0.0.2');
+  await cancelDelete.dismiss();
+  await cancelDeleteClick;
+  expect(deleteDraftRequests).toBe(0);
+  await expect(page.getByLabel('版本')).toHaveValue('0.0.2');
+
   const deleteDraftResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname === draftPath && response.request().method() === 'DELETE');
-  await page.getByRole('button', { name: '删除草稿' }).click();
+  const confirmDeleteDialog = page.waitForEvent('dialog');
+  const confirmDeleteClick = page.getByRole('button', { name: '删除草稿' }).click();
+  await (await confirmDeleteDialog).accept();
+  await confirmDeleteClick;
   expect((await deleteDraftResponse).ok()).toBeTruthy();
   await expect(page.getByText('草稿版本已删除')).toBeVisible();
   await expect(page.getByLabel('版本')).toHaveValue('0.0.1');

@@ -162,6 +162,27 @@ describe('ResourceSaveQueue', () => {
     expect(queue.state.warning).toBeUndefined();
   });
 
+  it('discards a known terminal edit only after explicit confirmation', async () => {
+    const queue = new ResourceSaveQueue({
+      resourceName: 'requirements/demo',
+      initial: { value: { title: 'original' }, etag: 'e1' },
+      transport: {
+        save: vi.fn().mockRejectedValue({ kind: 'terminal', code: 'ALREADY_EXISTS', message: 'duplicate' }),
+        read: vi.fn(),
+      },
+    });
+    queue.submit({ title: 'duplicate' });
+    await settle();
+
+    expect(queue.state).toMatchObject({ kind: 'paused-terminal', code: 'ALREADY_EXISTS' });
+    expect(queue.discardTerminalChanges(false)).toBe(false);
+    expect(queue.localValue).toEqual({ title: 'duplicate' });
+    expect(queue.discardTerminalChanges(true)).toBe(true);
+    expect(queue.localValue).toEqual({ title: 'original' });
+    expect(queue.state).toMatchObject({ kind: 'ready', etag: 'e1' });
+    expect(queue.hasUnsavedChanges).toBe(false);
+  });
+
   it('reapplies retained local content only after fetching a fresh etag', async () => {
     const save = vi.fn()
       .mockRejectedValueOnce({ kind: 'conflict', message: 'stale', serverValue: { title: 'server' }, serverEtag: 'e2' })

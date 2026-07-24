@@ -31,7 +31,8 @@ export type GlobalFieldGroup =
   | 'delivery_format'
   | 'delivery_language'
   | 'delivery_method'
-  | 'sampling_policy';
+  | 'sampling_policy'
+  | 'atomic_skill';
 
 export interface Contact {
   name: string;
@@ -74,6 +75,8 @@ export interface GlobalField {
   value: string;
   category?: string;
   description?: string;
+  startCondition?: string;
+  endCondition?: string;
   status: GlobalFieldStatus;
   updatedAt: string;
 }
@@ -361,7 +364,7 @@ export interface RequirementVersion {
   acceptableOperations?: Array<{ operation: string; note: string }>;
   forbiddenOperations: Array<{ category: string; operations: Array<{ operation: string; note: string }> }>;
   annotation: {
-    required: boolean;
+    required?: boolean;
     types: string[];
     allowedOperations?: Array<{ operation: string; note: string }>;
     forbiddenOperations?: Array<{ operation: string; note: string }>;

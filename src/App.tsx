@@ -72,6 +72,8 @@ import {
   revisionNameOf,
 } from './domain/versionedProtoFormMapping';
 import {
+  archivedRequirementRoutePath,
+  archivedTaskSopRoutePath,
   pageRoutePath,
   parseAppRoute,
   requirementRoutePath,
@@ -79,8 +81,24 @@ import {
   type AppPage,
   type AppRoute,
 } from './routing';
+import {
+  deliveryLanguageSelectionValue,
+  parseDeliveryLanguageSelection,
+} from './domain/deliveryLanguage';
+import { globalFieldsFromCsv, globalFieldsToCsv } from './domain/globalFieldCsv';
+import { bulkDraftToSteps, operationStepsReadyToSave, stepsToBulkDraft } from './domain/bulkSteps';
+import { appendMissingAtomicSkillRequirements } from './domain/atomicSkillRequirements';
+import { randomFieldLabel, withStoredRandomFieldOptions } from './domain/randomFieldOptions';
+import { sortGlobalFieldsByPinyin } from './domain/globalFieldPresentation';
+import { materialStateSentence } from '../shared/domain/materialStatePresentation';
 
 type Page = AppPage;
+
+type ArchiveKind = 'requirements' | 'taskSops';
+
+type ArchivedDetail =
+  | { kind: 'requirements'; summary: ResourceSummary; requirement: Requirement }
+  | { kind: 'taskSops'; summary: ResourceSummary; scene: Scene; subscene: Subscene };
 
 const pageStorageKey = 'sop-manager-current-page';
 const authStorageKey = 'sop-manager-api-password';
@@ -155,6 +173,7 @@ type Option = {
   label: string;
   category?: string;
   description?: string;
+  aliases?: string[];
 };
 
 type AttachmentStorageStatus = {
@@ -166,7 +185,9 @@ type AttachmentStorageStatus = {
 type PrintableSection = {
   title: string;
   description?: string;
-  content: string;
+  rows?: Array<{ label: string; value: string }>;
+  items?: string[];
+  tables?: Array<{ columns: string[]; rows: string[][] }>;
   attachments?: PrintableAttachment[];
 };
 
@@ -174,7 +195,7 @@ type PrintableAttachment = {
   name: string;
   size: number;
   contentType: string;
-  uploadedAt: string;
+  uploadedAt?: string;
   url?: string;
 };
 
@@ -212,6 +233,7 @@ const globalFieldGroupLabels: Record<GlobalFieldGroup, string> = {
   delivery_language: '交付语言',
   delivery_method: '交付方式',
   sampling_policy: '质检策略',
+  atomic_skill: '原子技能说明',
 };
 
 const hiddenGlobalFieldGroups: GlobalFieldGroup[] = ['random_field'];
@@ -260,8 +282,8 @@ const globalFieldCategoryConfigs: GlobalFieldCategory[] = [
   {
     id: 'base',
     label: '基础字段',
-    description: '机器人状态、标注类型',
-    groups: ['robot_state', 'annotation_type'],
+    description: '机器人状态、标注类型、原子技能',
+    groups: ['robot_state', 'annotation_type', 'atomic_skill'],
   },
 ];
 
@@ -573,6 +595,26 @@ function summaryVersionLabel(summary: ResourceSummary): string {
   return summary.candidateVersionLabel || summary.currentVersionLabel || '0.0.1';
 }
 
+function archivedResourceView(detail: ResourceDetail): JsonValue {
+  if (!detail.archiveState || !detail.resource || typeof detail.resource !== 'object' || Array.isArray(detail.resource)) {
+    return detail.resource;
+  }
+  const resource = structuredClone(detail.resource) as Record<string, JsonValue>;
+  resource.lifecycle = detail.archiveState.archivedFromLifecycle === 'DRAFT'
+    ? 'LIFECYCLE_DRAFT'
+    : 'LIFECYCLE_CONFIRMED';
+  delete resource.candidateVersionSequence;
+  delete resource.candidateVersionLabel;
+  delete resource.candidateSourceVersionId;
+  delete resource.reviewedDependencyDigest;
+  if (detail.archiveState.candidateVersionSequence !== undefined) {
+    resource.candidateVersionSequence = String(detail.archiveState.candidateVersionSequence);
+  }
+  if (detail.archiveState.candidateVersionLabel) resource.candidateVersionLabel = detail.archiveState.candidateVersionLabel;
+  if (detail.archiveState.candidateSourceVersionId) resource.candidateSourceVersionId = detail.archiveState.candidateSourceVersionId;
+  return resource;
+}
+
 function requirementProductionItemCount(requirement: Requirement): number {
   if (resourceLoaded(requirement)) return latest(requirement.versions).selectedSubscenes.length;
   return (requirement as Partial<ResourceBound>).__summaryProductionItemCount ?? 0;
@@ -712,6 +754,31 @@ function masterPlaceholder(kind: MasterResourceKind, summary: ResourceSummary): 
 }
 
 const resourceClient = new ApiClient({ getPassword: () => storedPassword() });
+
+async function confirmArchivedNameReuse(
+  kind: ArchiveKind,
+  displayName: string,
+  options: { sceneName?: string } = {},
+): Promise<boolean> {
+  const normalized = displayName.trim();
+  if (!normalized) return true;
+  for await (const page of resourceClient.listPages(kind, {
+    view: 'archived',
+    query: normalized,
+    pageSize: 200,
+  })) {
+    const duplicate = page.items.find((item) =>
+      item.displayName.trim() === normalized &&
+      (!options.sceneName || item.sceneName === options.sceneName));
+    if (!duplicate) continue;
+    const resourceLabel = kind === 'requirements' ? '客户需求' : '任务 SOP';
+    return window.confirm(
+      `归档库中已有同名${resourceLabel}“${normalized}”。\n\n` +
+      '点击“确定”继续使用这个名称并创建独立内容；点击“取消”保留当前名称，可前往归档库恢复原内容。',
+    );
+  }
+  return true;
+}
 
 async function hydrateOwnerAttachmentReferences(
   kind: AttachmentOwnerResourceKind,
@@ -957,7 +1024,7 @@ function initialPage(): Page {
 }
 
 function isPage(value: string | null): value is Page {
-  return ['requirements', 'scenes', 'globalFields', 'customers', 'materials', 'robots'].includes(value || '');
+  return ['requirements', 'scenes', 'archive', 'globalFields', 'customers', 'materials', 'robots'].includes(value || '');
 }
 
 function latest<T extends { version: string }>(versions: T[]): T {
@@ -1053,7 +1120,9 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 
 function exportReportAsPdf(report: PrintableReport) {
   const iframe = document.createElement('iframe');
-  iframe.title = report.fileName;
+  const printTitle = report.fileName.replace(/\.pdf$/i, '');
+  const originalDocumentTitle = document.title;
+  iframe.title = printTitle;
   iframe.setAttribute('aria-hidden', 'true');
   iframe.style.position = 'fixed';
   iframe.style.right = '0';
@@ -1067,18 +1136,31 @@ function exportReportAsPdf(report: PrintableReport) {
   function cleanup() {
     if (cleaned) return;
     cleaned = true;
+    if (document.title === printTitle) document.title = originalDocumentTitle;
     iframe.remove();
   }
 
-  iframe.onload = () => {
+  iframe.onload = async () => {
     const printFrame = iframe.contentWindow;
     if (!printFrame) {
       cleanup();
       window.alert('PDF 导出初始化失败，请刷新页面后重试。');
       return;
     }
+    const images = Array.from(iframe.contentDocument?.images ?? []);
+    await Promise.race([
+      Promise.all(images.map((image) => image.complete
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+          image.addEventListener('load', () => resolve(), { once: true });
+          image.addEventListener('error', () => resolve(), { once: true });
+        }))),
+      new Promise<void>((resolve) => window.setTimeout(resolve, 5_000)),
+    ]);
     window.setTimeout(() => {
       try {
+        document.title = printTitle;
+        printFrame.document.title = printTitle;
         printFrame.onafterprint = cleanup;
         printFrame.focus();
         printFrame.print();
@@ -1104,18 +1186,21 @@ function exportReportAsPdf(report: PrintableReport) {
 }
 
 function exportPdfModel(model: PdfDocumentModel) {
-  const rows = (items: PdfDocumentModel['trace'] = []) => items.map((item) => `${item.label}：${item.value}`).join('\n');
   exportReportAsPdf({
     title: model.title,
     subtitle: model.subtitle,
-    fileName: `${safeFileName(model.title)}.pdf`,
-    sections: [
-      { title: '追踪信息', content: rows(model.trace) },
-      ...model.sections.map((section) => ({
-        title: section.heading,
-        content: [rows(section.rows), ...(section.items ?? [])].filter(Boolean).join('\n'),
+    fileName: safeFileName(model.fileName),
+    sections: model.sections.map((section) => ({
+      title: section.heading,
+      description: section.description,
+      rows: section.rows,
+      items: section.items,
+      tables: section.tables,
+      attachments: section.attachments?.map((attachment) => ({
+        ...attachment,
+        uploadedAt: '',
       })),
-    ],
+    })),
   });
 }
 
@@ -1150,10 +1235,7 @@ function renderPrintableReport(report: PrintableReport): string {
       color: #5f6b7a;
       font-size: 12px;
     }
-    section {
-      break-inside: avoid;
-      margin: 0 0 16px;
-    }
+    section { margin: 0 0 16px; }
     h2 {
       border-left: 4px solid #2563eb;
       padding-left: 8px;
@@ -1164,17 +1246,42 @@ function renderPrintableReport(report: PrintableReport): string {
       color: #667085;
       margin-bottom: 8px;
     }
-    pre {
-      margin: 0;
-      padding: 10px 12px;
+    .detail-list {
+      display: grid;
+      grid-template-columns: minmax(36mm, 0.8fr) minmax(0, 2fr);
       border: 1px solid #d8dee8;
       border-radius: 6px;
-      background: #f8fafc;
-      color: #172033;
+      overflow: hidden;
+    }
+    .detail-label, .detail-value {
+      padding: 7px 9px;
+      border-bottom: 1px solid #e5e9f0;
       white-space: pre-wrap;
       word-break: break-word;
-      font: inherit;
     }
+    .detail-label { background: #f8fafc; color: #475467; font-weight: 600; }
+    .detail-list > :nth-last-child(-n + 2) { border-bottom: 0; }
+    .item-list { margin: 0; padding-left: 20px; }
+    .item-list li { margin: 3px 0; white-space: pre-wrap; }
+    .print-table-wrap { overflow: hidden; border: 1px solid #d8dee8; border-radius: 6px; margin-top: 8px; }
+    .print-table { width: 100%; border-collapse: collapse; table-layout: auto; font-size: 10px; }
+    .print-table th, .print-table td {
+      padding: 6px 8px;
+      border-right: 1px solid #e5e9f0;
+      border-bottom: 1px solid #e5e9f0;
+      text-align: left;
+      vertical-align: top;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .print-table th { background: #f2f4f7; color: #344054; font-weight: 600; }
+    .print-table tr:last-child td { border-bottom: 0; }
+    .print-table th:last-child, .print-table td:last-child { border-right: 0; }
+    .print-table thead { display: table-header-group; }
+    .print-table tr { break-inside: avoid; }
+    a { color: #1d4ed8; text-decoration: none; word-break: break-all; }
+    .empty-value { color: #98a2b3; }
+    .section-block + .section-block { margin-top: 8px; }
     .attachments {
       display: grid;
       gap: 10px;
@@ -1193,11 +1300,6 @@ function renderPrintableReport(report: PrintableReport): string {
       max-height: 96mm;
       object-fit: contain;
       margin-bottom: 8px;
-    }
-    .attachment-card a {
-      color: #1d4ed8;
-      text-decoration: none;
-      word-break: break-all;
     }
     .attachment-meta {
       color: #667085;
@@ -1221,12 +1323,14 @@ function renderPrintableReport(report: PrintableReport): string {
     ${report.subtitle ? `<p>${escapeHtml(report.subtitle)}</p>` : ''}
   </header>
   ${report.sections
-    .filter((section) => section.content.trim() || section.attachments?.length)
+    .filter((section) => section.rows?.length || section.items?.length || section.tables?.some((table) => table.rows.length) || section.attachments?.length)
     .map(
       (section) => `<section>
     <h2>${escapeHtml(section.title)}</h2>
     ${section.description ? `<p class="section-desc">${escapeHtml(section.description)}</p>` : ''}
-    ${section.content.trim() ? `<pre>${escapeHtml(section.content)}</pre>` : ''}
+    ${renderPrintableRows(section.rows)}
+    ${renderPrintableItems(section.items)}
+    ${renderPrintableTables(section.tables)}
     ${renderPrintableAttachments(section.attachments)}
   </section>`,
     )
@@ -1236,11 +1340,41 @@ function renderPrintableReport(report: PrintableReport): string {
 </html>`;
 }
 
+function renderPrintableValue(value: string): string {
+  const escaped = escapeHtml(value || '—');
+  return /^https?:\/\/\S+$/i.test(value)
+    ? `<a href="${escaped}">${escaped}</a>`
+    : escaped;
+}
+
+function renderPrintableRows(rows: PrintableSection['rows']): string {
+  if (!rows?.length) return '';
+  return `<div class="detail-list section-block">${rows.map((row) =>
+    `<div class="detail-label">${escapeHtml(row.label)}</div><div class="detail-value">${renderPrintableValue(row.value)}</div>`).join('')}</div>`;
+}
+
+function renderPrintableItems(items: PrintableSection['items']): string {
+  if (!items?.length) return '';
+  return `<ul class="item-list section-block">${items.map((item) => `<li>${renderPrintableValue(item)}</li>`).join('')}</ul>`;
+}
+
+function renderPrintableTables(tables: PrintableSection['tables']): string {
+  if (!tables?.length) return '';
+  return tables.filter((table) => table.rows.length).map((table) =>
+    `<div class="print-table-wrap section-block"><table class="print-table"><thead><tr>${table.columns.map((column) =>
+      `<th>${escapeHtml(column)}</th>`).join('')}</tr></thead><tbody>${table.rows.map((row) =>
+      `<tr>${row.map((value) => `<td>${renderPrintableValue(value)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`).join('');
+}
+
 function renderPrintableAttachments(attachments: PrintableSection['attachments']): string {
   if (!attachments?.length) return '';
   return `<div class="attachments">${attachments
     .map((attachment) => {
-      const meta = `${attachment.contentType || '未知类型'} · ${formatFileSize(attachment.size)} · ${formatShortDate(attachment.uploadedAt)}`;
+      const meta = [
+        attachment.contentType || '未知类型',
+        formatFileSize(attachment.size),
+        attachment.uploadedAt ? formatShortDate(attachment.uploadedAt) : '',
+      ].filter(Boolean).join(' · ');
       const name = escapeHtml(attachment.name);
       const url = attachment.url ? escapeHtml(attachment.url) : '';
       const media =
@@ -1263,25 +1397,25 @@ function escapeHtml(value: string | number | undefined | null): string {
 }
 
 function stateSentence(row: InitialLocationRow): string {
-  const parts = [`把 ${row.object || '物料'}`];
-  const primary = [row.primaryReferences[0], row.primaryRelativePositions[0]].filter(Boolean).join('的');
-  if (primary) parts.push(`放在 ${primary}`);
-  if (row.supportSurfaces[0]) parts.push(`接触 ${row.supportSurfaces[0]}`);
-  if (row.regions.length) parts.push(`区域为 ${row.regions.join('、')}`);
-  if (row.secondaryReferences[0] || row.secondaryRelativePositions[0]) {
-    parts.push(`更具体位置为 ${[row.secondaryReferences[0], row.secondaryRelativePositions[0]].filter(Boolean).join('的')}`);
-  }
-  if (row.poses.length) parts.push(`姿态为 ${row.poses.join('、')}`);
-  if (row.forms.length) parts.push(`形态为 ${row.forms.join('、')}`);
-  if (row.parameters.length) parts.push(`参数为 ${row.parameters.join('、')}`);
-  return parts.join('，') + '。';
+  return materialStateSentence({
+    object: row.object,
+    primaryReference: row.primaryReferences[0],
+    primaryRelativePosition: row.primaryRelativePositions[0],
+    supportSurface: row.supportSurfaces[0],
+    regions: row.regions,
+    secondaryReference: row.secondaryReferences[0],
+    secondaryRelativePosition: row.secondaryRelativePositions[0],
+    poses: row.poses,
+    forms: row.forms,
+    parameters: row.parameters,
+  });
 }
 
 function materialRandomizationSentence(row: MaterialInitialRandomizationRow, options: Option[]): string {
   const materials = row.targetMaterials.length ? row.targetMaterials.join('、') : '所选物料';
   const fields = row.randomizedFields.length
     ? row.randomizedFields
-      .map((field) => options.find((option) => option.value === field)?.label || field)
+      .map((field) => randomFieldLabel(field, options))
       .join('、')
     : '未设置';
   return `${materials} 每 ${row.changeIntervalRecords || 1} 条换一次，需要变化 ${fields}。`;
@@ -1455,6 +1589,12 @@ export default function App() {
   const [selectedSubsceneCode, setSelectedSubsceneCode] = useState('');
   const [selectedSubsceneVersion, setSelectedSubsceneVersion] = useState('');
   const [sceneDetailOpen, setSceneDetailOpen] = useState(false);
+  const [archivePages, setArchivePages] = useState<Record<ArchiveKind, ResourcePageState>>({
+    requirements: { summaries: [] },
+    taskSops: { summaries: [] },
+  });
+  const [archivedDetail, setArchivedDetail] = useState<ArchivedDetail | null>(null);
+  const [archivedVersion, setArchivedVersion] = useState('');
   const [returnToRequirement, setReturnToRequirement] = useState<RequirementReturnTarget | null>(null);
   const [attachmentStorageStatus, setAttachmentStorageStatus] = useState<AttachmentStorageStatus>(defaultAttachmentStorageStatus);
   const [routeReady, setRouteReady] = useState(false);
@@ -1618,6 +1758,144 @@ export default function App() {
     return { identity, subscene };
   }
 
+  async function loadArchivedResources(kind: ArchiveKind, query = '', append = false): Promise<void> {
+    const current = archivePages[kind];
+    if (append && (!current.nextCursor || current.loadingMore)) return;
+    setArchivePages((pages) => ({
+      ...pages,
+      [kind]: { ...(append ? pages[kind] : { summaries: [] }), loadingMore: true, error: undefined },
+    }));
+    try {
+      const result = await resourceClient.list(kind, {
+        view: 'archived', query, cursor: append ? current.nextCursor : undefined,
+      });
+      setArchivePages((pages) => ({
+        ...pages,
+        [kind]: {
+          summaries: append
+            ? appendUniqueResourceSummaries(pages[kind].summaries, result.items)
+            : result.items,
+          nextCursor: result.nextCursor,
+          loadingMore: false,
+        },
+      }));
+    } catch (cause) {
+      setArchivePages((pages) => ({
+        ...pages,
+        [kind]: {
+          ...(append ? pages[kind] : { summaries: [] }),
+          loadingMore: false,
+          error: cause instanceof Error ? cause.message : String(cause),
+        },
+      }));
+    }
+  }
+
+  async function openArchivedResource(kind: ArchiveKind, name: string, versionLabel?: string): Promise<void> {
+    const [detail, revisions] = await Promise.all([
+      resourceClient.get(kind, name),
+      loadRevisionDetails(kind, name),
+    ]);
+    if (!detail.archiveState) throw new Error('该资源不在归档库中');
+    await hydrateOwnerAttachmentReferences(kind, name, [detail.resource, ...revisions.map((revision) => revision.resource)]);
+    const restoredView = archivedResourceView(detail);
+    const { resource: _resource, ...summary } = detail;
+    if (kind === 'requirements') {
+      const requirement = bindResource<Requirement>({
+        id: decodeRequirementId(restoredView),
+        versions: decodeRequirementVersions(restoredView, revisions, requirementContext()),
+      }, detail, true);
+      setArchivedDetail({ kind, summary, requirement });
+      setArchivedVersion(versionLabel || latest(requirement.versions).version);
+      return;
+    }
+    const identity = decodeTaskSopIdentity(restoredView);
+    const subscene = bindResource<Subscene>({
+      code: identity.code,
+      name: identity.displayName,
+      versions: decodeTaskSopVersions(restoredView, revisions, taskSopContext()),
+    }, detail, true);
+    const parent = dataRef.current.scenes.find((scene) => resourceNameOf(scene) === identity.sceneName);
+    if (!parent) throw new Error('找不到任务 SOP 所属场景');
+    setArchivedDetail({ kind, summary, scene: { ...parent, subscenes: [subscene] }, subscene });
+    setArchivedVersion(versionLabel || latest(subscene.versions).version);
+  }
+
+  async function archiveRoot(kind: ArchiveKind, value: Requirement | Subscene): Promise<void> {
+    const name = resourceNameOf(value);
+    if (!name) throw new Error('资源尚未创建');
+    const queue = saveQueues.current.get(name);
+    if (queue) {
+      await queue.whenSettled();
+      if (queue.hasUnsavedChanges) throw new Error('仍有尚未成功保存的修改，处理保存问题后才能归档');
+    }
+    const detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
+    const result = await resourceClient.archive(kind, name, detail.etag);
+    saveQueues.current.remove(name);
+    resourceDetails.current.delete(name);
+    if (kind === 'requirements') {
+      setData((current) => ({
+        ...current,
+        requirements: current.requirements.filter((requirement) => resourceNameOf(requirement) !== name),
+      }));
+      setRequirementDetailOpen(false);
+      setSelectedRequirementId('');
+      setSelectedRequirementVersion('');
+    } else {
+      setData((current) => ({
+        ...current,
+        scenes: current.scenes.map((scene) => ({
+          ...scene,
+          subscenes: scene.subscenes.filter((subscene) => resourceNameOf(subscene) !== name),
+        })),
+      }));
+      setSceneDetailOpen(false);
+      setSelectedSubsceneCode('');
+      setSelectedSubsceneVersion('');
+    }
+    const { resource: _resource, ...summary } = result.resource;
+    setArchivePages((pages) => ({
+      ...pages,
+      [kind]: { ...pages[kind], summaries: [summary, ...pages[kind].summaries.filter((item) => item.name !== name)] },
+    }));
+    setArchivedDetail(null);
+    setPage('archive');
+  }
+
+  async function restoreArchivedRoot(): Promise<void> {
+    if (!archivedDetail) return;
+    const { kind, summary } = archivedDetail;
+    const result = await resourceClient.restore(kind, summary.name, summary.etag);
+    const revisions = await loadRevisionDetails(kind, summary.name);
+    await hydrateOwnerAttachmentReferences(kind, summary.name, [
+      result.resource.resource,
+      ...revisions.map((revision) => revision.resource),
+    ]);
+    setArchivePages((pages) => ({
+      ...pages,
+      [kind]: { ...pages[kind], summaries: pages[kind].summaries.filter((item) => item.name !== summary.name) },
+    }));
+    setArchivedDetail(null);
+    if (kind === 'requirements') {
+      const requirement = replaceRequirementResource(result.resource, revisions);
+      const version = latest(requirement.versions);
+      setSelectedRequirementId(requirement.id);
+      setSelectedRequirementVersion(version.version);
+      setRequirementDetailOpen(true);
+      setPage('requirements', { keepDetail: true });
+      return;
+    }
+    const loaded = replaceTaskSopResource(result.resource, revisions);
+    const scene = dataRef.current.scenes.find((item) => resourceNameOf(item) === loaded.identity.sceneName);
+    if (!scene) throw new Error('找不到任务 SOP 所属场景');
+    const version = latest(loaded.subscene.versions);
+    setSelectedSceneId(scene.id);
+    setSelectedSubsceneCode(loaded.subscene.code);
+    setSelectedSubsceneVersion(version.version);
+    setSceneDetailOpen(true);
+    setPage('scenes', { keepDetail: true });
+  }
+
   async function openRequirementResource(requirement: Requirement, force = false): Promise<Requirement> {
     if (!force && resourceLoaded(requirement)) return requirement;
     const name = resourceNameOf(requirement);
@@ -1654,9 +1932,18 @@ export default function App() {
       setRequirementDetailOpen(false);
       setSceneDetailOpen(false);
       setReturnToRequirement(null);
+      setArchivedDetail(null);
       if (!route.detail) return;
 
       const target = await resourceClient.resolveVersionRoute(route.detail.versionId);
+      if (route.page === 'archive' || target.archived) {
+        if (!target.archived) throw new Error('该资源不在归档库中');
+        const kind: ArchiveKind = target.kind === 'requirements' ? 'requirements' : 'taskSops';
+        await openArchivedResource(kind, target.ownerName, target.versionLabel);
+        setPageState('archive');
+        window.localStorage.setItem(pageStorageKey, 'archive');
+        return;
+      }
       if (route.detail.kind === 'requirement') {
         if (target.kind !== 'requirements') throw new Error('该版本 ID 不属于客户需求');
         const [detail, revisions] = await Promise.all([
@@ -1829,6 +2116,13 @@ export default function App() {
     replaceRequirementVersion(name, next);
     const state = await queue.submit(next);
     if (state.kind === 'paused-conflict' || state.kind === 'paused-retryable' || state.kind === 'paused-terminal') {
+      if (state.kind === 'paused-terminal' && state.code === 'ALREADY_EXISTS') {
+        const message = state.message;
+        queue.discardTerminalChanges(true);
+        replaceRequirementVersion(name, queue.localValue);
+        window.alert(message);
+        return undefined;
+      }
       setError(state.message);
       return undefined;
     }
@@ -1881,6 +2175,13 @@ export default function App() {
     replaceTaskSopVersion(name, next);
     const state = await queue.submit(next);
     if (state.kind === 'paused-conflict' || state.kind === 'paused-retryable' || state.kind === 'paused-terminal') {
+      if (state.kind === 'paused-terminal' && state.code === 'ALREADY_EXISTS') {
+        const message = state.message;
+        queue.discardTerminalChanges(true);
+        replaceTaskSopVersion(name, queue.localValue);
+        window.alert(message);
+        return undefined;
+      }
       setError(state.message);
       return undefined;
     }
@@ -2087,6 +2388,7 @@ export default function App() {
       setRequirementDetailOpen(false);
       setSceneDetailOpen(false);
       setReturnToRequirement(null);
+      setArchivedDetail(null);
     }
   }
 
@@ -2208,6 +2510,14 @@ export default function App() {
   const requirementVersion =
     selectedRequirement?.versions.find((item) => item.version === selectedRequirementVersion) ||
     (selectedRequirement ? latest(selectedRequirement.versions) : undefined);
+  const archivedRequirementVersion = archivedDetail?.kind === 'requirements'
+    ? archivedDetail.requirement.versions.find((version) => version.version === archivedVersion)
+      || latest(archivedDetail.requirement.versions)
+    : undefined;
+  const archivedTaskVersion = archivedDetail?.kind === 'taskSops'
+    ? archivedDetail.subscene.versions.find((version) => version.version === archivedVersion)
+      || latest(archivedDetail.subscene.versions)
+    : undefined;
 
   useEffect(() => {
     if (!routeReady || applyingRoute.current) return;
@@ -2222,6 +2532,16 @@ export default function App() {
         (subscene?.versions.length ? latest(subscene.versions) : undefined);
       const versionId = version?.versionId || resourceUidOf(subscene);
       if (versionId) path = taskSopRoutePath(versionId);
+    } else if (page === 'archive' && archivedDetail) {
+      if (archivedDetail.kind === 'requirements') {
+        const version = archivedDetail.requirement.versions.find((item) => item.version === archivedVersion)
+          || latest(archivedDetail.requirement.versions);
+        path = archivedRequirementRoutePath(version.versionId || archivedDetail.summary.uid);
+      } else {
+        const version = archivedDetail.subscene.versions.find((item) => item.version === archivedVersion)
+          || latest(archivedDetail.subscene.versions);
+        path = archivedTaskSopRoutePath(version.versionId || archivedDetail.summary.uid);
+      }
     }
     if (window.location.pathname !== path) window.history.pushState(null, '', path);
   }, [
@@ -2235,6 +2555,8 @@ export default function App() {
     selectedSceneId,
     selectedSubsceneCode,
     selectedSubsceneVersion,
+    archivedDetail,
+    archivedVersion,
   ]);
 
   useEffect(() => {
@@ -2253,7 +2575,10 @@ export default function App() {
       }
       return result;
     } catch (err) {
-      const message = err instanceof Error ? err.message : '操作失败';
+      const blockers = err instanceof ApiClientError
+        ? err.body?.error.details?.blockingResources?.map((resource) => resource.displayName).filter(Boolean)
+        : undefined;
+      const message = `${err instanceof Error ? err.message : '操作失败'}${blockers?.length ? `：${blockers.join('、')}` : ''}`;
       if (isAuthError(message)) {
         clearStoredPassword();
         setLocked(true);
@@ -2294,6 +2619,12 @@ export default function App() {
         <NavButton active={page === 'customers'} label="客户" count={data.customers.length} onClick={() => setPage('customers')} />
         <NavButton active={page === 'materials'} label="物料" count={data.materials.length} onClick={() => setPage('materials')} />
         <NavButton active={page === 'robots'} label="机器型号" count={data.robotModels.length} onClick={() => setPage('robots')} />
+        <NavButton
+          active={page === 'archive'}
+          label="归档库"
+          count={archivePages.requirements.summaries.length + archivePages.taskSops.summaries.length}
+          onClick={() => setPage('archive')}
+        />
         <NavButton
           active={page === 'globalFields'}
           label="全局字段"
@@ -2385,7 +2716,7 @@ export default function App() {
                 acceptableOperations: operationItemsFromOptions(acceptableOptions),
                 forbiddenOperations: forbiddenGroupsFromKeys(forbiddenOptions.map((option) => option.value), forbiddenOptions),
                 annotation: {
-                  required: false,
+                  required: undefined,
                   types: [],
                   allowedOperations: operationItemsFromOptions(annotationAllowedOptions),
                   forbiddenOperations: operationItemsFromOptions(annotationForbiddenOptions),
@@ -2447,19 +2778,38 @@ export default function App() {
               if (!selectedRequirement || !requirementVersion) return;
               await run(() => exportRequirementPdf(selectedRequirement, requirementVersion), 'PDF 已生成');
             }}
+            onArchive={selectedRequirement ? () => run(
+              () => archiveRoot('requirements', selectedRequirement),
+              '客户需求已归档',
+            ).then(() => undefined) : undefined}
             onRun={run}
             attachmentStorageStatus={attachmentStorageStatus}
-            onOpenSubscene={async (sceneId, code, version) => {
+            onOpenSubscene={async (item) => {
               if (!selectedRequirement || !requirementVersion) return;
+              const target = findTaskSop(data.scenes, item);
+              const version = taskSopVersion(item);
               const returnTarget = { requirementId: selectedRequirement.id, version: requirementVersion.version };
-              const loaded = await run(() => openTaskSopResource(sceneId, code));
+              if (!target) {
+                if (!item.taskSop?.versionId) {
+                  setError(`找不到需求引用的任务 SOP 版本 v${version}`);
+                  return;
+                }
+                const route = await resourceClient.resolveVersionRoute(item.taskSop.versionId);
+                if (route.archived) {
+                  await openArchivedResource('taskSops', route.ownerName, route.versionLabel);
+                  setPage('archive', { keepDetail: true });
+                  return;
+                }
+                throw new Error('任务 SOP 未加载，请刷新后重试');
+              }
+              const loaded = await run(() => openTaskSopResource(target.scene.id, target.subscene.code));
               const targetVersion = loaded?.versions.find((item) => item.version === version);
               if (!loaded || !targetVersion) {
                 setError(`找不到需求引用的任务 SOP 版本 v${version}`);
                 return;
               }
               setReturnToRequirement(returnTarget);
-              setSelectedSceneId(sceneId);
+              setSelectedSceneId(target.scene.id);
               setSelectedSubsceneCode(loaded.code);
               setSelectedSubsceneVersion(targetVersion.version);
               setSceneDetailOpen(true);
@@ -2579,6 +2929,14 @@ export default function App() {
             onExportSubscenePdf={async (subscene, version) => {
               await run(() => exportTaskSopPdf(subscene, version), 'PDF 已生成');
             }}
+            onArchive={(() => {
+              const scene = data.scenes.find((item) => item.id === selectedSceneId);
+              const subscene = scene?.subscenes.find((item) => item.code === selectedSubsceneCode);
+              return subscene ? () => run(
+                () => archiveRoot('taskSops', subscene),
+                '任务 SOP 已归档',
+              ).then(() => undefined) : undefined;
+            })()}
             onRun={run}
             attachmentStorageStatus={attachmentStorageStatus}
             returnToRequirement={returnToRequirement}
@@ -2593,6 +2951,88 @@ export default function App() {
           />
         )}
 
+        {page === 'archive' && !archivedDetail && (
+          <ArchiveLibraryPage
+            data={data}
+            pages={archivePages}
+            onSearch={(kind, query) => void loadArchivedResources(kind, query)}
+            onLoadMore={(kind, query) => void loadArchivedResources(kind, query, true)}
+            onOpen={(kind, summary) => openArchivedResource(kind, summary.name)}
+          />
+        )}
+
+        {page === 'archive' && archivedDetail?.kind === 'requirements' && archivedRequirementVersion && (
+          <RequirementPage
+            data={data}
+            globalFields={data.globalFields}
+            selectedRequirement={archivedDetail.requirement}
+            selectedVersion={archivedRequirementVersion}
+            detailOpen
+            archivedMode
+            archiveState={archivedDetail.summary.archiveState}
+            onDetailOpenChange={(open) => { if (!open) setArchivedDetail(null); }}
+            onSelectRequirement={async () => undefined}
+            onSelectVersion={setArchivedVersion}
+            onCreate={async () => undefined}
+            onSave={async () => false}
+            onDeleteVersion={async () => undefined}
+            onConfirm={async () => undefined}
+            onExport={() => exportRequirementYaml(archivedDetail.requirement, archivedRequirementVersion)}
+            onExportPdf={() => exportRequirementPdf(archivedDetail.requirement, archivedRequirementVersion)}
+            onRestore={() => run(restoreArchivedRoot, '客户需求已取消归档').then(() => undefined)}
+            onRun={run}
+            attachmentStorageStatus={attachmentStorageStatus}
+            onOpenSubscene={async (item) => {
+              if (!item.taskSop?.versionId) throw new Error('该生产需求项缺少任务 SOP 版本 ID');
+              const target = await resourceClient.resolveVersionRoute(item.taskSop.versionId);
+              await applyAppRoute({
+                page: target.archived ? 'archive' : 'scenes',
+                detail: { kind: 'taskSop', versionId: item.taskSop.versionId },
+              });
+            }}
+            pageState={{ summaries: [] }}
+            onLoadMore={() => undefined}
+            taskSopPageState={{ summaries: [] }}
+            onLoadMoreTaskSops={() => undefined}
+          />
+        )}
+
+        {page === 'archive' && archivedDetail?.kind === 'taskSops' && archivedTaskVersion && (
+          <ScenePage
+            globalFields={data.globalFields}
+            materials={data.materials}
+            scenes={[archivedDetail.scene]}
+            selectedSceneId={archivedDetail.scene.id}
+            selectedSubsceneCode={archivedDetail.subscene.code}
+            selectedVersion={archivedTaskVersion.version}
+            detailOpen
+            archivedMode
+            archiveState={archivedDetail.summary.archiveState}
+            onSelectScene={() => undefined}
+            onSelectSubscene={async () => undefined}
+            onSelectVersion={setArchivedVersion}
+            onDetailOpenChange={(open) => { if (!open) setArchivedDetail(null); }}
+            onSaveScene={async () => undefined}
+            onSaveSubscene={async () => false}
+            onDeleteSubsceneVersion={async () => undefined}
+            onConfirmSubscene={async () => undefined}
+            onExportSubscene={(subscene, version) => exportTaskSopYaml(subscene, version)}
+            onExportSubscenePdf={(subscene, version) => exportTaskSopPdf(subscene, version)}
+            onRestore={() => run(restoreArchivedRoot, '任务 SOP 已取消归档').then(() => undefined)}
+            onRun={run}
+            attachmentStorageStatus={attachmentStorageStatus}
+            returnToRequirement={null}
+            onReturnToRequirement={() => undefined}
+            onClearReturnToRequirement={() => undefined}
+            pageState={{ summaries: [] }}
+            onLoadMoreScenes={() => undefined}
+            taskPageState={{ summaries: [] }}
+            onLoadMoreTaskSops={() => undefined}
+            materialPageState={resourcePages.materials}
+            onLoadMoreMaterials={() => void loadMoreResources('materials')}
+          />
+        )}
+
         {page === 'globalFields' && (
           <GlobalFieldPage
             globalFields={data.globalFields}
@@ -2601,6 +3041,15 @@ export default function App() {
             onLoadMore={() => void loadMoreResources('globalFields')}
             onSaveField={async (field) => {
               return run(() => saveMaster('globalFields', field), '全局字段已保存');
+            }}
+            onReplaceFields={async (fields) => {
+              const result = await run(
+                () => resourceClient.replaceGlobalFields(fields.map(createGlobalFieldResource)),
+                `已全量导入 ${fields.length} 条全局字段`,
+              );
+              if (!result) return false;
+              await load();
+              return true;
             }}
           />
         )}
@@ -2716,6 +3165,7 @@ function pageTitle(page: Page) {
     customers: '客户信息',
     materials: '物料信息',
     robots: '机器型号',
+    archive: '归档库',
   };
   return map[page];
 }
@@ -2728,6 +3178,7 @@ function pageHint(page: Page) {
     customers: '管理客户和联系人，供客户需求引用。',
     materials: '管理可复用物料主数据，供任务 SOP 版本引用。',
     robots: '管理机器人型号、末端和 topic 要求。',
+    archive: '查看已归档客户需求和任务 SOP，可导出或取消归档。',
   };
   return map[page];
 }
@@ -2763,6 +3214,93 @@ function SearchPanel({
         <span className="result-count">{count} 条</span>
         {actions}
       </div>
+    </div>
+  );
+}
+
+function ArchiveLibraryPage({
+  data,
+  pages,
+  onSearch,
+  onLoadMore,
+  onOpen,
+}: {
+  data: AppViewModel;
+  pages: Record<ArchiveKind, ResourcePageState>;
+  onSearch: (kind: ArchiveKind, query: string) => void;
+  onLoadMore: (kind: ArchiveKind, query: string) => void;
+  onOpen: (kind: ArchiveKind, summary: ResourceSummary) => Promise<void>;
+}) {
+  const [kind, setKind] = useState<ArchiveKind>('requirements');
+  const [query, setQuery] = useState('');
+  const state = pages[kind];
+  const onSearchRef = useRef(onSearch);
+  onSearchRef.current = onSearch;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => onSearchRef.current(kind, query), 250);
+    return () => window.clearTimeout(timer);
+  }, [kind, query]);
+
+  const columns: Array<DataTableColumn<ResourceSummary>> = [
+    { key: 'name', title: kind === 'requirements' ? '需求名称' : '任务 SOP', width: 'minmax(180px, 1.6fr)', render: (item) => item.displayName },
+    {
+      key: 'owner', title: kind === 'requirements' ? '客户' : '场景', width: 'minmax(130px, 1fr)',
+      render: (item) => kind === 'requirements'
+        ? data.customers.find((customer) => resourceNameOf(customer) === item.customerName)?.name || '-'
+        : data.scenes.find((scene) => resourceNameOf(scene) === item.sceneName)?.name || '-',
+    },
+    {
+      key: 'status', title: '归档前状态', width: '110px',
+      render: (item) => <StatusBadge status={item.archiveState?.archivedFromLifecycle === 'CONFIRMED' ? 'confirmed' : 'draft'} />,
+    },
+    {
+      key: 'version', title: '版本', width: '90px',
+      render: (item) => `v${item.archiveState?.candidateVersionLabel || item.currentVersionLabel || '0.0.1'}`,
+    },
+    { key: 'archivedAt', title: '归档时间', width: '160px', render: (item) => formatDateTime(item.archiveState?.archivedAt) },
+    {
+      key: 'action', title: '操作', width: '60px',
+      render: (item) => <button className="text-button" onClick={(event) => {
+        event.stopPropagation();
+        void onOpen(kind, item);
+      }}>查看</button>,
+    },
+  ];
+
+  return (
+    <div className="page-stack">
+      <section className="panel table-panel">
+        <div className="archive-tabs" role="tablist" aria-label="归档类型">
+          <button className={kind === 'requirements' ? 'active' : ''} onClick={() => { setKind('requirements'); setQuery(''); }}>
+            客户需求
+          </button>
+          <button className={kind === 'taskSops' ? 'active' : ''} onClick={() => { setKind('taskSops'); setQuery(''); }}>
+            任务 SOP
+          </button>
+        </div>
+        <SearchPanel
+          title={kind === 'requirements' ? '已归档客户需求' : '已归档任务 SOP'}
+          description="归档内容保持只读，可以查看历史版本、导出或取消归档"
+          query={query}
+          placeholder={kind === 'requirements' ? '搜索需求名称、客户或版本' : '搜索任务 SOP、场景或版本'}
+          count={state.summaries.length}
+          onQueryChange={setQuery}
+          actions={(state.nextCursor || state.error) && (
+            <button className="ghost-button" disabled={state.loadingMore} onClick={() => onLoadMore(kind, query)}>
+              {state.loadingMore ? '正在加载…' : '加载更多'}
+            </button>
+          )}
+        />
+        {state.error && <div className="notice error">{state.error}</div>}
+        <DataTable
+          rows={state.summaries}
+          columns={columns}
+          rowKey={(item) => item.name}
+          emptyText={state.loadingMore ? '正在加载归档内容…' : '归档库中暂无内容'}
+          onRowClick={(item) => onOpen(kind, item)}
+        />
+      </section>
     </div>
   );
 }
@@ -2841,15 +3379,6 @@ function DataTable<T>({
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`status-badge status-${status}`}>{statusText(status)}</span>;
-}
-
-function InfoItem({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="info-item">
-      <span>{label}</span>
-      <strong>{value || '-'}</strong>
-    </div>
-  );
 }
 
 function ExportMenu({ items }: { items: Array<{ label: string; disabled?: boolean; title?: string; onSelect: () => void | Promise<void> }> }) {
@@ -3299,11 +3828,34 @@ function fieldOptions(fields: GlobalField[], group: GlobalFieldGroup, includeVal
   return uniqueOptions([...activeOptions, ...missingOptions]);
 }
 
+function deliveryLanguageOptions(
+  fields: GlobalField[],
+  selected: RequirementVersion['delivery']['languages'],
+): Option[] {
+  const configured = fieldOptions(fields, 'delivery_language').map((option) => {
+    const language = parseDeliveryLanguageSelection(option.value || option.label);
+    return {
+      ...option,
+      value: deliveryLanguageSelectionValue(language),
+      label: language.name,
+    };
+  });
+  const selectedOptions = selected.map((item) => {
+    const language = parseDeliveryLanguageSelection(deliveryLanguageSelectionValue(item));
+    return {
+      value: deliveryLanguageSelectionValue(language),
+      label: language.name,
+    };
+  });
+  return uniqueOptions([...configured, ...selectedOptions]);
+}
+
 function fieldToOption(field: GlobalField): Option {
   return {
     value: field.value,
     label: field.label || field.value,
     description: field.description,
+    aliases: [field.id],
   };
 }
 
@@ -3317,32 +3869,10 @@ function uniqueOptions(options: Option[]): Option[] {
   });
 }
 
-function normalizedFieldId(value: string): string {
-  return value
-    .normalize('NFKD')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
 function globalFieldValueForStoredField(
   field: { field: string; displayName?: string },
-  options: Option[],
 ): string {
-  const candidates = [field.displayName || '', field.field].filter(Boolean);
-  const direct = options.find((option) =>
-    candidates.some((candidate) => candidate === option.value || candidate === option.label));
-  if (direct) return direct.value;
-
-  const prefixed = options.find((option) => {
-    const optionId = normalizedFieldId(option.value);
-    if (!optionId) return false;
-    return candidates.some((candidate) => {
-      const candidateId = normalizedFieldId(candidate);
-      return candidateId === optionId || candidateId.startsWith(`${optionId}-`);
-    });
-  });
-  return prefixed?.value || field.displayName || field.field;
+  return field.field || field.displayName || '';
 }
 
 function RequirementPage({
@@ -3367,6 +3897,10 @@ function RequirementPage({
   onLoadMore,
   taskSopPageState,
   onLoadMoreTaskSops,
+  archivedMode = false,
+  archiveState,
+  onArchive,
+  onRestore,
 }: {
   data: AppViewModel;
   globalFields: GlobalField[];
@@ -3384,11 +3918,15 @@ function RequirementPage({
   onExportPdf: () => Promise<void>;
   onRun: <T>(action: () => Promise<T>, success: string) => Promise<T | undefined>;
   attachmentStorageStatus: AttachmentStorageStatus;
-  onOpenSubscene: (sceneId: string, code: string, version: string) => Promise<void>;
+  onOpenSubscene: (item: RequirementVersion['selectedSubscenes'][number]) => Promise<void>;
   pageState?: ResourcePageState;
   onLoadMore: () => void;
   taskSopPageState?: ResourcePageState;
   onLoadMoreTaskSops: () => void;
+  archivedMode?: boolean;
+  archiveState?: ResourceSummary['archiveState'];
+  onArchive?: () => Promise<void>;
+  onRestore?: () => Promise<void>;
 }) {
   const [requirementQuery, setRequirementQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
@@ -3455,7 +3993,9 @@ function RequirementPage({
     selectedVersion?.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0) || 0;
   const durationDelta = selectedVersion ? selectedSubsceneDurationTotal - (Number(selectedVersion.requiredDurationHours) || 0) : 0;
   const missingSelectedSubscenes =
-    selectedVersion?.selectedSubscenes.filter((item) => !taskSopVersion(item) || !findTaskSop(data.scenes, item)) || [];
+    archivedMode
+      ? []
+      : selectedVersion?.selectedSubscenes.filter((item) => !taskSopVersion(item) || !findTaskSop(data.scenes, item)) || [];
   const unconfirmedSelectedSubscenes =
     selectedVersion?.selectedSubscenes.filter((item) => {
       const target = findTaskSop(data.scenes, item);
@@ -3536,7 +4076,7 @@ function RequirementPage({
     {
       key: 'title',
       title: '生产需求项',
-      width: 'minmax(190px, 1.2fr)',
+      width: '160px',
       render: (item) => (
         <InlineTextInput
           disabled={readonly}
@@ -3555,7 +4095,7 @@ function RequirementPage({
     {
       key: 'description',
       title: '描述',
-      width: '160px',
+      width: '320px',
       render: (item) => (
         <LongTextDialogEditor
           title="生产需求项描述"
@@ -3575,18 +4115,23 @@ function RequirementPage({
     {
       key: 'taskSop',
       title: '任务 SOP',
-      width: 'minmax(180px, 1fr)',
-      render: (item) => taskSopLabel(item) || <span className="muted-text">未选择任务 SOP</span>,
-    },
-    { key: 'version', title: 'SOP 版本', width: '90px', render: (item) => (taskSopVersion(item) ? `v${taskSopVersion(item)}` : '-') },
-    {
-      key: 'status',
-      title: '状态',
-      width: '96px',
+      width: '170px',
       render: (item) => {
+        const label = taskSopLabel(item);
+        if (!label) return <span className="muted-text">未选择任务 SOP</span>;
+        const version = taskSopVersion(item);
         const target = findTaskSop(data.scenes, item);
         const status = target?.version?.status || taskSopStatus(item);
-        return status ? <StatusBadge status={status} /> : '未选择';
+        return (
+          <div className="task-sop-reference-cell">
+            <strong>{label}</strong>
+            <span>
+              {version ? `v${version}` : '版本未知'}
+              <b aria-hidden="true">·</b>
+              {status ? statusText(status) : '状态未知'}
+            </span>
+          </div>
+        );
       },
     },
     {
@@ -3639,7 +4184,7 @@ function RequirementPage({
     {
       key: 'action',
       title: '操作',
-      width: '186px',
+      width: 'minmax(186px, 1fr)',
       render: (item) => (
         <span className="table-action-row">
           <button
@@ -3651,11 +4196,9 @@ function RequirementPage({
           </button>
           <button
             className="text-button"
-            disabled={!findTaskSop(data.scenes, item)}
+            disabled={!findTaskSop(data.scenes, item) && !item.taskSop?.versionId}
             onClick={() => {
-              const target = findTaskSop(data.scenes, item);
-              const version = taskSopVersion(item);
-              if (target && version) void onOpenSubscene(target.scene.id, target.subscene.code, version);
+              void onOpenSubscene(item);
             }}
           >
             查看
@@ -3764,7 +4307,7 @@ function RequirementPage({
 
   const checkpoint = revisionIsCheckpoint(selectedVersion);
   const currentDraft = activeEditableDraft(selectedRequirement.versions);
-  const readonly = selectedVersion.status === 'confirmed' || checkpoint;
+  const readonly = archivedMode || selectedVersion.status === 'confirmed' || checkpoint;
   const selectedAllowedOperations = selectedVersion.allowedOperations.map((item) => item.operation);
   const selectedAcceptableOperations = (selectedVersion.acceptableOperations || []).map((item) => item.operation);
   const selectedForbiddenOperations = selectedVersion.forbiddenOperations.flatMap((group) =>
@@ -3943,7 +4486,7 @@ function RequirementPage({
         <div className="detail-page-toolbar">
           <div className="button-row">
             <button className="ghost-button" onClick={closeRequirementDetail}>
-              返回需求列表
+              {archivedMode ? '返回归档库' : '返回需求列表'}
             </button>
           </div>
           <span>客户需求 / v{selectedVersion.version}</span>
@@ -3973,15 +4516,15 @@ function RequirementPage({
               items={[
                 {
                   label: '导出 PDF',
-                  disabled: missingSelectedSubscenes.length > 0,
-                  title: missingSelectedSubscenes.length > 0
+                  disabled: !archivedMode && missingSelectedSubscenes.length > 0,
+                  title: !archivedMode && missingSelectedSubscenes.length > 0
                     ? '有生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到'
                     : undefined,
                   onSelect: onExportPdf,
                 },
                 {
                   label: '导出 YAML',
-                  disabled: missingSelectedSubscenes.length > 0 || !revisionExportEligible(selectedVersion),
+                  disabled: (!archivedMode && missingSelectedSubscenes.length > 0) || !revisionExportEligible(selectedVersion),
                   title: !revisionExportEligible(selectedVersion)
                     ? '草稿版本只能导出 PDF'
                     : missingSelectedSubscenes.length > 0
@@ -3991,7 +4534,19 @@ function RequirementPage({
                 },
               ]}
             />
-            {selectedVersion.status === 'confirmed' ? (
+            {!archivedMode && onArchive && (
+              <button className="ghost-button danger" onClick={() => {
+                if (!window.confirm('归档后将从客户需求列表移至归档库，并可随时取消归档。确定继续吗？')) return;
+                void onArchive();
+              }}>
+                归档
+              </button>
+            )}
+            {archivedMode ? (
+              <button className="primary-button" onClick={() => void onRestore?.()}>
+                取消归档
+              </button>
+            ) : selectedVersion.status === 'confirmed' ? (
               <button className="primary-button" onClick={createDraftFromCurrentVersion}>
                 {currentDraft ? '进入当前草稿' : '编辑为草稿'}
               </button>
@@ -3999,7 +4554,12 @@ function RequirementPage({
               <span className="muted-text">导入草稿检查点（只读）</span>
             ) : (
               <>
-                <button className="ghost-button danger" onClick={() => void onDeleteVersion()}>
+                <button className="ghost-button danger" onClick={() => {
+                  if (!window.confirm(
+                    `确定删除客户需求草稿 v${selectedVersion.version}？\n\n删除后无法恢复，且不会进入归档库。`,
+                  )) return;
+                  void onDeleteVersion();
+                }}>
                   删除草稿
                 </button>
                 <button
@@ -4015,7 +4575,14 @@ function RequirementPage({
           </div>
           </div>
 
-          {checkpoint
+          {archivedMode && archiveState && (
+            <div className="notice info">
+              已于 {formatDateTime(archiveState.archivedAt)} 归档，归档前状态为
+              {archiveState.archivedFromLifecycle === 'DRAFT' ? '草稿' : '已确认'}。归档内容只读。
+            </div>
+          )}
+
+          {!archivedMode && (checkpoint
             ? <div className="notice info">这是迁移保留的旧草稿检查点，仅供追踪，不能编辑或确认，可以导出 PDF。</div>
             : selectedVersion.status === 'confirmed' && (
               <div className="notice info">
@@ -4023,7 +4590,7 @@ function RequirementPage({
                   ? `当前已有草稿 v${currentDraft.version}，点击“进入当前草稿”继续编辑。`
                   : '当前版本已确认，点击“编辑为草稿”会复制出新的草稿版本。'}
               </div>
-            )}
+            ))}
           {!readonly && unconfirmedSelectedSubscenes.length > 0 && (
             <div className="notice warning">
               有 {unconfirmedSelectedSubscenes.length} 个生产需求项未选择任务 SOP，或选择的任务 SOP 还没有确认，不能确认需求：
@@ -4048,7 +4615,10 @@ function RequirementPage({
                   label="需求名称"
                   value={selectedVersion.title}
                   disabled={readonly}
-                  onChange={(title) => void onSave({ title })}
+                  beforeCommit={selectedVersion.version === '0.0.1'
+                    ? (title) => confirmArchivedNameReuse('requirements', title)
+                    : undefined}
+                  onChange={(title) => onSave({ title }).then(() => undefined)}
                 />
                 <Field
                   label="项目名称"
@@ -4150,31 +4720,31 @@ function RequirementPage({
                 />
                 <MultiSelectField
                   label="交付语言"
-                  value={selectedVersion.delivery.languages.map((item) => `${item.code}:${item.name}`)}
-                  options={fieldOptions(
-                    globalFields,
-                    'delivery_language',
-                    selectedVersion.delivery.languages.map((item) => `${item.code}:${item.name}`),
-                  )}
+                  value={selectedVersion.delivery.languages.map(deliveryLanguageSelectionValue)}
+                  options={deliveryLanguageOptions(globalFields, selectedVersion.delivery.languages)}
                   disabled={readonly}
                   onChange={(value) =>
                     void onSave({
                       delivery: {
                         ...selectedVersion.delivery,
-                        languages: value.map((item) => {
-                          const [code, name = code] = item.split(':');
-                          return { code, name };
-                        }),
+                        languages: value.map(parseDeliveryLanguageSelection),
                       },
                     })
                   }
                 />
                 <SelectField
                   label="是否需要标注"
-                  value={selectedVersion.annotation.required ? '需要' : '不需要'}
+                  value={selectedVersion.annotation.required === undefined
+                    ? ''
+                    : selectedVersion.annotation.required ? '需要' : '不需要'}
                   options={['需要', '不需要'].map((item) => ({ value: item, label: item }))}
                   disabled={readonly}
-                  onChange={(value) => void onSave({ annotation: { ...selectedVersion.annotation, required: value === '需要' } })}
+                  onChange={(value) => void onSave({
+                    annotation: {
+                      ...selectedVersion.annotation,
+                      required: value ? value === '需要' : undefined,
+                    },
+                  })}
                 />
                 <div className="field">
                   <span>标注类型</span>
@@ -4362,6 +4932,10 @@ function ScenePage({
   onLoadMoreTaskSops,
   materialPageState,
   onLoadMoreMaterials,
+  archivedMode = false,
+  archiveState,
+  onArchive,
+  onRestore,
 }: {
   globalFields: GlobalField[];
   materials: Material[];
@@ -4391,6 +4965,10 @@ function ScenePage({
   onLoadMoreTaskSops: () => void;
   materialPageState?: ResourcePageState;
   onLoadMoreMaterials: () => void;
+  archivedMode?: boolean;
+  archiveState?: ResourceSummary['archiveState'];
+  onArchive?: () => Promise<void>;
+  onRestore?: () => Promise<void>;
 }) {
   const [sceneQuery, setSceneQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
@@ -4406,7 +4984,7 @@ function ScenePage({
     : undefined;
   const checkpoint = revisionIsCheckpoint(version);
   const currentDraft = subscene ? activeEditableDraft(subscene.versions) : undefined;
-  const canEditVersion = version?.status === 'draft' && !checkpoint;
+  const canEditVersion = !archivedMode && version?.status === 'draft' && !checkpoint;
   const canEditSubsceneTitle = Boolean(version && canEditVersion && (version.version === '0.0.1' || subscene?.versions.length === 1));
   const canEditDescription = Boolean(version && canEditVersion && version.status === 'draft');
 
@@ -4450,7 +5028,7 @@ function ScenePage({
     {
       key: 'name',
       title: '任务 SOP',
-      width: 'minmax(150px, 1.5fr)',
+      width: 'minmax(140px, 1fr)',
       render: (item) => latest(item.versions).title || item.name,
     },
     {
@@ -4473,22 +5051,15 @@ function ScenePage({
       render: (item) => <StatusBadge status={latest(item.versions).status} />,
     },
     {
-      key: 'materials',
-      title: '物料',
-      width: '66px',
-      align: 'right',
-      render: (item) => `${latest(item.versions).materials.length} 种`,
-    },
-    {
       key: 'updated',
       title: '最近更新',
-      width: '104px',
+      width: '124px',
       render: (item) => formatShortDate(latest(item.versions).updatedAt),
     },
     {
       key: 'action',
       title: '操作',
-      width: '54px',
+      width: '68px',
       render: (item) => (
         <button
           className="text-button"
@@ -4648,6 +5219,9 @@ function ScenePage({
 
   async function deleteCurrentSubsceneDraft() {
     if (!subscene || !version || version.status !== 'draft') return;
+    if (!window.confirm(
+      `确定删除任务 SOP 草稿 v${version.version}？\n\n删除后无法恢复，且不会进入归档库。`,
+    )) return;
     await onDeleteSubsceneVersion(scene.id, subscene.code, version.version);
     onSelectVersion('');
   }
@@ -4735,9 +5309,15 @@ function ScenePage({
     value: option.value,
     label: option.label,
   }));
-  const robotRandomOptions = fieldOptions(globalFields, 'robot_random_field');
+  const robotRandomOptions = withStoredRandomFieldOptions(
+    fieldOptions(globalFields, 'robot_random_field'),
+    (version?.randomization.robotInitialState.randomizedFields ?? []).map((field) => ({
+      value: field.field,
+      aliases: field.displayName ? [field.displayName] : [],
+    })),
+  );
   const robotInitialRandomRows = version
-    ? robotInitialRandomizationRows(version.randomization, version.randomizationFrequency, robotRandomOptions)
+    ? robotInitialRandomizationRows(version.randomization, version.randomizationFrequency)
     : [];
   function saveRobotInitialRandomRows(nextRows: RobotInitialRandomizationRow[]) {
     if (!version) return;
@@ -4865,7 +5445,7 @@ function ScenePage({
                 </button>
               )}
               <button className="ghost-button" onClick={closeSubsceneDetail}>
-                返回任务 SOP 列表
+                {archivedMode ? '返回归档库' : '返回任务 SOP 列表'}
               </button>
             </div>
             <span>{scene.name} / v{version.version}</span>
@@ -4903,7 +5483,19 @@ function ScenePage({
                     },
                   ]}
                 />
-                {version.status === 'confirmed' ? (
+                {!archivedMode && onArchive && (
+                  <button className="ghost-button danger" onClick={() => {
+                    if (!window.confirm('归档后将从场景任务列表移至归档库，并可随时取消归档。确定继续吗？')) return;
+                    void onArchive();
+                  }}>
+                    归档
+                  </button>
+                )}
+                {archivedMode ? (
+                  <button className="primary-button" onClick={() => void onRestore?.()}>
+                    取消归档
+                  </button>
+                ) : version.status === 'confirmed' ? (
                   <button className="primary-button" onClick={() => void createDraftFromCurrentSubsceneVersion()}>
                     {currentDraft ? '进入当前草稿' : '编辑为草稿'}
                   </button>
@@ -4921,7 +5513,13 @@ function ScenePage({
                 )}
               </div>
             </div>
-            {checkpoint
+            {archivedMode && archiveState && (
+              <div className="notice info">
+                已于 {formatDateTime(archiveState.archivedAt)} 归档，归档前状态为
+                {archiveState.archivedFromLifecycle === 'DRAFT' ? '草稿' : '已确认'}。归档内容只读。
+              </div>
+            )}
+            {!archivedMode && (checkpoint
               ? <div className="notice info">这是迁移保留的旧草稿检查点，仅供追踪，不能编辑或确认，可以导出 PDF。</div>
               : version.status === 'confirmed' && (
                 <div className="notice info">
@@ -4929,14 +5527,17 @@ function ScenePage({
                     ? `当前已有草稿 v${currentDraft.version}，点击“进入当前草稿”继续编辑。`
                     : '当前任务 SOP 已确认，点击“编辑为草稿”会复制出新的草稿版本。'}
                 </div>
-              )}
+              ))}
             <CollapsibleSection title="基础信息" description="0.0.1 草稿可编辑名称；草稿版本可编辑描述">
               <div className="form-grid compact-fields">
-                <Field
+                <CommitField
                   label="任务 SOP 名称"
                   value={version.title || ''}
                   disabled={!canEditSubsceneTitle}
-                  onChange={(title) => void saveCurrentSubscene({ title })}
+                  beforeCommit={(title) => confirmArchivedNameReuse('taskSops', title, {
+                    sceneName: resourceNameOf(scene),
+                  })}
+                  onChange={(title) => saveCurrentSubscene({ title }).then(() => undefined)}
                 />
               </div>
               <TextArea
@@ -5103,7 +5704,17 @@ function ScenePage({
                 steps={version.annotation.steps || []}
                 disabled={!canEditVersion}
                 enableBulkImport
-                onChange={(steps) => void saveCurrentSubscene({ annotation: { ...version.annotation, steps } })}
+                onChange={(steps) => void saveCurrentSubscene({
+                  annotation: {
+                    ...version.annotation,
+                    steps,
+                    allowedOperations: appendMissingAtomicSkillRequirements(
+                      steps,
+                      version.annotation.allowedOperations || [],
+                      globalFields,
+                    ),
+                  },
+                })}
               />
               <LocalTextItemEditor
                 title="标注操作要求"
@@ -5160,25 +5771,13 @@ function ScenePage({
             <div className={`directory-group ${item.id === scene.id ? 'selected' : ''}`} key={item.id}>
               <button
                 className="directory-row scene-row"
+                aria-current={item.id === scene.id ? 'page' : undefined}
+                aria-label={`${item.name} ${item.subscenes.length} 个任务 SOP`}
                 onClick={() => selectScene(item.id)}
               >
                 <strong>{item.name}</strong>
-                <span>{item.subscenes.length} 个任务 SOP</span>
+                <span className="scene-row-count" aria-hidden="true">{item.subscenes.length}</span>
               </button>
-              {item.id === scene.id && (
-                <div className="directory-children">
-                  {item.subscenes.map((child) => (
-                    <button
-                      className="directory-row subscene-row"
-                      key={child.code}
-                      onClick={() => openSubsceneDetail(child.code)}
-                    >
-                      <strong>{latest(child.versions).title || child.name}</strong>
-                      <span>v{latest(child.versions).version} · {statusText(latest(child.versions).status)}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           ))}
         </div>
@@ -5190,14 +5789,11 @@ function ScenePage({
             <div>
               <h2>{scene.name}</h2>
               <p>{scene.description || '暂无场景描述'}</p>
+              <span className="scene-summary-meta">最近更新 {sceneLatestUpdated(scene)}</span>
             </div>
             <button className="ghost-button" onClick={openCurrentSceneEditor}>
               编辑场景
             </button>
-          </div>
-          <div className="info-grid">
-            <InfoItem label="任务 SOP 数" value={scene.subscenes.length} />
-            <InfoItem label="最近更新" value={sceneLatestUpdated(scene)} />
           </div>
         </section>
 
@@ -5225,7 +5821,13 @@ function ScenePage({
         <Modal title={sceneDraft.id ? '编辑场景' : '新建场景'} onClose={() => setSceneEditorOpen(false)}>
           <div className="modal-body">
             <div className="form-grid">
-              <Field label="场景名称" value={sceneDraft.name} onChange={(name) => setSceneDraft({ ...sceneDraft, name })} />
+              <Field
+                label="场景名称"
+                value={sceneDraft.name}
+                autoFocus={!sceneDraft.id}
+                selectOnAutoFocus={!sceneDraft.id}
+                onChange={(name) => setSceneDraft({ ...sceneDraft, name })}
+              />
             </div>
             <TextArea
               label="场景描述"
@@ -5251,36 +5853,44 @@ function GlobalFieldPage({
   globalFields,
   onSaveField,
   onOpenField,
+  onReplaceFields,
   pageState,
   onLoadMore,
 }: {
   globalFields: GlobalField[];
   onSaveField: (field: GlobalField) => Promise<GlobalField | undefined>;
   onOpenField: (field: GlobalField) => Promise<GlobalField>;
+  onReplaceFields: (fields: GlobalField[]) => Promise<boolean>;
   pageState?: ResourcePageState;
   onLoadMore: () => void;
 }) {
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [fieldQuery, setFieldQuery] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<GlobalFieldGroup>('reference_object');
   const [statusFilter, setStatusFilter] = useState<GlobalFieldStatus | 'all'>('all');
   const [fieldDraft, setFieldDraft] = useState<GlobalField>(emptyGlobalField('reference_object'));
   const [editorOpen, setEditorOpen] = useState(false);
   const [savingField, setSavingField] = useState(false);
+  const [importingFields, setImportingFields] = useState(false);
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(globalFieldCategories.map((category) => [category.id, category.groups.includes('reference_object')])),
   );
 
-  const filteredFields = globalFields.filter(
-    (field) =>
-      field.group === selectedGroup &&
-      (statusFilter === 'all' || field.status === statusFilter) &&
-      matchesQuery(fieldQuery, [
-        field.id,
-        field.label,
-        field.value,
-        field.description,
-        field.status === 'active' ? '启用' : '停用',
-      ]),
+  const filteredFields = sortGlobalFieldsByPinyin(
+    globalFields.filter(
+      (field) =>
+        field.group === selectedGroup &&
+        (statusFilter === 'all' || field.status === statusFilter) &&
+        matchesQuery(fieldQuery, [
+          field.id,
+          field.label,
+          field.value,
+          field.description,
+          field.startCondition,
+          field.endCondition,
+          field.status === 'active' ? '启用' : '停用',
+        ]),
+    ),
   );
 
   const fieldColumns: Array<DataTableColumn<GlobalField>> = [
@@ -5290,6 +5900,27 @@ function GlobalFieldPage({
       width: 'minmax(180px, 1.4fr)',
       render: (item) => <strong className="table-link">{item.label}</strong>,
     },
+    ...(selectedGroup === 'atomic_skill' ? [
+      {
+        key: 'startCondition',
+        title: '开始时机',
+        width: 'minmax(220px, 1.5fr)',
+        render: (item: GlobalField) => item.startCondition || <span className="muted-text">-</span>,
+      },
+      {
+        key: 'endCondition',
+        title: '结束时机',
+        width: 'minmax(220px, 1.5fr)',
+        render: (item: GlobalField) => item.endCondition || <span className="muted-text">-</span>,
+      },
+    ] : [
+      {
+        key: 'description',
+        title: '说明',
+        width: 'minmax(260px, 2fr)',
+        render: (item: GlobalField) => item.description || <span className="muted-text">-</span>,
+      },
+    ]),
     {
       key: 'status',
       title: '状态',
@@ -5324,6 +5955,10 @@ function GlobalFieldPage({
       value: label,
     };
     if (!next.label) return false;
+    if (next.group === 'atomic_skill' && (!next.startCondition?.trim() || !next.endCondition?.trim())) {
+      window.alert('原子技能必须填写开始时机和结束时机');
+      return false;
+    }
     setSavingField(true);
     try {
       const saved = await onSaveField(next);
@@ -5365,6 +6000,36 @@ function GlobalFieldPage({
   async function saveFieldAndClose(patch: Partial<GlobalField> = {}) {
     if (await saveFieldDraft(patch)) {
       setEditorOpen(false);
+    }
+  }
+
+  function exportFieldsCsv() {
+    downloadTextFile(
+      globalFieldsToCsv(globalFields, globalFieldGroupLabels),
+      `全局字段-${today()}.csv`,
+      'text/csv;charset=utf-8',
+    );
+  }
+
+  async function importFieldsCsv(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      if (file.size > 5 * 1024 * 1024) throw new Error('CSV 文件不能超过 5 MiB');
+      const fields = globalFieldsFromCsv(await file.text(), globalFieldGroupLabels);
+      if (fields.length > 500) throw new Error('CSV 最多支持 500 条全局字段');
+      const confirmed = window.confirm(
+        `即将用 CSV 中的 ${fields.length} 条字段全量替换当前 ${globalFields.length} 条全局字段。\n\n` +
+        '未出现在 CSV 中的字段将从当前字段库移除，但已确认需求和任务 SOP 的历史内容不会改变。确定继续吗？',
+      );
+      if (!confirmed) return;
+      setImportingFields(true);
+      await onReplaceFields(fields);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      setImportingFields(false);
     }
   }
 
@@ -5438,6 +6103,24 @@ function GlobalFieldPage({
                   <option value="inactive">停用</option>
                 </select>
               </label>
+              <button className="ghost-button" type="button" onClick={exportFieldsCsv}>
+                导出 CSV
+              </button>
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={importingFields}
+                onClick={() => importInputRef.current?.click()}
+              >
+                {importingFields ? '正在导入…' : '导入 CSV'}
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                hidden
+                onChange={(event) => void importFieldsCsv(event)}
+              />
               <button className="primary-button" onClick={openNewFieldEditor}>
                 新建字段
               </button>
@@ -5469,7 +6152,12 @@ function GlobalFieldPage({
                 onChange={(group) => {
                   const nextGroup = group as GlobalFieldGroup;
                   selectGroup(nextGroup);
-                  setFieldDraft({ ...fieldDraft, group: nextGroup });
+                  setFieldDraft({
+                    ...fieldDraft,
+                    group: nextGroup,
+                    startCondition: nextGroup === 'atomic_skill' ? fieldDraft.startCondition : undefined,
+                    endCondition: nextGroup === 'atomic_skill' ? fieldDraft.endCondition : undefined,
+                  });
                   setEditorOpen(true);
                 }}
               />
@@ -5482,12 +6170,31 @@ function GlobalFieldPage({
                 ]}
                 onChange={(status) => setFieldDraft({ ...fieldDraft, status: status as GlobalFieldStatus })}
               />
-              <Field label="字段名称" value={fieldDraft.label} onChange={(label) => setFieldDraft({ ...fieldDraft, label })} />
               <Field
-                label="说明"
-                value={fieldDraft.description || ''}
-                onChange={(description) => setFieldDraft({ ...fieldDraft, description })}
+                label={fieldDraft.group === 'atomic_skill' ? '原子技能名称' : '字段名称'}
+                value={fieldDraft.label}
+                onChange={(label) => setFieldDraft({ ...fieldDraft, label })}
               />
+              {fieldDraft.group === 'atomic_skill' ? (
+                <>
+                  <Field
+                    label="开始时机"
+                    value={fieldDraft.startCondition || ''}
+                    onChange={(startCondition) => setFieldDraft({ ...fieldDraft, startCondition })}
+                  />
+                  <Field
+                    label="结束时机"
+                    value={fieldDraft.endCondition || ''}
+                    onChange={(endCondition) => setFieldDraft({ ...fieldDraft, endCondition })}
+                  />
+                </>
+              ) : (
+                <Field
+                  label="说明"
+                  value={fieldDraft.description || ''}
+                  onChange={(description) => setFieldDraft({ ...fieldDraft, description })}
+                />
+              )}
             </div>
             <div className="form-actions">
               <button className="primary-button" disabled={savingField} onClick={() => void saveFieldAndClose()}>
@@ -5746,42 +6453,17 @@ function NumberedTextArea({
   );
 }
 
-function splitStepBulkLines(value: string): string[] {
-  return value.replace(/\r\n/g, '\n').split('\n');
-}
-
 function BulkStepsModal({
+  steps,
   onClose,
   onConfirm,
 }: {
+  steps: OperationStep[];
   onClose: () => void;
   onConfirm: (steps: OperationStep[]) => void;
 }) {
-  const [draft, setDraft] = useState({
-    description: '',
-    atomicSkill: '',
-    englishDescription: '',
-    englishAtomicSkill: '',
-  });
-  const columns = {
-    description: splitStepBulkLines(draft.description),
-    atomicSkill: splitStepBulkLines(draft.atomicSkill),
-    englishDescription: splitStepBulkLines(draft.englishDescription),
-    englishAtomicSkill: splitStepBulkLines(draft.englishAtomicSkill),
-  };
-  const maxRows = Math.max(
-    columns.description.length,
-    columns.atomicSkill.length,
-    columns.englishDescription.length,
-    columns.englishAtomicSkill.length,
-  );
-  const importedSteps = Array.from({ length: maxRows }, (_, index) => ({
-    order: index + 1,
-    description: columns.description[index]?.trim() || '',
-    atomicSkill: columns.atomicSkill[index]?.trim() || '',
-    englishDescription: columns.englishDescription[index]?.trim() || '',
-    englishAtomicSkill: columns.englishAtomicSkill[index]?.trim() || '',
-  })).filter((step) => step.description || step.atomicSkill || step.englishDescription || step.englishAtomicSkill);
+  const [draft, setDraft] = useState(() => stepsToBulkDraft(steps));
+  const editedSteps = bulkDraftToSteps(draft);
 
   return (
     <Modal title="批量输入步骤" panelClassName="step-bulk-panel" onClose={onClose}>
@@ -5829,8 +6511,8 @@ function BulkStepsModal({
           <button className="ghost-button" onClick={onClose}>
             取消
           </button>
-          <button className="primary-button" disabled={importedSteps.length === 0} onClick={() => onConfirm(importedSteps)}>
-            确认导入
+          <button className="primary-button" onClick={() => onConfirm(editedSteps)}>
+            保存修改
           </button>
         </div>
       </div>
@@ -5869,6 +6551,7 @@ function StepsTable({
 
   function commitSteps(nextSteps = draftSteps) {
     const normalizedSteps = normalize(nextSteps);
+    if (!operationStepsReadyToSave(normalizedSteps)) return;
     if (JSON.stringify(normalizedSteps) !== JSON.stringify(normalize(steps))) {
       onChange(normalizedSteps);
     }
@@ -5901,11 +6584,15 @@ function StepsTable({
   function removeStep(index: number) {
     const nextSteps = normalize(draftSteps.filter((_, currentIndex) => currentIndex !== index));
     setDraftSteps(nextSteps);
-    onChange(nextSteps);
+    if (operationStepsReadyToSave(nextSteps)) onChange(nextSteps);
   }
 
-  function importSteps(importedSteps: OperationStep[]) {
-    const nextSteps = normalize([...draftSteps, ...importedSteps]);
+  function saveBulkSteps(editedSteps: OperationStep[]) {
+    const nextSteps = normalize(editedSteps);
+    if (!operationStepsReadyToSave(nextSteps)) {
+      window.alert('每个步骤都必须填写中文步骤');
+      return;
+    }
     setDraftSteps(nextSteps);
     onChange(nextSteps);
     setBulkOpen(false);
@@ -5921,11 +6608,11 @@ function StepsTable({
           </div>
           <div className="button-row">
             {enableBulkImport && (
-              <button className="ghost-button" disabled={disabled} onClick={() => setBulkOpen(true)}>
+              <button type="button" className="ghost-button" disabled={disabled} onClick={() => setBulkOpen(true)}>
                 批量输入步骤
               </button>
             )}
-            <button className="primary-button" disabled={disabled} onClick={addStep}>
+            <button type="button" className="primary-button" disabled={disabled} onClick={addStep}>
               新增步骤
             </button>
           </div>
@@ -5971,7 +6658,7 @@ function StepsTable({
                   onBlur={() => commitSteps()}
                   onChange={(event) => updateStepDraft(index, { englishAtomicSkill: event.target.value })}
                 />
-                <button className="text-button danger" disabled={disabled} onClick={() => removeStep(index)}>
+                <button type="button" className="text-button danger" disabled={disabled} onClick={() => removeStep(index)}>
                   移除
                 </button>
               </div>
@@ -5979,7 +6666,13 @@ function StepsTable({
           )}
         </div>
       </div>
-      {bulkOpen && <BulkStepsModal onClose={() => setBulkOpen(false)} onConfirm={importSteps} />}
+      {bulkOpen && (
+        <BulkStepsModal
+          steps={draftSteps}
+          onClose={() => setBulkOpen(false)}
+          onConfirm={saveBulkSteps}
+        />
+      )}
     </>
   );
 }
@@ -6262,7 +6955,10 @@ function SubsceneStateEditor({
   const targetRows = targetStateRows(version.objectStates.target);
   const materialInitialRandomRows = materialInitialRandomizationRows(version.randomization);
   const materialOptions = materials.map((material) => material.type);
-  const materialRandomOptions = fieldOptions(globalFields, 'material_random_field');
+  const materialRandomOptions = withStoredRandomFieldOptions(
+    fieldOptions(globalFields, 'material_random_field'),
+    materialInitialRandomRows.flatMap((row) => row.randomizedFields.map((value) => ({ value }))),
+  );
   const [expandedInitialRows, setExpandedInitialRows] = useState<Record<number, boolean>>({});
   const [expandedTargetRows, setExpandedTargetRows] = useState<Record<number, boolean>>({});
   const [expandedRandomRows, setExpandedRandomRows] = useState<Record<number, boolean>>({});
@@ -7229,16 +7925,19 @@ function Field({
   type = 'text',
   disabled = false,
   autoFocus = false,
+  selectOnAutoFocus = false,
 }: {
   label: string;
   value: string;
   type?: 'text' | 'number' | 'date';
   disabled?: boolean;
   autoFocus?: boolean;
+  selectOnAutoFocus?: boolean;
   onChange: (value: string) => void;
 }) {
   const [draft, setDraft] = useState(value);
   const composingRef = useRef(false);
+  const autoSelectPendingRef = useRef(autoFocus && selectOnAutoFocus);
 
   useEffect(() => {
     setDraft(value);
@@ -7258,6 +7957,11 @@ function Field({
         value={draft}
         disabled={disabled}
         autoFocus={autoFocus}
+        onFocus={(event) => {
+          if (!autoSelectPendingRef.current) return;
+          autoSelectPendingRef.current = false;
+          event.currentTarget.select();
+        }}
         onBlur={commit}
         onChange={(event) => setDraft(event.target.value)}
         onCompositionStart={() => {
@@ -7283,6 +7987,7 @@ function CommitField({
   label,
   value,
   onChange,
+  beforeCommit,
   type = 'text',
   disabled = false,
 }: {
@@ -7290,19 +7995,36 @@ function CommitField({
   value: string;
   type?: 'text' | 'number' | 'date';
   disabled?: boolean;
-  onChange: (value: string) => void;
+  onChange: (value: string) => void | Promise<unknown>;
+  beforeCommit?: (value: string) => boolean | Promise<boolean>;
 }) {
   const [draft, setDraft] = useState(value);
   const composingRef = useRef(false);
+  const committingRef = useRef(false);
 
   useEffect(() => {
     setDraft(value);
   }, [value]);
 
-  function commit() {
+  async function commit() {
     const nextValue = draft.trim();
-    if (nextValue !== value) {
-      onChange(nextValue);
+    if (!nextValue) {
+      setDraft(value);
+      return;
+    }
+    if (nextValue === value || committingRef.current) return;
+    committingRef.current = true;
+    try {
+      if (beforeCommit && !await beforeCommit(nextValue)) {
+        setDraft(value);
+        return;
+      }
+      await onChange(nextValue);
+    } catch (error) {
+      setDraft(value);
+      window.alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      committingRef.current = false;
     }
   }
 
@@ -7312,8 +8034,9 @@ function CommitField({
       <input
         type={type}
         value={draft}
+        required
         disabled={disabled}
-        onBlur={commit}
+        onBlur={() => void commit()}
         onChange={(event) => setDraft(event.target.value)}
         onCompositionStart={() => {
           composingRef.current = true;
@@ -7325,7 +8048,7 @@ function CommitField({
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !composingRef.current) {
             event.preventDefault();
-            commit();
+            void commit();
             event.currentTarget.blur();
           }
         }}
@@ -7459,6 +8182,7 @@ function SelectField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       >
+        <option value="">请选择</option>
         {options.map((option) => (
           <option value={option.value} key={option.value}>
             {option.label}
@@ -7913,7 +8637,6 @@ function emptyTargetStateRow(object = ''): TargetStateRow {
 function robotInitialRandomizationRows(
   randomization: SubsceneVersion['randomization'],
   legacyFrequency?: string,
-  options: Option[] = [],
 ): RobotInitialRandomizationRow[] {
   const robotInitialState = randomization.robotInitialState;
   if (!robotInitialState.enabled && robotInitialState.randomizedFields.length === 0) {
@@ -7924,7 +8647,7 @@ function robotInitialRandomizationRows(
     {
       target: '机器人初始态',
       changeIntervalRecords: robotInitialState.changeIntervalRecords || Number(legacyFrequency) || 1,
-      randomizedFields: robotInitialState.randomizedFields.map((field) => globalFieldValueForStoredField(field, options)),
+      randomizedFields: robotInitialState.randomizedFields.map((field) => globalFieldValueForStoredField(field)),
       constraints: joinEnum(constraints),
     },
   ];
@@ -8062,7 +8785,7 @@ function emptyRequirementVersion(title = '新的客户需求', status: EntitySta
     allowedOperations: [],
     acceptableOperations: [],
     forbiddenOperations: [],
-    annotation: { required: false, types: [], allowedOperations: [], forbiddenOperations: [] },
+    annotation: { required: undefined, types: [], allowedOperations: [], forbiddenOperations: [] },
     qualityInspection: { required: false, samplingPolicy: '' },
     delivery: { formats: [], method: '', languages: [], dataStructureUrl: '' },
     selectedSubscenes: [],

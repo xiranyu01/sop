@@ -1,12 +1,19 @@
 import YAML from 'yaml';
 import { RootKind, type ExportBundle, type FrozenExportContent } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
-import type { OperationPolicy, OperationStep, RandomizedField } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import {
+  GlobalFieldGroup,
+  type OperationPolicy,
+  type OperationStep,
+  type RandomizedField,
+} from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { removeLegacySyntheticMaterialRandomizationConstraints } from '../../shared/domain/randomization';
+import { resolveRandomFieldDisplayName } from '../../shared/domain/randomFieldPresentation';
 import { verifyExportBundle } from './codec';
 
 type TaskSopEntry = FrozenExportContent['taskSops'][number];
 type RequirementEntry = FrozenExportContent['requirements'][number];
 type AttachmentEntry = FrozenExportContent['attachments'][number];
+type GlobalFieldEntry = FrozenExportContent['globalFields'][number];
 type TaskSopSpec = NonNullable<TaskSopEntry['spec']>;
 
 export type DomainYamlOptions = {
@@ -55,15 +62,15 @@ function referencePath(values: Array<{ level: number; referenceObject?: string; 
   }));
 }
 
-function randomFieldName(field: RandomizedField, material: boolean): string {
-  const value = field.displayName || field.fieldId;
-  const normalized = `${field.fieldId} ${value}`.toLowerCase();
-  if (material && (normalized.includes('location') || normalized.includes('位置'))) return '物料位置';
-  if (material && (normalized.includes('pose') || normalized.includes('姿态'))) return '物料姿态';
-  if (material && (normalized.includes('form') || normalized.includes('形态'))) return '物料形态';
-  if (!material && (normalized.includes('yaw') || normalized.includes('朝向'))) return '初始朝向';
-  if (!material && (normalized.includes('position') || normalized.includes('位置'))) return '初始位置';
-  return value;
+function randomFieldName(field: RandomizedField, material: boolean, globalFields: GlobalFieldEntry[]): string {
+  const group = material ? GlobalFieldGroup.MATERIAL_RANDOM_FIELD : GlobalFieldGroup.ROBOT_RANDOM_FIELD;
+  return resolveRandomFieldDisplayName(field, material, globalFields
+    .filter((candidate) => candidate.group === group)
+    .map((candidate) => ({
+      label: candidate.label,
+      value: candidate.value,
+      sourceId: candidate.source?.sourceId,
+    })));
 }
 
 function steps(values: OperationStep[]): Array<Record<string, unknown>> {
@@ -198,7 +205,7 @@ function taskSopDocument(
             ? { change_interval_records: robotRandomization.change.intervalRecords }
             : {}),
           randomized_fields: (robotRandomization?.fields || []).map((field) => ({
-            name: randomFieldName(field, false),
+            name: randomFieldName(field, false, content.globalFields),
             constraints: field.constraints,
           })),
         },
@@ -208,7 +215,7 @@ function taskSopDocument(
             ...(rule.change?.intervalRecords !== undefined
               ? { change_interval_records: rule.change.intervalRecords }
               : {}),
-            randomized_fields: rule.fields.map((field) => randomFieldName(field, true)),
+            randomized_fields: rule.fields.map((field) => randomFieldName(field, true, content.globalFields)),
             collector_instruction: rule.collectorInstruction || '',
             constraints: removeLegacySyntheticMaterialRandomizationConstraints(rule.constraints),
             example_images: attachmentUrls(rule.exampleAttachmentRefs, attachments),

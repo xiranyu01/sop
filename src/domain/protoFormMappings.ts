@@ -58,6 +58,7 @@ const globalFieldGroupTokens: Readonly<Record<number, GlobalFieldGroup>> = {
   [ProtoGlobalFieldGroup.DELIVERY_LANGUAGE]: 'delivery_language',
   [ProtoGlobalFieldGroup.DELIVERY_METHOD]: 'delivery_method',
   [ProtoGlobalFieldGroup.SAMPLING_POLICY]: 'sampling_policy',
+  [ProtoGlobalFieldGroup.ATOMIC_SKILL]: 'atomic_skill',
 };
 
 function enumToken<T extends string>(value: number, tokens: Readonly<Record<number, T>>, name: string): T {

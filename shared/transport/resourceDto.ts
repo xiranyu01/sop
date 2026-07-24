@@ -43,6 +43,13 @@ export type ResourceSummary = {
   /** List-visible fields for compact catalog resources such as customers, materials, and global fields. */
   listView?: JsonValue;
   archived: boolean;
+  archiveState?: {
+    archivedAt: string;
+    archivedFromLifecycle: 'DRAFT' | 'CONFIRMED';
+    candidateVersionSequence?: number;
+    candidateVersionLabel?: string;
+    candidateSourceVersionId?: string;
+  };
 };
 
 export type ResourceDetail = ResourceSummary & { resource: JsonValue };
@@ -81,6 +88,7 @@ export type VersionRouteTarget = {
   versionLabel: string;
   versionUid: string;
   draft: boolean;
+  archived?: boolean;
 };
 
 export type DependencyChange = {

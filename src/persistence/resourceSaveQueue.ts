@@ -72,6 +72,16 @@ export class ResourceSaveQueue<T> {
     this.setState({ ...this.current, warning: undefined });
   }
 
+  /** Revert a server-rejected edit after the caller explicitly accepts discarding it. */
+  discardTerminalChanges(confirmDiscard: boolean): boolean {
+    if (!confirmDiscard || this.current.kind !== 'paused-terminal') return false;
+    this.local = structuredClone(this.acknowledged.value);
+    this.pending = undefined;
+    this.unknownOutcomeRecovery = undefined;
+    this.setState({ kind: 'ready', etag: this.acknowledged.etag, warning: this.warning });
+    return true;
+  }
+
   submit(value: T): Promise<ResourceSaveState<T>> {
     this.local = structuredClone(value);
     this.pending = structuredClone(value);

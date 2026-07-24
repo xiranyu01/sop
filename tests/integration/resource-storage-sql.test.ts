@@ -179,6 +179,7 @@ describe.skipIf(!sqliteAvailable)('resource storage SQL contract', () => {
       'SOP_ATTACHMENT_UPLOADS',
       'SOP_CATALOG_RESOURCES',
       'SOP_CONFIRMATION_COMMANDS',
+      'SOP_CURRENT_ARCHIVES',
       'SOP_CURRENT_RESOURCES',
       'SOP_EXPORT_BUNDLES',
       'SOP_META',

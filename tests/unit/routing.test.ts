@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  archivedRequirementRoutePath,
+  archivedTaskSopRoutePath,
   pageRoutePath,
   parseAppRoute,
   requirementRoutePath,
@@ -14,6 +16,7 @@ describe('shareable application routes', () => {
     expect(pageRoutePath('materials')).toBe('/materials');
     expect(pageRoutePath('robots')).toBe('/robot-models');
     expect(pageRoutePath('globalFields')).toBe('/global-fields');
+    expect(pageRoutePath('archive')).toBe('/archive');
   });
 
   it('round-trips requirement and TaskSop version ids as the final path segment', () => {
@@ -24,6 +27,12 @@ describe('shareable application routes', () => {
     });
     expect(parseAppRoute(taskSopRoutePath(taskId))).toEqual({
       page: 'scenes', detail: { kind: 'taskSop', versionId: taskId },
+    });
+    expect(parseAppRoute(archivedRequirementRoutePath(requirementId))).toEqual({
+      page: 'archive', detail: { kind: 'requirement', versionId: requirementId },
+    });
+    expect(parseAppRoute(archivedTaskSopRoutePath(taskId))).toEqual({
+      page: 'archive', detail: { kind: 'taskSop', versionId: taskId },
     });
   });
 });

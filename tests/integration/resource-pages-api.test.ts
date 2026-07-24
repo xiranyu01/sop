@@ -26,19 +26,28 @@ async function harness() {
   return { db, repository, data, request, expectedBootstrapMarker };
 }
 
+function cloneCurrentForCreate(
+  resource: Record<string, unknown>,
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
+  const clone = structuredClone(resource);
+  for (const field of [
+    'name', 'uid', 'sourceId', 'etag', 'currentRevision', 'candidateVersionSequence',
+    'candidateVersionLabel', 'candidateSourceVersionId', 'candidateCreateTime',
+    'reviewedDependencyDigest', 'createTime', 'updateTime',
+  ]) delete clone[field];
+  return { ...clone, ...overrides };
+}
+
 describe('Pages resource API adapter', () => {
   it('allocates distinct names for new TaskSops with the same default title', async () => {
     const { db, data, request } = await harness();
     const source = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
     const sourceResponse = await request(`/api/resources/taskSops/${encodeURIComponent(source.name)}`);
-    const resource = structuredClone((await sourceResponse.json() as { resource: Record<string, unknown> }).resource);
-    for (const field of [
-      'name', 'uid', 'sourceId', 'etag', 'currentRevision', 'candidateVersionSequence',
-      'candidateVersionLabel', 'candidateSourceVersionId', 'candidateCreateTime',
-      'reviewedDependencyDigest', 'createTime', 'updateTime',
-    ]) delete resource[field];
-    resource.displayName = '新的任务 SOP';
-    resource.lifecycle = 'LIFECYCLE_DRAFT';
+    const resource = cloneCurrentForCreate(
+      (await sourceResponse.json() as { resource: Record<string, unknown> }).resource,
+      { displayName: '新的任务 SOP', lifecycle: 'LIFECYCLE_DRAFT' },
+    );
 
     const create = () => request('/api/resources/taskSops', {
       method: 'POST',
@@ -53,6 +62,89 @@ describe('Pages resource API adapter', () => {
     const second = await secondResponse.json() as { resource: { name: string; uid: string } };
     expect(first.resource.name).not.toBe(second.resource.name);
     expect(first.resource.uid).not.toBe(second.resource.uid);
+    db.close();
+  });
+
+  it('rejects duplicate active Requirement names on create and update', async () => {
+    const { db, data, request } = await harness();
+    const source = data.currents.find((item) => item.protoSchema.endsWith('.Requirement'))!;
+    const sourceResponse = await request(`/api/resources/requirements/${encodeURIComponent(source.name)}`);
+    const sourceResource = (await sourceResponse.json() as { resource: Record<string, unknown> }).resource;
+    const title = 'API 同名客户需求';
+    const create = (resource: Record<string, unknown>) => request('/api/resources/requirements', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource }),
+    });
+
+    const first = await create(cloneCurrentForCreate(sourceResource, {
+      displayName: title, sourceId: 'duplicate-requirement-first', lifecycle: 'LIFECYCLE_DRAFT',
+    }));
+    expect(first.status).toBe(201);
+    const duplicateCreate = await create(cloneCurrentForCreate(sourceResource, {
+      displayName: title, sourceId: 'duplicate-requirement-second', lifecycle: 'LIFECYCLE_DRAFT',
+    }));
+    expect(duplicateCreate.status).toBe(409);
+    await expect(duplicateCreate.json()).resolves.toMatchObject({
+      error: { kind: 'ALREADY_EXISTS', message: '已存在同名客户需求，请使用其他名称' },
+    });
+
+    const placeholder = await create(cloneCurrentForCreate(sourceResource, {
+      displayName: '新的客户需求', sourceId: 'duplicate-requirement-placeholder', lifecycle: 'LIFECYCLE_DRAFT',
+    }));
+    expect(placeholder.status).toBe(201);
+    const placeholderDetail = await placeholder.json() as {
+      resource: { name: string; etag: string; resource: Record<string, unknown> };
+    };
+    const duplicateUpdate = await request(
+      `/api/resources/requirements/${encodeURIComponent(placeholderDetail.resource.name)}`,
+      {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          expectedEtag: placeholderDetail.resource.etag,
+          resource: { ...placeholderDetail.resource.resource, displayName: title },
+        }),
+      },
+    );
+    expect(duplicateUpdate.status).toBe(409);
+    db.close();
+  });
+
+  it('rejects duplicate Task SOP names in one Scene but allows the same name in another Scene', async () => {
+    const { db, data, request } = await harness();
+    const source = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
+    const sourceResponse = await request(`/api/resources/taskSops/${encodeURIComponent(source.name)}`);
+    const sourceResource = (await sourceResponse.json() as { resource: Record<string, unknown> }).resource;
+    const title = 'API 同名任务 SOP';
+    const create = (resource: Record<string, unknown>) => request('/api/resources/taskSops', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource }),
+    });
+
+    const first = await create(cloneCurrentForCreate(sourceResource, {
+      displayName: title, sourceId: 'duplicate-task-first', lifecycle: 'LIFECYCLE_DRAFT',
+    }));
+    expect(first.status).toBe(201);
+    const duplicate = await create(cloneCurrentForCreate(sourceResource, {
+      displayName: title, sourceId: 'duplicate-task-second', lifecycle: 'LIFECYCLE_DRAFT',
+    }));
+    expect(duplicate.status).toBe(409);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      error: { kind: 'ALREADY_EXISTS', message: '当前场景中已存在同名任务 SOP，请使用其他名称' },
+    });
+
+    const sceneResponse = await request('/api/resources/scenes', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: { displayName: 'API 另一场景', sourceId: 'duplicate-task-other-scene' } }),
+    });
+    expect(sceneResponse.status).toBe(201);
+    const scene = await sceneResponse.json() as { resource: { name: string } };
+    const otherScene = await create(cloneCurrentForCreate(sourceResource, {
+      displayName: title,
+      sourceId: 'duplicate-task-other-scene',
+      scene: scene.resource.name,
+      lifecycle: 'LIFECYCLE_DRAFT',
+    }));
+    expect(otherScene.status).toBe(201);
     db.close();
   });
 
@@ -81,6 +173,119 @@ describe('Pages resource API adapter', () => {
       versionUid: draft.uid,
       draft: true,
     });
+    db.close();
+  });
+
+  it('archives and restores a draft requirement without exposing discarded drafts', async () => {
+    const { db, data, request } = await harness();
+    const prepared = data.currents.find((item) => item.protoSchema.endsWith('.Requirement') && item.candidateVersionLabel)!;
+    const beforeResponse = await request(`/api/resources/requirements/${encodeURIComponent(prepared.name)}`);
+    const before = await beforeResponse.json() as {
+      etag: string; uid: string; resource: Record<string, unknown>;
+    };
+
+    const archivedResponse = await request(`/api/resources/requirements/${encodeURIComponent(prepared.name)}/archive`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: before.etag }),
+    });
+    expect(archivedResponse.status).toBe(200);
+    const archived = await archivedResponse.json() as { resource: { etag: string; archiveState: Record<string, unknown> } };
+    expect(archived.resource.archiveState).toMatchObject({
+      archivedFromLifecycle: 'DRAFT', candidateVersionLabel: prepared.candidateVersionLabel,
+    });
+    await expect((await request('/api/resources/requirements')).json()).resolves.toMatchObject({
+      items: expect.not.arrayContaining([expect.objectContaining({ name: prepared.name })]),
+    });
+    const archivePage = await request('/api/resources/requirements?view=archived&q=%E5%9F%BA%E7%BA%BF');
+    expect(archivePage.status).toBe(200);
+    await expect(archivePage.json()).resolves.toMatchObject({
+      items: [expect.objectContaining({ name: prepared.name, archived: true })],
+    });
+    await expect((await request(`/api/version-routes/${before.uid}`)).json()).resolves.toMatchObject({
+      ownerName: prepared.name, draft: true, archived: true,
+    });
+    const draftPdf = await request(`/api/resources/requirements/${encodeURIComponent(prepared.name)}/export.pdf`);
+    expect(draftPdf.status).toBe(200);
+
+    const restoredResponse = await request(`/api/resources/requirements/${encodeURIComponent(prepared.name)}/restore`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: archived.resource.etag }),
+    });
+    expect(restoredResponse.status).toBe(200);
+    const restored = await restoredResponse.json() as { resource: Record<string, unknown> };
+    expect(restored).toMatchObject({
+      resource: {
+        archived: false,
+        resource: {
+          lifecycle: 'LIFECYCLE_DRAFT',
+          candidateVersionLabel: prepared.candidateVersionLabel,
+        },
+      },
+    });
+    expect(restored.resource).not.toHaveProperty('archiveState');
+    await expect((await request('/api/resources/requirements?view=archived')).json()).resolves.toMatchObject({ items: [] });
+    db.close();
+  });
+
+  it('blocks archiving a TaskSop referenced by an active requirement', async () => {
+    const { db, data, repository, request } = await harness();
+    const requirement = data.currents.find((item) => item.protoSchema.endsWith('.Requirement') && item.candidateVersionLabel)!;
+    const taskRevision = data.revisions.find((item) => item.protoSchema.endsWith('.TaskSopRevision') && item.exportEligible)!;
+    const storedTaskRevision = (await repository.getRevision(taskRevision.name))!;
+    const task = data.currents.find((item) => item.name === taskRevision.ownerName)!;
+    const requirementResponse = await request(`/api/resources/requirements/${encodeURIComponent(requirement.name)}`);
+    const requirementDetail = await requirementResponse.json() as { etag: string; resource: Record<string, any> };
+    requirementDetail.resource.spec.productionItems = [{
+      id: 'archive-reference', displayName: '归档引用', taskSopRevision: taskRevision.name,
+      target: { collectionCount: '1' },
+    }];
+    const saved = await request(`/api/resources/requirements/${encodeURIComponent(requirement.name)}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: requirementDetail.etag, resource: requirementDetail.resource }),
+    });
+    expect(saved.status).toBe(200);
+    const savedRequirement = await saved.json() as { resource: { etag: string } };
+    const taskResponse = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}`);
+    const taskDetail = await taskResponse.json() as { etag: string };
+    const blocked = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}/archive`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: taskDetail.etag }),
+    });
+    expect(blocked.status).toBe(409);
+    await expect(blocked.json()).resolves.toMatchObject({
+      error: {
+        kind: 'RESOURCE_IN_USE',
+        details: { blockingResources: [expect.objectContaining({ name: requirement.name })] },
+      },
+    });
+
+    const archivedRequirementResponse = await request(`/api/resources/requirements/${encodeURIComponent(requirement.name)}/archive`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: savedRequirement.resource.etag }),
+    });
+    const archivedRequirement = await archivedRequirementResponse.json() as { resource: { etag: string } };
+    expect(archivedRequirementResponse.status).toBe(200);
+    const archivedTask = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}/archive`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: taskDetail.etag }),
+    });
+    expect(archivedTask.status).toBe(200);
+    const archivedTaskVersionRoute = await request(`/api/version-routes/${storedTaskRevision.uid}`);
+    expect(archivedTaskVersionRoute.status).toBe(200);
+    await expect(archivedTaskVersionRoute.json()).resolves.toMatchObject({
+      kind: 'taskSops',
+      ownerName: task.name,
+      versionLabel: taskRevision.versionLabel,
+      versionUid: storedTaskRevision.uid,
+      draft: false,
+      archived: true,
+    });
+    const blockedRestore = await request(`/api/resources/requirements/${encodeURIComponent(requirement.name)}/restore`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: archivedRequirement.resource.etag }),
+    });
+    expect(blockedRestore.status).toBe(409);
+    await expect(blockedRestore.json()).resolves.toMatchObject({ error: { kind: 'RESOURCE_IN_USE' } });
     db.close();
   });
 
@@ -324,6 +529,89 @@ describe('Pages resource API adapter', () => {
     db.close();
   });
 
+  it('validates atomic skill boundaries and rejects duplicates introduced by editing', async () => {
+    const { db, request } = await harness();
+    const resource = (label: string, complete = true) => ({
+      group: 'GLOBAL_FIELD_GROUP_ATOMIC_SKILL',
+      label,
+      value: label,
+      startCondition: '夹爪开始闭合',
+      ...(complete ? { endCondition: '物体稳定离开支撑面' } : {}),
+      status: 'GLOBAL_FIELD_STATUS_ACTIVE',
+    });
+    const create = (label: string, complete = true) => request('/api/resources/globalFields', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resource: resource(label, complete) }),
+    });
+
+    const incomplete = await create('不完整技能', false);
+    expect(incomplete.status).toBe(400);
+
+    expect((await create('拿起')).status).toBe(201);
+    const placeResponse = await create('放置');
+    expect(placeResponse.status).toBe(201);
+    const place = await placeResponse.json() as {
+      resource: { name: string; etag: string; resource: Record<string, unknown> };
+    };
+    const duplicateUpdate = await request(`/api/resources/globalFields/${encodeURIComponent(place.resource.name)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expectedEtag: place.resource.etag,
+        resource: { ...place.resource.resource, label: '拿起', value: '拿起' },
+      }),
+    });
+    expect(duplicateUpdate.status).toBe(409);
+    await expect(duplicateUpdate.json()).resolves.toMatchObject({
+      error: { kind: 'ALREADY_EXISTS' },
+    });
+    db.close();
+  });
+
+  it('atomically replaces the complete GlobalField catalog', async () => {
+    const { db, request } = await harness();
+    const field = (sourceId: string, label: string, status = 'GLOBAL_FIELD_STATUS_ACTIVE') => ({
+      sourceId,
+      group: 'GLOBAL_FIELD_GROUP_REGION',
+      label,
+      value: label,
+      status,
+    });
+    const replace = (resources: unknown[]) => request('/api/resources/globalFields/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resources }),
+    });
+    const list = async () => {
+      const response = await request('/api/resources/globalFields?pageSize=200');
+      expect(response.status).toBe(200);
+      return (await response.json() as { items: Array<{ sourceId?: string; uid: string; displayName: string }> }).items;
+    };
+
+    const importedFields = Array.from({ length: 117 }, (_, index) => field(`csv-region-${index}`, `区域 ${index}`));
+    const first = await replace(importedFields);
+    const firstBody = await first.json();
+    expect(first.status, JSON.stringify(firstBody)).toBe(200);
+    expect(firstBody).toEqual({ importedCount: 117 });
+    const firstItems = await list();
+    expect(firstItems).toHaveLength(117);
+    const importInsert = db.executed.find((entry) => entry.operation === 'run' && entry.sql.includes('FROM json_each(?)'));
+    expect(importInsert?.values).toHaveLength(1);
+    const leftUid = firstItems.find((item) => item.sourceId === 'csv-region-0')?.uid;
+
+    const second = await replace([field('csv-region-0', '左后侧', 'GLOBAL_FIELD_STATUS_INACTIVE')]);
+    expect(second.status).toBe(200);
+    const secondItems = await list();
+    expect(secondItems).toHaveLength(1);
+    expect(secondItems[0]).toMatchObject({ sourceId: 'csv-region-0', uid: leftUid, displayName: '左后侧' });
+
+    const invalid = await replace([field('duplicate-a', '重复区域'), field('duplicate-b', '重复区域')]);
+    expect(invalid.status).toBe(400);
+    expect(await list()).toEqual(secondItems);
+    db.close();
+  });
+
   it('keeps draft identity, lifecycle, version, review, and timestamps server-owned on ordinary PUT', async () => {
     const { db, data, request } = await harness();
     const requirement = data.currents.find((item) => item.protoSchema.endsWith('.Requirement'))!;
@@ -548,6 +836,9 @@ describe('Pages resource API adapter', () => {
     const pageResponse = await request('/api/resources/requirements?pageSize=200');
     const page = await pageResponse.json() as { items: Array<{ name: string }> };
     expect(page.items).not.toContainEqual(expect.objectContaining({ name: created.resource.name }));
+    const archiveResponse = await request('/api/resources/requirements?view=archived&pageSize=200');
+    const archive = await archiveResponse.json() as { items: Array<{ name: string }> };
+    expect(archive.items).not.toContainEqual(expect.objectContaining({ name: created.resource.name }));
     db.close();
   });
 
@@ -579,13 +870,13 @@ describe('Pages resource API adapter', () => {
     const pdfResponse = await request(`/api/revisions/${encodeURIComponent(exportable.name)}/export.pdf`);
     expect(pdfResponse.status).toBe(200);
     expect(pdfResponse.headers.get('content-type')).toContain('application/vnd.coscene.sop.pdf-model+json');
-    await expect(pdfResponse.json()).resolves.toMatchObject({
+    const pdfModel = await pdfResponse.json();
+    expect(pdfModel).toMatchObject({
       rendererVersion: 'sop-pdf-v1',
       page: { size: 'A4' },
-      trace: expect.arrayContaining([
-        expect.objectContaining({ label: '版本名', value: exportable.name }),
-      ]),
+      trace: [],
     });
+    expect(JSON.stringify(pdfModel)).not.toContain(exportable.name);
 
     const nonTaskRevision = data.revisions.find((item) => !item.exportEligible)!;
     const blocked = await request(`/api/revisions/${encodeURIComponent(nonTaskRevision.name)}/export.yaml`);

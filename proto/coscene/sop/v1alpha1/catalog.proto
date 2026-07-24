@@ -263,6 +263,11 @@ message RobotModelRevision {
 
 // GlobalField is one persisted item in a shared editor vocabulary.
 message GlobalField {
+  option (buf.validate.message).cel = {
+    id: "global_field.atomic_skill_boundary_required"
+    message: "atomic skill fields require start_condition and end_condition"
+    expression: "this.group != 22 || (has(this.start_condition) && has(this.end_condition))"
+  };
   option (google.api.resource) = {
     type: "sop.coscene.io/GlobalField"
     pattern: "globalFields/{global_field}"
@@ -295,6 +300,14 @@ message GlobalField {
   google.protobuf.Timestamp update_time = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
   string etag = 10 [(google.api.field_behavior) = OUTPUT_ONLY];
   optional string source_id = 11 [(google.api.field_behavior) = OUTPUT_ONLY];
+  optional string start_condition = 12 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 4000
+  }];
+  optional string end_condition = 13 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 4000
+  }];
 }
 
 // MaterialStateRule constrains the location/state vocabulary for one material type.

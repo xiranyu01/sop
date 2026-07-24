@@ -8,6 +8,7 @@ export type ApiErrorKind =
   | 'NOT_INITIALIZED'
   | 'STORAGE_UNAVAILABLE'
   | 'IMMUTABLE_REVISION'
+  | 'RESOURCE_IN_USE'
   | 'ATTACHMENT_PROVIDER'
   | 'NOT_FOUND'
   | 'INTERNAL';
@@ -22,6 +23,7 @@ export type ApiErrorDetails = {
   retryable?: boolean;
   violations?: Array<{ fieldPath: string; message: string; ruleId?: string }>;
   dependencyDiff?: unknown;
+  blockingResources?: Array<{ name: string; displayName: string }>;
 };
 
 export type ApiErrorBody = {

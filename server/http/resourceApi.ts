@@ -30,6 +30,7 @@ import { fromDomainJson, fromDomainJsonString, ProtoJsonDecodeError, toDomainJso
 import { assertValidDomainMessage, DomainValidationError } from '../../shared/domain/validation';
 import {
   InvalidCursorError,
+  MAX_BULK_RESOURCE_NAMES,
   ProjectionMismatchError,
   RepositoryNotReadyError,
   ResourceConflictError,
@@ -183,14 +184,15 @@ function requiredSafeInteger(value: unknown, field: string): number {
   return value as number;
 }
 
-function parsePage(url: URL): { cursor?: string; limit?: number } {
+function parsePage(url: URL): { cursor?: string; limit?: number; query?: string } {
   const cursor = url.searchParams.get('cursor') || undefined;
+  const query = url.searchParams.get('q')?.trim() || undefined;
   const rawLimit = url.searchParams.get('pageSize') ?? url.searchParams.get('limit');
-  if (rawLimit === null) return { cursor };
+  if (rawLimit === null) return { cursor, query };
   if (!/^\d+$/.test(rawLimit)) throw new TypeError('pageSize must be a positive integer');
   const limit = Number(rawLimit);
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new TypeError('pageSize must be a positive integer');
-  return { cursor, limit };
+  return { cursor, limit, query };
 }
 
 function parseProtoJson(value: string): JsonValue {
@@ -223,6 +225,7 @@ function resourceSummary(kind: ResourceKind, record: ResourceSummary): ResourceD
     aggregateDuration: record.aggregateDuration,
     createdAt: record.createdAt,
     archived: record.archivedAt !== undefined,
+    archiveState: record.archiveState,
     resource: {},
   };
 }
@@ -566,11 +569,36 @@ function archivedCurrentProtoJson(schema: DescMessage, protoJson: string): strin
     candidateVersionSequence?: bigint;
     candidateVersionLabel?: string;
     candidateSourceVersionId?: string;
+    reviewedDependencyDigest?: string;
   };
   message.lifecycle = Lifecycle.ARCHIVED;
   message.candidateVersionSequence = undefined;
   message.candidateVersionLabel = undefined;
   message.candidateSourceVersionId = undefined;
+  message.reviewedDependencyDigest = undefined;
+  assertValidDomainMessage(schema, message as never);
+  return JSON.stringify(toDomainJson(schema, message as never));
+}
+
+function restoredCurrentProtoJson(
+  schema: DescMessage,
+  protoJson: string,
+  archive: NonNullable<CurrentResourceRecord['archiveState']>,
+): string {
+  const message = fromDomainJsonString(schema, protoJson) as unknown as {
+    lifecycle: Lifecycle;
+    candidateVersionSequence?: bigint;
+    candidateVersionLabel?: string;
+    candidateSourceVersionId?: string;
+    reviewedDependencyDigest?: string;
+  };
+  message.lifecycle = archive.archivedFromLifecycle === 'DRAFT' ? Lifecycle.DRAFT : Lifecycle.CONFIRMED;
+  message.candidateVersionSequence = archive.candidateVersionSequence === undefined
+    ? undefined
+    : BigInt(archive.candidateVersionSequence);
+  message.candidateVersionLabel = archive.candidateVersionLabel;
+  message.candidateSourceVersionId = archive.candidateSourceVersionId;
+  message.reviewedDependencyDigest = undefined;
   assertValidDomainMessage(schema, message as never);
   return JSON.stringify(toDomainJson(schema, message as never));
 }
@@ -713,9 +741,18 @@ async function listResources(
   url: URL,
 ): Promise<Response> {
   const page = parsePage(url);
-  const result = item.value.persistence === 'catalog'
-    ? await repository.listCatalog(item.value.repositoryKind as CatalogResourceKind, page)
-    : await repository.listCurrent(item.value.repositoryKind as CurrentResourceKind, page);
+  const archivedView = url.searchParams.get('view') === 'archived';
+  if (archivedView && !['requirements', 'taskSops'].includes(item.kind)) {
+    throw new TypeError('Archived view is supported only for requirements and taskSops');
+  }
+  const result = archivedView
+    ? await repository.listArchivedCurrent(
+      item.value.repositoryKind as 'REQUIREMENT' | 'TASK_SOP',
+      page,
+    )
+    : item.value.persistence === 'catalog'
+      ? await repository.listCatalog(item.value.repositoryKind as CatalogResourceKind, page)
+      : await repository.listCurrent(item.value.repositoryKind as CurrentResourceKind, page);
   if (item.kind === 'customers' || item.kind === 'materials' || item.kind === 'globalFields') {
     const records = await repository.getCatalogs(result.items.map((resource) => resource.name));
     const listViews = new Map(records.map((record) => [record.name, parseProtoJson(record.protoJson)]));
@@ -727,6 +764,81 @@ async function listResources(
     return json(resourcePage(item.kind, result, listViews));
   }
   return json(resourcePage(item.kind, result));
+}
+
+async function findGlobalFieldDuplicate(
+  repository: ResourceRepository,
+  group: string,
+  label: string,
+  excludeName?: string,
+): Promise<ResourceSummary | undefined> {
+  let cursor: string | undefined;
+  do {
+    const page = await repository.listCatalog('GLOBAL_FIELD', { cursor, limit: 200 });
+    const duplicate = page.items.find((field) =>
+      field.name !== excludeName && field.fieldGroup === group && field.displayName === label);
+    if (duplicate) return duplicate;
+    cursor = page.nextCursor;
+  } while (cursor);
+  return undefined;
+}
+
+async function rejectDuplicateGlobalField(
+  repository: ResourceRepository,
+  protoJson: string,
+  options: ResourceApiOptions,
+  excludeName?: string,
+): Promise<Response | undefined> {
+  const requested = parseObject(parseProtoJson(protoJson), 'global field');
+  const group = requiredString(requested.group, 'global field group');
+  const label = requiredString(requested.label, 'global field label');
+  const duplicate = await findGlobalFieldDuplicate(repository, group, label, excludeName);
+  return duplicate ? errorResponse(409, apiError(
+    'ALREADY_EXISTS',
+    '当前分组中已存在同名字段，请直接编辑已有字段',
+    { resourceName: duplicate.name },
+    options.requestId,
+  )) : undefined;
+}
+
+async function findActiveRootDuplicate(
+  repository: ResourceRepository,
+  kind: 'requirements' | 'taskSops',
+  protoJson: string,
+  excludeName?: string,
+): Promise<ResourceSummary | undefined> {
+  const requested = parseObject(parseProtoJson(protoJson), `${kind} resource`);
+  const displayName = requiredString(requested.displayName, `${kind} displayName`).trim();
+  const sceneName = kind === 'taskSops' ? requiredString(requested.scene, 'taskSops scene') : undefined;
+  const repositoryKind: CurrentResourceKind = kind === 'requirements' ? 'REQUIREMENT' : 'TASK_SOP';
+  let cursor: string | undefined;
+  do {
+    const page = await repository.listCurrent(repositoryKind, { cursor, limit: 200 });
+    const duplicate = page.items.find((resource) =>
+      resource.name !== excludeName &&
+      resource.displayName.trim() === displayName &&
+      (kind === 'requirements' || resource.sceneName === sceneName));
+    if (duplicate) return duplicate;
+    cursor = page.nextCursor;
+  } while (cursor);
+  return undefined;
+}
+
+async function rejectDuplicateActiveRoot(
+  repository: ResourceRepository,
+  kind: 'requirements' | 'taskSops',
+  protoJson: string,
+  options: ResourceApiOptions,
+  excludeName?: string,
+): Promise<Response | undefined> {
+  const duplicate = await findActiveRootDuplicate(repository, kind, protoJson, excludeName);
+  if (!duplicate) return undefined;
+  const message = kind === 'requirements'
+    ? '已存在同名客户需求，请使用其他名称'
+    : '当前场景中已存在同名任务 SOP，请使用其他名称';
+  return errorResponse(409, apiError('ALREADY_EXISTS', message, {
+    resourceName: duplicate.name,
+  }, options.requestId));
 }
 
 async function createResource(
@@ -743,20 +855,16 @@ async function createResource(
   const protoJson = createProtoJson(item, body.resource, now);
   const writeTime = now.toISOString();
   if (item.kind === 'globalFields') {
-    const requested = parseObject(parseProtoJson(protoJson), 'global field');
-    const requestedName = requiredString(requested.name, 'global field name');
-    const candidates = [requestedName];
-    if (typeof requested.label === 'string' && requested.label) {
-      candidates.push(resourceName(item.kind, requested.label));
-    }
-    for (const candidate of [...new Set(candidates)]) {
-      const existing = await loadResource(repository, item, candidate);
-      if (!existing) continue;
-      const stored = parseObject(parseProtoJson(existing.protoJson), 'stored global field');
-      if (stored.group !== requested.group || stored.label !== requested.label) continue;
-      return errorResponse(409, apiError('ALREADY_EXISTS', '当前分组中已存在同名字段，请直接编辑已有字段', {
-        resourceName: existing.name,
-      }, options.requestId));
+    const duplicateResponse = await rejectDuplicateGlobalField(repository, protoJson, options);
+    if (duplicateResponse) return duplicateResponse;
+  }
+  if (item.kind === 'requirements' || item.kind === 'taskSops') {
+    const requested = parseObject(parseProtoJson(protoJson), `${item.kind} resource`);
+    const displayName = requiredString(requested.displayName, `${item.kind} displayName`).trim();
+    const placeholder = item.kind === 'requirements' ? '新的客户需求' : '新的任务 SOP';
+    if (displayName !== placeholder) {
+      const duplicateResponse = await rejectDuplicateActiveRoot(repository, item.kind, protoJson, options);
+      if (duplicateResponse) return duplicateResponse;
     }
   }
   const record = item.kind === 'robotModels'
@@ -769,6 +877,44 @@ async function createResource(
     warning: options.readRowSizeWarning?.(),
   };
   return json(result, 201);
+}
+
+async function replaceGlobalFields(
+  request: Request,
+  repository: ResourceRepository,
+  item: { kind: ResourceKind; value: ResourceDefinition },
+): Promise<Response> {
+  const body = await requestObject(request);
+  if (!Array.isArray(body.resources)) throw new TypeError('resources must be an array');
+  if (body.resources.length === 0) throw new TypeError('CSV import must contain at least one GlobalField');
+  if (body.resources.length > MAX_BULK_RESOURCE_NAMES) {
+    throw new RangeError(`GlobalField import limit exceeded: ${body.resources.length} > ${MAX_BULK_RESOURCE_NAMES}`);
+  }
+  const now = new Date();
+  const requested = body.resources.map((value, index) => parseObject(value, `resources[${index}]`));
+  const createdProtoJson = requested.map((value) => createProtoJson(item, value, now));
+  const canonical = createdProtoJson.map((value) => parseObject(parseProtoJson(value), 'global field'));
+  const names = canonical.map((value) => requiredString(value.name, 'global field name'));
+  if (new Set(names).size !== names.length) throw new TypeError('CSV contains duplicate GlobalField IDs');
+  const groupLabels = canonical.map((value) => `${String(value.group)}\u0000${String(value.label)}`);
+  if (new Set(groupLabels).size !== groupLabels.length) {
+    throw new TypeError('CSV contains duplicate field names in the same group');
+  }
+
+  const existing = new Map((await repository.getCatalogs(names)).map((record) => [record.name, record]));
+  const writeTime = now.toISOString();
+  const inputs = createdProtoJson.map((protoJson, index) => {
+    const stored = existing.get(names[index]);
+    return {
+      protoSchema: item.value.schema.typeName,
+      protoJson: stored
+        ? catalogUpdateProtoJson(item.value.schema, requested[index], stored.protoJson, now)
+        : protoJson,
+      now: writeTime,
+    };
+  });
+  const records = await repository.replaceGlobalFields(inputs);
+  return json({ importedCount: records.length });
 }
 
 async function updateResource(
@@ -800,6 +946,19 @@ async function updateResource(
   const protoJson = item.value.persistence === 'current'
     ? draftUpdateProtoJson(item.value.schema, body.resource, stored.protoJson)
     : catalogUpdateProtoJson(item.value.schema, body.resource, stored.protoJson, catalogWriteTime);
+  if (item.kind === 'globalFields') {
+    const duplicateResponse = await rejectDuplicateGlobalField(repository, protoJson, options, name);
+    if (duplicateResponse) return duplicateResponse;
+  }
+  if (item.kind === 'requirements' || item.kind === 'taskSops') {
+    const requested = parseObject(parseProtoJson(protoJson), `${item.kind} resource`);
+    const displayName = requiredString(requested.displayName, `${item.kind} displayName`).trim();
+    const placeholder = item.kind === 'requirements' ? '新的客户需求' : '新的任务 SOP';
+    if (displayName !== placeholder) {
+      const duplicateResponse = await rejectDuplicateActiveRoot(repository, item.kind, protoJson, options, name);
+      if (duplicateResponse) return duplicateResponse;
+    }
+  }
   if (item.value.persistence === 'current') {
     if (stored.lifecycle !== 'DRAFT') throw new TypeError('Only an active draft can use the ordinary resource update route');
     if (!isDraftProtoJson(protoJson)) throw new TypeError('Ordinary resource updates cannot change draft lifecycle');
@@ -831,17 +990,82 @@ async function archiveResource(
   const expectedEtag = requiredString(body.expectedEtag, 'expectedEtag');
   const stored = await loadResource(repository, item, name);
   if (!stored) throw new ResourceNotFoundError(name);
+  if (item.kind === 'taskSops') {
+    const blockers = await repository.findActiveRequirementReferrers(name);
+    if (blockers.length) {
+      return errorResponse(409, apiError('RESOURCE_IN_USE', '任务 SOP 正被未归档客户需求引用，不能归档', {
+        resourceName: name,
+        blockingResources: blockers.map((resource) => ({ name: resource.name, displayName: resource.displayName })),
+      }, options.requestId));
+    }
+  }
   const protoJson = item.value.persistence === 'current'
     ? archivedCurrentProtoJson(item.value.schema, stored.protoJson)
     : stored.protoJson;
   const record = item.value.persistence === 'catalog'
     ? await repository.archiveCatalog(name, expectedEtag, { protoSchema: item.value.schema.typeName, protoJson })
-    : await repository.archiveCurrent(name, expectedEtag, { protoSchema: item.value.schema.typeName, protoJson });
+    : ['requirements', 'taskSops'].includes(item.kind)
+      ? await repository.archiveCurrentForLibrary(name, expectedEtag, { protoSchema: item.value.schema.typeName, protoJson })
+      : await repository.archiveCurrent(name, expectedEtag, { protoSchema: item.value.schema.typeName, protoJson });
   const result: ResourceMutationResult = {
     resource: resourceDetail(item.kind, record),
     warning: options.readRowSizeWarning?.(),
   };
   return json(result);
+}
+
+async function restoreResource(
+  request: Request,
+  repository: ResourceRepository,
+  item: { kind: ResourceKind; value: ResourceDefinition },
+  name: string,
+  options: ResourceApiOptions,
+): Promise<Response> {
+  if (!['requirements', 'taskSops'].includes(item.kind) || item.value.persistence !== 'current') {
+    throw new TypeError('Restore is supported only for archived requirements and taskSops');
+  }
+  const body = await requestObject(request);
+  const expectedEtag = requiredString(body.expectedEtag, 'expectedEtag');
+  const stored = await repository.getCurrent(name);
+  if (!stored || stored.kind !== item.value.repositoryKind) throw new ResourceNotFoundError(name);
+  if (!stored.archiveState) throw new TypeError('Resource is not in the archive library');
+  if (item.kind === 'requirements') {
+    const requirement = fromDomainJsonString(RequirementSchema, stored.protoJson);
+    const revisionNames = [...new Set(requirement.spec?.productionItems
+      .map((production) => production.taskSopRevision)
+      .filter(Boolean) ?? [])];
+    const revisions = await repository.getRevisions(revisionNames);
+    const revisionByName = new Map(revisions.map((revision) => [revision.name, revision]));
+    const ownerNames = [...new Set(revisions.map((revision) => revision.ownerName))];
+    const owners = await repository.getCurrents(ownerNames);
+    const ownerByName = new Map(owners.map((owner) => [owner.name, owner]));
+    const blockers = revisionNames.flatMap((revisionName) => {
+      const revision = revisionByName.get(revisionName);
+      const owner = revision ? ownerByName.get(revision.ownerName) : undefined;
+      return !revision || !owner || owner.archivedAt
+        ? [{ name: revision?.ownerName ?? revisionName, displayName: owner?.displayName ?? revisionName }]
+        : [];
+    });
+    if (blockers.length) {
+      return errorResponse(409, apiError('RESOURCE_IN_USE', '客户需求引用的任务 SOP 仍在归档库中，请先恢复对应任务 SOP', {
+        resourceName: name,
+        blockingResources: blockers,
+      }, options.requestId));
+    }
+  }
+  const protoJson = restoredCurrentProtoJson(item.value.schema, stored.protoJson, stored.archiveState);
+  const record = await repository.restoreCurrentFromLibrary(name, expectedEtag, {
+    protoSchema: item.value.schema.typeName,
+    protoJson,
+    candidateVersionSequence: stored.archiveState.candidateVersionSequence,
+    candidateVersionLabel: stored.archiveState.candidateVersionLabel,
+    candidateSourceVersionId: stored.archiveState.candidateSourceVersionId,
+    reviewedManifestDigest: undefined,
+  });
+  return json({
+    resource: resourceDetail(item.kind, record),
+    warning: options.readRowSizeWarning?.(),
+  } satisfies ResourceMutationResult);
 }
 
 function apiFailure(error: unknown, requestId?: string): Response {
@@ -923,7 +1147,7 @@ export async function handleResourceApiRequest(
     const draftExport = /^\/api\/resources\/(taskSops|requirements)\/([^/]+)\/export\.(yaml|pdf)$/.exec(pathname);
     const revisionDetailRoute = /^\/api\/revisions\/([^/]+)$/.exec(pathname);
     const attachmentRoute = /^\/api\/resources\/([^/]+)\/([^/]+)\/attachments(?:\/([^/]+)(?:\/parts\/([^/]+)(?:\/(upload-url|receipt))?|\/(complete|abort))?)?$/.exec(pathname);
-    const resourceRoute = /^\/api\/resources\/([^/]+)(?:\/([^/]+))?(?:\/(archive|revisions|drafts|review-proposal|review-acknowledgements|confirmations))?$/.exec(pathname);
+    const resourceRoute = /^\/api\/resources\/([^/]+)(?:\/([^/]+))?(?:\/(archive|restore|revisions|drafts|review-proposal|review-acknowledgements|confirmations))?$/.exec(pathname);
     if (!versionRoute && !revisionExport && !draftExport && !revisionDetailRoute && !attachmentRoute && !resourceRoute) {
       return errorResponse(404, apiError('NOT_FOUND', 'API 路由不存在', undefined, options.requestId));
     }
@@ -943,12 +1167,14 @@ export async function handleResourceApiRequest(
       const uid = decodeSegment(versionRoute[1], 'version uid');
       const revision = await repository.getRevisionByUid(uid);
       if (revision && (revision.kind === 'REQUIREMENT_REVISION' || revision.kind === 'TASK_SOP_REVISION')) {
+        const owner = await repository.getCurrent(revision.ownerName);
         const target: VersionRouteTarget = {
           kind: revision.kind === 'REQUIREMENT_REVISION' ? 'requirements' : 'taskSops',
           ownerName: revision.ownerName,
           versionLabel: revision.versionLabel,
           versionUid: revision.uid,
           draft: false,
+          archived: Boolean(owner?.archiveState),
         };
         return json(target);
       }
@@ -959,12 +1185,15 @@ export async function handleResourceApiRequest(
       const currentRevision = current.currentRevisionName
         ? await repository.getRevision(current.currentRevisionName)
         : undefined;
+      const archivedDraft = current.archiveState?.archivedFromLifecycle === 'DRAFT';
       const target: VersionRouteTarget = {
         kind: current.kind === 'REQUIREMENT' ? 'requirements' : 'taskSops',
         ownerName: current.name,
-        versionLabel: current.candidateVersionLabel || currentRevision?.versionLabel || '0.0.1',
-        versionUid: current.candidateVersionLabel ? current.uid : currentRevision?.uid || current.uid,
-        draft: Boolean(current.candidateVersionLabel),
+        versionLabel: current.candidateVersionLabel || current.archiveState?.candidateVersionLabel
+          || currentRevision?.versionLabel || '0.0.1',
+        versionUid: current.candidateVersionLabel || archivedDraft ? current.uid : currentRevision?.uid || current.uid,
+        draft: Boolean(current.candidateVersionLabel) || archivedDraft,
+        archived: Boolean(current.archiveState),
       };
       return json(target);
     }
@@ -1034,6 +1263,10 @@ export async function handleResourceApiRequest(
       return await attachmentResponse(request, repository, resource, attachmentRoute, options);
     }
 
+    if (pathname === '/api/resources/globalFields/import' && method === 'POST' && resource?.kind === 'globalFields') {
+      return await replaceGlobalFields(request, repository, resource);
+    }
+
     if (!resource || !resourceRoute) {
       return errorResponse(404, apiError('NOT_FOUND', 'API 路由不存在', undefined, options.requestId));
     }
@@ -1052,6 +1285,7 @@ export async function handleResourceApiRequest(
     }
     if (!action && method === 'PUT') return await updateResource(request, repository, resource, name, options);
     if (action === 'archive' && method === 'POST') return await archiveResource(request, repository, resource, name, options);
+    if (action === 'restore' && method === 'POST') return await restoreResource(request, repository, resource, name, options);
     if (action === 'revisions' && method === 'GET') {
       if (resource.value.persistence !== 'current') {
         return errorResponse(404, apiError('NOT_FOUND', '该资源没有版本历史', { resourceName: name }, options.requestId));

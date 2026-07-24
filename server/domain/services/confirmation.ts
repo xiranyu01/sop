@@ -400,6 +400,53 @@ async function resolveRoot(
   throw new CanonicalDataError(`Resource is not an export root: ${rootName}`);
 }
 
+async function resolveDraftExportRoot(
+  repository: ResourceRepository,
+  rootName: string,
+  now: string,
+): Promise<RootResolution> {
+  const root = await repository.getCurrent(rootName);
+  if (!root) throw new ResourceNotFoundError(rootName);
+  if (!root.archiveState) return resolveRoot(repository, rootName, now);
+  if (root.archiveState.archivedFromLifecycle !== 'DRAFT'
+    || !root.archiveState.candidateVersionSequence
+    || !root.archiveState.candidateVersionLabel) {
+    throw new CanonicalDataError(`Archived resource is not a draft: ${rootName}`);
+  }
+  const restoredRoot: CurrentResourceRecord = {
+    ...root,
+    lifecycle: 'DRAFT',
+    archivedAt: undefined,
+    archiveState: undefined,
+    candidateVersionSequence: root.archiveState.candidateVersionSequence,
+    candidateVersionLabel: root.archiveState.candidateVersionLabel,
+    candidateSourceVersionId: root.archiveState.candidateSourceVersionId,
+  };
+  if (root.kind === 'TASK_SOP') {
+    const message = create(TaskSopSchema, {
+      ...fromDomainJsonString(TaskSopSchema, root.protoJson),
+      lifecycle: Lifecycle.DRAFT,
+      candidateVersionSequence: BigInt(root.archiveState.candidateVersionSequence),
+      candidateVersionLabel: root.archiveState.candidateVersionLabel,
+      candidateSourceVersionId: root.archiveState.candidateSourceVersionId,
+      reviewedDependencyDigest: undefined,
+    });
+    return resolveTaskDependencies(repository, restoredRoot, message, now);
+  }
+  if (root.kind === 'REQUIREMENT') {
+    const message = create(RequirementSchema, {
+      ...fromDomainJsonString(RequirementSchema, root.protoJson),
+      lifecycle: Lifecycle.DRAFT,
+      candidateVersionSequence: BigInt(root.archiveState.candidateVersionSequence),
+      candidateVersionLabel: root.archiveState.candidateVersionLabel,
+      candidateSourceVersionId: root.archiveState.candidateSourceVersionId,
+      reviewedDependencyDigest: undefined,
+    });
+    return resolveRequirementDependencies(repository, restoredRoot, message, now);
+  }
+  throw new CanonicalDataError(`Resource is not an export root: ${rootName}`);
+}
+
 export async function reviewRootDependencies(
   repository: ResourceRepository,
   rootName: string,
@@ -451,7 +498,7 @@ export async function buildTaskSopDraftExportBundle(
   rootName: string,
   now = new Date(),
 ) {
-  const resolution = await resolveRoot(repository, rootName, now.toISOString());
+  const resolution = await resolveDraftExportRoot(repository, rootName, now.toISOString());
   if (!resolution.message.$typeName.endsWith('TaskSop')) {
     throw new CanonicalDataError(`Resource is not a TaskSop draft: ${rootName}`);
   }
@@ -476,7 +523,7 @@ export async function buildRequirementDraftExportBundle(
   rootName: string,
   now = new Date(),
 ) {
-  const resolution = await resolveRoot(repository, rootName, now.toISOString());
+  const resolution = await resolveDraftExportRoot(repository, rootName, now.toISOString());
   if (!resolution.message.$typeName.endsWith('Requirement')) {
     throw new CanonicalDataError(`Resource is not a Requirement draft: ${rootName}`);
   }

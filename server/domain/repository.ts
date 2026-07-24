@@ -34,6 +34,15 @@ export type ResourceSummary = {
   aggregateDuration?: string;
   currentRevisionName?: string;
   createdAt?: string;
+  archiveState?: CurrentArchiveState;
+};
+
+export type CurrentArchiveState = {
+  archivedAt: string;
+  archivedFromLifecycle: 'DRAFT' | 'CONFIRMED';
+  candidateVersionSequence?: number;
+  candidateVersionLabel?: string;
+  candidateSourceVersionId?: string;
 };
 
 export type CatalogResourceRecord = ResourceSummary & {
@@ -101,7 +110,7 @@ export type ReviewedDependency = {
   createdAt: string;
 };
 
-export type PageRequest = { cursor?: string; limit?: number };
+export type PageRequest = { cursor?: string; limit?: number; query?: string };
 export type PageResult<T> = { items: T[]; nextCursor?: string };
 
 export const MAX_BULK_RESOURCE_NAMES = 500;
@@ -246,14 +255,19 @@ export interface ResourceRepository {
   createCatalog(input: ResourceWriteInput): Promise<CatalogResourceRecord>;
   updateCatalog(name: string, expectedEtag: string, input: ResourceWriteInput): Promise<CatalogResourceRecord>;
   archiveCatalog(name: string, expectedEtag: string, input: ResourceWriteInput): Promise<CatalogResourceRecord>;
+  replaceGlobalFields(inputs: ResourceWriteInput[]): Promise<CatalogResourceRecord[]>;
 
   getCurrent(name: string): Promise<CurrentResourceRecord | undefined>;
   getCurrentByUid(uid: string): Promise<CurrentResourceRecord | undefined>;
   getCurrents(names: readonly string[]): Promise<CurrentResourceRecord[]>;
   listCurrent(kind: CurrentResourceKind, page?: PageRequest): Promise<PageResult<ResourceSummary>>;
+  listArchivedCurrent(kind: Exclude<CurrentResourceKind, 'ROBOT_MODEL'>, page?: PageRequest): Promise<PageResult<ResourceSummary>>;
   createCurrent(input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
   updateCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
   archiveCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
+  archiveCurrentForLibrary(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
+  restoreCurrentFromLibrary(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
+  findActiveRequirementReferrers(taskOwnerName: string): Promise<ResourceSummary[]>;
 
   getRevision(name: string): Promise<RevisionRecord | undefined>;
   getRevisionByUid(uid: string): Promise<RevisionRecord | undefined>;

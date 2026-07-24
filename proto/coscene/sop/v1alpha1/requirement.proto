@@ -43,7 +43,7 @@ message DeliveryLanguage {
 
 // AnnotationRequirements describes whether and how delivered data is annotated.
 message AnnotationRequirements {
-  bool required = 1;
+  optional bool required = 1;
   repeated string types = 2;
 }
 

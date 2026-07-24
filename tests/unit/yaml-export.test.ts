@@ -102,6 +102,91 @@ describe('deterministic canonical YAML export', () => {
     }));
   });
 
+  it('uses frozen global-field labels for randomization names', () => {
+    const data = structuredClone(seedData);
+    data.globalFields.push(
+      { id: 'robot-position', group: 'robot_random_field', label: '位置', value: 'initial_position', status: 'active', updatedAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'robot-yaw', group: 'robot_random_field', label: '机器朝向', value: 'initial_yaw', status: 'active', updatedAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'material-location', group: 'material_random_field', label: '物料位置', value: 'location', status: 'active', updatedAt: '2026-01-01T00:00:00.000Z' },
+    );
+    const version = data.scenes[0].subscenes[0].versions[0];
+    version.randomization.robotInitialState = {
+      enabled: true,
+      changeFrequency: 'every_n_records',
+      changeIntervalRecords: 1,
+      randomizedFields: [
+        { field: 'initial_position', displayName: '初始位置', constraints: [] },
+        { field: 'initial_yaw', displayName: '初始朝向', constraints: [] },
+      ],
+    };
+    version.randomization.materialInitialState.rules = [{
+      targetMaterials: [],
+      changeFrequency: 'every_n_records',
+      changeIntervalRecords: 1,
+      randomizedFields: {
+        locations: [{ name: 'location', valueSource: 'object_states.initial.allowed_locations' }],
+        poses: [],
+        forms: [],
+      },
+      collectorInstruction: '',
+      exampleImageAttachmentIds: [],
+      constraints: [],
+    }];
+
+    const snapshot = convertLegacyToV1alpha1(data).resources;
+    const document = YAML.parse(exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1'));
+    const randomization = document.task_sop.environment_config.randomization;
+
+    expect(randomization.robot_initial_state.randomized_fields.map((field: { name: string }) => field.name))
+      .toEqual(['位置', '机器朝向']);
+    expect(randomization.material_initial_state.rules[0].randomized_fields).toEqual(['物料位置']);
+  });
+
+  it('uses the same Chinese fallback labels as the Task SOP detail for legacy random-field IDs', () => {
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
+    const spec = snapshot.taskSopRevisions[0].snapshot!.spec!;
+    spec.randomization!.robotInitialState = create(RobotRandomizationSchema, {
+      enabled: true,
+      change: create(ChangePolicySchema, { frequency: ChangeFrequency.EVERY_N_RECORDS, intervalRecords: 1 }),
+      fields: [
+        { fieldId: 'initial-position-8ceebaf4', displayName: 'initial-position-8ceebaf4' },
+        { fieldId: 'initial-yaw-6150eb28', displayName: 'initial-yaw-6150eb28' },
+      ],
+    });
+    spec.randomization!.objectInitialStates = [create(ObjectRandomizationSchema, {
+      objectIds: [],
+      change: create(ChangePolicySchema, { frequency: ChangeFrequency.EVERY_N_RECORDS, intervalRecords: 1 }),
+      fields: [
+        { fieldId: 'location', displayName: 'location' },
+        { fieldId: 'pose', displayName: 'pose' },
+        { fieldId: 'form', displayName: 'form' },
+      ],
+      locations: [],
+      poses: [],
+      forms: [],
+    })];
+
+    const document = YAML.parse(exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1'));
+    const randomization = document.task_sop.environment_config.randomization;
+
+    expect(randomization.robot_initial_state.randomized_fields.map((field: { name: string }) => field.name))
+      .toEqual(['位置', '机器朝向']);
+    expect(randomization.material_initial_state.rules[0].randomized_fields)
+      .toEqual(['物料位置', '物料姿态', '物料形态']);
+  });
+
+  it('rejects unknown machine-only random-field names instead of leaking IDs', () => {
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
+    snapshot.taskSopRevisions[0].snapshot!.spec!.randomization!.robotInitialState = create(RobotRandomizationSchema, {
+      enabled: true,
+      change: create(ChangePolicySchema, { frequency: ChangeFrequency.EVERY_N_RECORDS, intervalRecords: 1 }),
+      fields: [{ fieldId: 'field-deadbeef', displayName: 'field-deadbeef' }],
+    });
+
+    expect(() => exportTaskSopYaml(snapshot, 'scene-baseline', 'NO.001', '0.0.1'))
+      .toThrow('随机字段缺少可展示的中文名称');
+  });
+
   it('uses material name consistently in Task SOP and Requirement YAML', () => {
     const data = structuredClone(seedData);
     data.scenes[0].subscenes[0].versions[0].materials = [{

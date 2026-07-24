@@ -1,4 +1,4 @@
-export type AppPage = 'requirements' | 'scenes' | 'globalFields' | 'customers' | 'materials' | 'robots';
+export type AppPage = 'requirements' | 'scenes' | 'archive' | 'globalFields' | 'customers' | 'materials' | 'robots';
 
 export type AppRoute = {
   page: AppPage;
@@ -14,6 +14,7 @@ const pagePaths: Record<AppPage, string> = {
   customers: '/customers',
   materials: '/materials',
   robots: '/robot-models',
+  archive: '/archive',
   globalFields: '/global-fields',
 };
 
@@ -37,9 +38,27 @@ export function taskSopRoutePath(versionId: string): string {
   return `/task-sops/${encodeURIComponent(versionId)}`;
 }
 
+export function archivedRequirementRoutePath(versionId: string): string {
+  return `/archive/requirements/${encodeURIComponent(versionId)}`;
+}
+
+export function archivedTaskSopRoutePath(versionId: string): string {
+  return `/archive/task-sops/${encodeURIComponent(versionId)}`;
+}
+
 export function parseAppRoute(pathname: string): AppRoute | undefined {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
   if (path === '/') return undefined;
+  const archivedRequirement = /^\/archive\/requirements\/([^/]+)$/.exec(path);
+  if (archivedRequirement) {
+    const versionId = segment(archivedRequirement[1]);
+    return versionId ? { page: 'archive', detail: { kind: 'requirement', versionId } } : undefined;
+  }
+  const archivedTaskSop = /^\/archive\/task-sops\/([^/]+)$/.exec(path);
+  if (archivedTaskSop) {
+    const versionId = segment(archivedTaskSop[1]);
+    return versionId ? { page: 'archive', detail: { kind: 'taskSop', versionId } } : undefined;
+  }
   const requirement = /^\/requirements\/([^/]+)$/.exec(path);
   if (requirement) {
     const versionId = segment(requirement[1]);

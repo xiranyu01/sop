@@ -1,0 +1,108 @@
+format: coscene.sop.export
+schema_version: 2.1.0
+requirement:
+  basic_info:
+    title: 基线客户需求
+    requirement_version: 0.0.1
+    requirement_version_id: 43843384-2fd5-5343-8564-684915fb7a7b
+    parent_requirement_version_id: ""
+    status: 已确认
+    project_name: 基线项目
+    deadline: 2026-12-31
+    business_goal: 保护当前页面行为
+    required_duration_hours: 1
+    original_requirement_source: https://example.test/source
+    attachments: []
+  customer:
+    id: cus-baseline
+    name: 基线客户
+    contact:
+      name: 测试联系人
+      phone: "10086"
+      email: baseline@example.test
+  robot:
+    id: 0614b3b9-ee56-5f99-8397-822cb4e79e20
+    brand: coScene
+    model: Baseline
+    terminal: 夹爪
+    topics:
+      /camera: ""
+  global_requirements:
+    extra_topic_requirements: ""
+    global_randomization_requirements: ""
+    additional_notes: ""
+    collection_operation_requirements:
+      allowed_operations: []
+      acceptable_operations: []
+      forbidden_operations: []
+    annotation_operation_requirements:
+      allowed_operations: []
+      forbidden_operations: []
+  delivery_requirements:
+    formats:
+      - json
+    method: download
+    languages:
+      - 简体中文
+      - 英文
+    delivery_languages:
+      - key: zh-CN
+        name: 简体中文
+      - key: en
+        name: 英文
+  annotation_requirements:
+    required: false
+    types: []
+  quality_inspection_requirements:
+    required: false
+    sampling_policy: ""
+  production_requirement_items:
+    - title: 基线任务 SOP
+      description: Starbase 互操作契约
+      target_duration_hours: 1
+      target_collection_count: 2
+      task_sop:
+        title: 基线任务 SOP
+        scene_name: 基线场景
+        sop_version: 0.0.1
+        sop_version_id: 67af0f30-5057-5128-a859-a92a71bab8a2
+  task_sop_details:
+    - sop_version: 0.0.1
+      sop_version_id: 67af0f30-5057-5128-a859-a92a71bab8a2
+      parent_sop_version_id: ""
+      status: 已确认
+      scene_name: 基线场景
+      task_sop_name: 基线任务 SOP
+      description: 用于确定性浏览器测试
+      attachments: []
+      environment_config:
+        config_version: 0.0.1
+        materials: []
+        robot_state:
+          initial: 安全初始位
+          target: 任务完成
+        object_states:
+          initial: []
+          target: []
+        randomization:
+          robot_initial_state:
+            enabled: false
+            randomized_fields: []
+          material_initial_state:
+            rules: []
+      collection_config:
+        config_version: 0.0.1
+        operation:
+          steps:
+            - order: 1
+              description: 执行基线动作
+              english_description: Run baseline action
+          allowed_operations: []
+          acceptable_operations: []
+          forbidden_operations: []
+      annotation_config:
+        config_version: 0.0.1
+        annotation:
+          steps: []
+          allowed_operations: []
+          forbidden_operations: []

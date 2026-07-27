@@ -1,5 +1,5 @@
 format: coscene.sop.export
-schema_version: 2.0.1
+schema_version: 2.1.0
 requirement:
   basic_info:
     title: 基线客户需求
@@ -44,6 +44,9 @@ requirement:
     method: download
     languages:
       - 简体中文
+    delivery_languages:
+      - key: zh-CN
+        name: 简体中文
   annotation_requirements:
     required: false
     types: []

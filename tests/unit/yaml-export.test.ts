@@ -3,7 +3,8 @@ import path from 'node:path';
 import { create } from '@bufbuild/protobuf';
 import YAML from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
-import { ChangeFrequency, ChangePolicySchema, Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { TopicBindingSchema } from '../../gen/coscene/sop/v1alpha1/catalog_pb';
+import { ChangeFrequency, ChangePolicySchema, Lifecycle, NumericRangeSchema, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { DeliveryLanguageSchema } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
 import { ObjectRandomizationSchema, RobotRandomizationSchema } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import { exportRequirementYaml, exportTaskSopYaml } from '../../server/export';
@@ -40,7 +41,10 @@ function starbaseInteropResources(): ReturnType<typeof convertLegacyToV1alpha1>[
     targetDurationHours: 1,
     targetCollectionCount: 2,
   }];
-  return convertLegacyToV1alpha1(data).resources;
+  const resources = convertLegacyToV1alpha1(data).resources;
+  const camera = resources.robotModelRevisions[0].snapshot!.topics[0];
+  camera.frequencyHz = create(NumericRangeSchema, { minValue: 10, maxValue: 30 });
+  return resources;
 }
 
 describe('deterministic canonical YAML export', () => {
@@ -120,6 +124,39 @@ describe('deterministic canonical YAML export', () => {
   it('matches the reviewed Starbase interoperability golden', async () => {
     const output = exportRequirementYaml(starbaseInteropResources(), 'REQ001', '0.0.1');
     expect(output).toBe(await golden('starbase-interop.golden.yaml'));
+  });
+
+  it('exports canonical structured, equal, constrained, and legacy topic frequency ranges', () => {
+    const snapshot = starbaseInteropResources();
+    snapshot.robotModelRevisions[0].snapshot!.topics = [
+      create(TopicBindingSchema, {
+        id: 'camera',
+        topic: '/camera',
+        frequencyHz: create(NumericRangeSchema, { minValue: 10, maxValue: 30 }),
+        constraints: ['RGB stream'],
+      }),
+      create(TopicBindingSchema, {
+        id: 'imu',
+        topic: '/imu',
+        frequencyHz: create(NumericRangeSchema, { minValue: 100, maxValue: 100 }),
+      }),
+      create(TopicBindingSchema, {
+        id: '/joint_states 20 40 reliable',
+        constraints: ['required'],
+      }),
+      create(TopicBindingSchema, {
+        id: '/events best effort',
+      }),
+    ];
+
+    const document = YAML.parse(exportRequirementYaml(snapshot, 'REQ001', '0.0.1'));
+
+    expect(document.requirement.robot.topics).toEqual({
+      '/camera': '10-30 Hz; RGB stream',
+      '/imu': '100-100 Hz',
+      '/joint_states': '20-40 Hz; reliable; required',
+      '/events': 'best effort',
+    });
   });
 
   it('never rewrites enum-looking free text', () => {

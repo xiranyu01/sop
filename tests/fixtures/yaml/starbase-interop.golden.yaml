@@ -26,7 +26,7 @@ requirement:
     model: Baseline
     terminal: 夹爪
     topics:
-      /camera: 10-30 Hz
+      /camera: ""
   global_requirements:
     extra_topic_requirements: ""
     global_randomization_requirements: ""

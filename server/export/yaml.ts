@@ -250,39 +250,15 @@ function count(value: bigint | undefined): number | string {
   return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString();
 }
 
-type FrozenTopicBinding = FrozenExportContent['robotModelRevisions'][number]['topics'][number];
-
-function topicFrequency(value: FrozenTopicBinding): string | undefined {
-  return value.frequencyHz
-    ? `${value.frequencyHz.minValue}-${value.frequencyHz.maxValue} Hz`
-    : undefined;
-}
-
-function legacyTopicDescription(tokens: string[]): { frequency?: string; description?: string } {
-  if (/^\d+$/.test(tokens[0] || '') && /^\d+$/.test(tokens[1] || '')) {
-    return {
-      frequency: `${tokens[0]}-${tokens[1]} Hz`,
-      description: tokens.slice(2).join(' ') || undefined,
-    };
-  }
-  return { description: tokens.join(' ') || undefined };
-}
-
 function topicMap(values: FrozenExportContent['robotModelRevisions'][number]['topics']): Record<string, string> {
   const result: Record<string, string> = {};
   for (const value of values) {
     if (value.topic) {
-      result[value.topic] = [topicFrequency(value), ...value.constraints].filter(Boolean).join('; ');
+      result[value.topic] = value.constraints.join('; ');
       continue;
     }
     const [topic, ...rest] = value.id.trim().split(/\s+/);
-    if (!topic) continue;
-    const legacy = legacyTopicDescription(rest);
-    result[topic] = [
-      topicFrequency(value) || legacy.frequency,
-      legacy.description,
-      ...value.constraints,
-    ].filter(Boolean).join('; ');
+    if (topic) result[topic] = [...rest, ...value.constraints].join(' ');
   }
   return result;
 }

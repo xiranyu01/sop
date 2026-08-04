@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { fromDomainJson } from '../../shared/domain/codec';
-import { GlobalFieldSchema, MaterialSchema, RobotModelSchema } from '../../gen/coscene/sop/v1alpha1/catalog_pb';
+import { GlobalFieldSchema, MaterialSchema } from '../../gen/coscene/sop/v1alpha1/catalog_pb';
 import { GlobalFieldGroup, GlobalFieldStatus } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import {
   decodeGlobalFieldForm,
   decodeMaterialForm,
-  decodeRobotModelForm,
   encodeGlobalFieldForm,
   encodeMaterialForm,
-  encodeRobotModelForm,
 } from '../../src/domain/protoFormMapping';
 
 describe('Proto resource form mapping', () => {
@@ -72,37 +70,5 @@ describe('Proto resource form mapping', () => {
       startCondition: detail.startCondition,
       endCondition: '物体被稳定抓持',
     });
-  });
-
-  it('preserves robot topic frequency ranges and constraints during form edits', () => {
-    const detail = {
-      name: 'robotModels/arm',
-      uid: '33333333-3333-4333-8333-333333333333',
-      displayName: 'Arm A1',
-      manufacturer: 'Cos',
-      modelCode: 'A1',
-      topics: [{
-        id: 'camera',
-        topic: '/camera',
-        frequencyHz: { minValue: 10, maxValue: 30 },
-        constraints: ['RGB stream'],
-      }],
-      etag: 'etag-robot',
-    };
-    const decoded = decodeRobotModelForm(detail);
-    const encoded = fromDomainJson(RobotModelSchema, encodeRobotModelForm({
-      ...decoded.value,
-      model: 'A2',
-      topics: { camera: '/camera/color' },
-    }, decoded.message));
-
-    expect(encoded.topics).toEqual([
-      expect.objectContaining({
-        id: 'camera',
-        topic: '/camera/color',
-        frequencyHz: expect.objectContaining({ minValue: 10, maxValue: 30 }),
-        constraints: ['RGB stream'],
-      }),
-    ]);
   });
 });

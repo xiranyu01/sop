@@ -21,7 +21,7 @@ revision identity 和来源 ID，便于外部系统追踪。
 核心文档：
 
 - [Proto v1alpha1 领域契约](docs/proto-v1alpha1.md)
-- [YAML Export v1](docs/yaml-export-v1.md)
+- [SOP YAML export contract](docs/yaml-export.md)
 - [部署、bootstrap 与恢复](docs/operations/deployment-and-recovery.md)
 - [开发说明](DEVELOPMENT.md)
 

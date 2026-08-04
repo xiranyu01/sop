@@ -22,4 +22,22 @@ describe('delivery language selection mapping', () => {
     expect(parseDeliveryLanguageSelection('zh-CN:简体中文')).toEqual({ code: 'zh-CN', name: '简体中文' });
     expect(deliveryLanguageSelectionValue({ code: 'en', name: '英文' })).toBe('en:英文');
   });
+
+  it('normalizes the source-text compatibility alias to Simplified Chinese', () => {
+    expect(parseDeliveryLanguageSelection('source:原始文本')).toEqual({
+      code: 'zh-CN',
+      name: '原始文本',
+    });
+    expect(parseDeliveryLanguageSelection('原始文本')).toEqual({
+      code: 'zh-CN',
+      name: '原始文本',
+    });
+  });
+
+  it('preserves unknown stable codes', () => {
+    expect(parseDeliveryLanguageSelection('ja:日本語')).toEqual({
+      code: 'ja',
+      name: '日本語',
+    });
+  });
 });

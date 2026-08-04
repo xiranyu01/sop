@@ -4,6 +4,7 @@ import { create } from '@bufbuild/protobuf';
 import YAML from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
 import { ChangeFrequency, ChangePolicySchema, Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { DeliveryLanguageSchema } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
 import { ObjectRandomizationSchema, RobotRandomizationSchema } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import { exportRequirementYaml, exportTaskSopYaml } from '../../server/export';
 import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
@@ -20,6 +21,28 @@ function markRequirementConfirmed(snapshot: ReturnType<typeof convertLegacyToV1a
   revision.exportEligible = true;
 }
 
+function starbaseInteropResources(): ReturnType<typeof convertLegacyToV1alpha1>['resources'] {
+  const data = structuredClone(seedData);
+  const version = data.requirements[0].versions[0];
+  version.status = 'confirmed';
+  version.delivery.languages = [
+    { code: 'zh-CN', name: '简体中文' },
+    { code: 'en', name: '英文' },
+  ];
+  version.selectedSubscenes = [{
+    id: 'production-item-1',
+    title: '基线任务 SOP',
+    description: 'Starbase 互操作契约',
+    sceneName: '基线场景',
+    subsceneCode: 'NO.001',
+    subsceneName: '基线任务 SOP',
+    version: '0.0.1',
+    targetDurationHours: 1,
+    targetCollectionCount: 2,
+  }];
+  return convertLegacyToV1alpha1(data).resources;
+}
+
 describe('deterministic canonical YAML export', () => {
   it('matches the reviewed TaskSop golden and remains byte-identical after current catalog edits', async () => {
     const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
@@ -33,7 +56,7 @@ describe('deterministic canonical YAML export', () => {
     expect(first.endsWith('\n\n')).toBe(false);
     expect(YAML.parse(first)).toEqual(expect.objectContaining({
       format: 'coscene.sop.export',
-      schema_version: '2.0.1',
+      schema_version: '2.1.0',
       task_sop: expect.objectContaining({ status: '已确认' }),
     }));
   });
@@ -47,8 +70,56 @@ describe('deterministic canonical YAML export', () => {
     const document = YAML.parse(output);
     expect(document).toEqual(expect.objectContaining({
       format: 'coscene.sop.export',
-      schema_version: '2.0.1', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
+      schema_version: '2.1.0', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
     }));
+    expect(document.requirement.delivery_requirements).toEqual({
+      formats: ['json'],
+      method: 'download',
+      languages: ['简体中文'],
+      delivery_languages: [{ key: 'zh-CN', name: '简体中文' }],
+    });
+  });
+
+  it('keeps legacy labels while canonicalizing and deduplicating structured delivery languages', () => {
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
+    markRequirementConfirmed(snapshot);
+    snapshot.requirementRevisions[0].snapshot!.spec!.delivery!.languages = [
+      create(DeliveryLanguageSchema, { code: 'source', displayName: '原始文本' }),
+      create(DeliveryLanguageSchema, { code: 'zh-CN', displayName: '中文' }),
+      create(DeliveryLanguageSchema, { code: 'en', displayName: 'English' }),
+      create(DeliveryLanguageSchema, { code: 'ja', displayName: '日本語' }),
+    ];
+
+    const document = YAML.parse(exportRequirementYaml(snapshot, 'REQ001', '0.0.1'));
+    expect(document.requirement.delivery_requirements).toEqual({
+      formats: ['json'],
+      method: 'download',
+      languages: ['原始文本', '中文', 'English', '日本語'],
+      delivery_languages: [
+        { key: 'zh-CN', name: '简体中文' },
+        { key: 'en', name: '英文' },
+        { key: 'ja', name: '日本語' },
+      ],
+    });
+  });
+
+  it('does not infer a known key from the display name of an unknown code', () => {
+    const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
+    markRequirementConfirmed(snapshot);
+    snapshot.requirementRevisions[0].snapshot!.spec!.delivery!.languages = [
+      create(DeliveryLanguageSchema, { code: 'fr', displayName: '英文' }),
+    ];
+
+    const document = YAML.parse(exportRequirementYaml(snapshot, 'REQ001', '0.0.1'));
+
+    expect(document.requirement.delivery_requirements.delivery_languages).toEqual([
+      { key: 'fr', name: '英文' },
+    ]);
+  });
+
+  it('matches the reviewed Starbase interoperability golden', async () => {
+    const output = exportRequirementYaml(starbaseInteropResources(), 'REQ001', '0.0.1');
+    expect(output).toBe(await golden('starbase-interop.golden.yaml'));
   });
 
   it('never rewrites enum-looking free text', () => {

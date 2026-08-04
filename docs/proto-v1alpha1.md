@@ -145,4 +145,4 @@ pnpm test:e2e:pages
 
 The repository installs the official `@bufbuild/buf` CLI at the pinned version `1.71.0`, so `pnpm install` provisions the same tool locally and in CI/deployment environments. `pnpm build` also runs the non-mutating Proto checks so deployment cannot bypass them.
 
-For later schema changes, run `pnpm proto:breaking` against the accepted baseline before merging. The YAML contract evolves independently according to [`yaml-export-v1.md`](yaml-export-v1.md).
+For later Proto schema changes, run `pnpm proto:breaking` against the accepted baseline before merging. The external YAML contract evolves independently according to [`yaml-export.md`](yaml-export.md).

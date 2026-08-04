@@ -6,6 +6,10 @@ import {
   type OperationStep,
   type RandomizedField,
 } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import {
+  canonicalDeliveryLanguageName,
+  normalizeDeliveryLanguage,
+} from '../../src/domain/deliveryLanguage';
 import { removeLegacySyntheticMaterialRandomizationConstraints } from '../../shared/domain/randomization';
 import { resolveRandomFieldDisplayName } from '../../shared/domain/randomFieldPresentation';
 import { verifyExportBundle } from './codec';
@@ -22,7 +26,7 @@ export type DomainYamlOptions = {
 };
 
 // Domain YAML evolves independently from the internal frozen bundle format.
-export const domainYamlSchemaVersion = '2.0.1' as const;
+export const domainYamlSchemaVersion = '2.1.0' as const;
 export const domainYamlFormat = 'coscene.sop.export' as const;
 
 function attachmentUrls(refs: string[], attachments: ReadonlyMap<string, AttachmentEntry>): string[] {
@@ -259,6 +263,35 @@ function topicMap(values: FrozenExportContent['robotModelRevisions'][number]['to
   return result;
 }
 
+function structuredDeliveryLanguages(
+  languages: NonNullable<NonNullable<RequirementEntry['spec']>['delivery']>['languages'],
+): Array<{ key: string; name: string }> {
+  const result: Array<{ key: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const language of languages) {
+    const rawCode = language.code.trim();
+    const normalized = rawCode
+      ? {
+          code: rawCode === 'source' ? 'zh-CN' : rawCode,
+          name: (language.displayName || rawCode).trim(),
+        }
+      : normalizeDeliveryLanguage({
+          code: '',
+          name: language.displayName ?? '',
+        });
+    if (!normalized.code || seen.has(normalized.code)) continue;
+    seen.add(normalized.code);
+    result.push({
+      key: normalized.code,
+      name:
+        canonicalDeliveryLanguageName(normalized.code) ||
+        normalized.name ||
+        normalized.code,
+    });
+  }
+  return result;
+}
+
 function requirementRules(values: OperationPolicy['allowed']) {
   return values.map((value) => ({ operation: value.description, note: value.note || '' }));
 }
@@ -344,6 +377,7 @@ function requirementDocument(
       formats: requirement.spec?.delivery?.formats || [],
       method: requirement.spec?.delivery?.method || '',
       languages: (requirement.spec?.delivery?.languages || []).map((language) => language.displayName || language.code),
+      delivery_languages: structuredDeliveryLanguages(requirement.spec?.delivery?.languages || []),
     },
     annotation_requirements: {
       required: requirement.spec?.annotation?.required || false,

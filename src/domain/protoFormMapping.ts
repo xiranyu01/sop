@@ -182,6 +182,7 @@ export function decodeRobotModelForm(resource: JsonValue): MutableResourceForm<R
 }
 
 export function encodeRobotModelForm(form: RobotModel, current: RobotModelMessage): JsonValue {
+  const currentTopics = new Map(current.topics.map((topic) => [topic.id, topic]));
   return toDomainJson(RobotModelSchema, create(RobotModelSchema, {
     ...current,
     displayName: [form.brand, form.model].filter(Boolean).join(' ') || form.id,
@@ -190,7 +191,15 @@ export function encodeRobotModelForm(form: RobotModel, current: RobotModelMessag
     modelCode: form.model || undefined,
     endEffector: form.terminal || undefined,
     topics: Object.entries(form.topics).sort(([left], [right]) => left.localeCompare(right, 'en'))
-      .map(([id, topic]) => create(TopicBindingSchema, { id, topic })),
+      .map(([id, topic]) => {
+        const currentTopic = currentTopics.get(id);
+        return create(TopicBindingSchema, {
+          id,
+          topic,
+          frequencyHz: currentTopic?.frequencyHz,
+          constraints: currentTopic?.constraints,
+        });
+      }),
     extraTopicRequirements: Object.entries(form.extraTopicRequirements)
       .sort(([left], [right]) => left.localeCompare(right, 'en'))
       .map(([topicId, requirement]) => create(TopicAdditionalRequirementSchema, { topicId, requirement })),

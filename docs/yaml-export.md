@@ -70,6 +70,24 @@ delivery_requirements:
 - Unknown existing codes and names are exported losslessly so consumers can
   warn or add support without the producer discarding data.
 
+## Robot topic frequencies
+
+Requirement exports encode each robot topic as a mapping whose value starts
+with the inclusive frequency range in the canonical form `min-max Hz`:
+
+```yaml
+robot:
+  topics:
+    /camera: 10-30 Hz
+    /imu: 100-100 Hz; reliable
+```
+
+The range comes from the pinned RobotModel revision's structured
+`frequency_hz` field. Topic constraints follow the range, separated by `; `.
+Historical free-form topic IDs ending in two integer bounds are normalized to
+the same representation. Topic entries without a frequency retain their
+descriptive text unchanged.
+
 ## Identity and references
 
 Requirement and Task SOP version IDs identify immutable source revisions.

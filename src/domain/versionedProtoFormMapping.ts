@@ -47,6 +47,7 @@ export type RevisionBound = {
 
 export type TaskSopFormContext = {
   materialNameById?: ReadonlyMap<string, string>;
+  robotModelNameById?: ReadonlyMap<string, string>;
   attachmentNameById?: ReadonlyMap<string, string>;
   attachmentByName?: (name: string) => RequirementAttachment | undefined;
   materialStateRuleNameById?: ReadonlyMap<string, string>;
@@ -185,6 +186,7 @@ function taskVersion(
     sceneName: task.legacySceneDisplayName,
     subsceneName: task.legacySubsceneDisplayName,
     description: task.description || '',
+    robotModelIds: task.robotModels.map(resourceTail),
     attachments: task.attachments.map((name) => context.attachmentByName?.(name) ?? attachmentPlaceholder(name)),
     requiredDurationHours: durationHoursView.fromProto(spec.expectedDuration),
     materials: spec.objects.map((object) => {
@@ -321,10 +323,15 @@ export function decodeTaskSopVersions(
   context: TaskSopFormContext = {},
 ): Array<SubsceneVersion & RevisionBound> {
   const current = fromDomainJson(TaskSopSchema, currentResource);
+  const robotModelIdByName = new Map(
+    [...(context.robotModelNameById ?? new Map<string, string>())].map(([id, name]) => [name, id]),
+  );
+  const taskRobotModelIds = current.robotModels.map((name) => robotModelIdByName.get(name) || resourceTail(name));
   const values = revisions.map((detail) => {
     const revision = fromDomainJson(TaskSopRevisionSchema, detail.resource);
     if (!revision.snapshot) throw new TypeError(`TaskSop revision has no snapshot: ${detail.name}`);
-    return taskVersion(revision.snapshot, revision.versionLabel || detail.versionLabel, {
+    return {
+      ...taskVersion(revision.snapshot, revision.versionLabel || detail.versionLabel, {
       name: detail.name,
       exportEligible: detail.exportEligible,
       checkpoint: !detail.exportEligible,
@@ -332,16 +339,21 @@ export function decodeTaskSopVersions(
       sourceVersionId: revision.sourceVersionId || detail.sourceVersionId,
       parentSourceVersionId: revisionParentId(revisions, revision.previousRevision || detail.previousRevisionName),
       createdAt: timestamp(revision.createTime) || detail.createdAt,
-    }, context);
+      }, context),
+      robotModelIds: taskRobotModelIds,
+    };
   });
   if (current.lifecycle === Lifecycle.DRAFT) {
-    values.push(taskVersion(current, current.candidateVersionLabel || '0.0.1', {
-      exportEligible: false,
-      versionId: current.uid,
-      sourceVersionId: current.candidateSourceVersionId,
-      parentSourceVersionId: revisionParentId(revisions, current.currentRevision),
-      createdAt: timestamp(current.candidateCreateTime) || timestamp(current.updateTime) || timestamp(current.createTime),
-    }, context));
+    values.push({
+      ...taskVersion(current, current.candidateVersionLabel || '0.0.1', {
+        exportEligible: false,
+        versionId: current.uid,
+        sourceVersionId: current.candidateSourceVersionId,
+        parentSourceVersionId: revisionParentId(revisions, current.currentRevision),
+        createdAt: timestamp(current.candidateCreateTime) || timestamp(current.updateTime) || timestamp(current.createTime),
+      }, context),
+      robotModelIds: taskRobotModelIds,
+    });
   }
   return values.sort(compareVersions);
 }
@@ -693,6 +705,8 @@ export function encodeTaskSopVersion(
     ...current,
     displayName: version.title,
     description: optionalText(version.description),
+    robotModels: (version.robotModelIds ?? []).flatMap((id) => context.robotModelNameById?.get(id) ||
+      current.robotModels.find((name) => resourceTail(name) === id) || []),
     spec: create(TaskSopSpecSchema, buildTaskSpec(version, current, context) as never),
     attachments: (version.attachments ?? []).flatMap((item) => context.attachmentNameById?.get(item.id) ||
       current.attachments.find((name) => resourceTail(name) === item.id) || []),

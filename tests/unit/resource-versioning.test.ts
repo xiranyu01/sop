@@ -20,6 +20,7 @@ function confirmedTask() {
   const current = create(TaskSopSchema, {
     name: 'taskSops/demo', uid: '00000000-0000-4000-8000-000000000001', displayName: 'Demo',
     scene: 'scenes/demo', lifecycle: Lifecycle.CONFIRMED, spec: {}, currentRevision: 'taskSops/demo/revisions/v-1-0-0',
+    robotModels: ['robotModels/arm'],
   });
   const revision = create(TaskSopRevisionSchema, {
     name: current.currentRevision, uid: '00000000-0000-4000-8000-000000000002', snapshot: current,
@@ -35,6 +36,7 @@ describe('resource-scoped versioning', () => {
     expect(draft).toMatchObject({
       lifecycle: Lifecycle.DRAFT, currentRevision: base.revision.name,
       candidateVersionSequence: 2n, candidateVersionLabel: '1.0.1',
+      robotModels: ['robotModels/arm'],
     });
     expect(draft.candidateCreateTime).toEqual(timestampFromDate(now));
     const first = buildTaskSopConfirmation(draft, frozen, now);

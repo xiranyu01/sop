@@ -1,4 +1,4 @@
-import type { DescMessage, JsonValue } from '@bufbuild/protobuf';
+import { create, type DescMessage, type JsonValue } from '@bufbuild/protobuf';
 import { timestampFromDate, type Timestamp } from '@bufbuild/protobuf/wkt';
 import {
   AttachmentSchema,
@@ -215,6 +215,7 @@ function resourceSummary(kind: ResourceKind, record: ResourceSummary): ResourceD
     fieldGroup: record.fieldGroup,
     fieldStatus: record.fieldStatus,
     sceneName: record.sceneName,
+    robotModelNames: record.robotModelNames,
     customerName: record.customerName,
     robotModelRevisionName: record.robotModelRevisionName,
     candidateVersionLabel: record.candidateVersionLabel,
@@ -977,6 +978,38 @@ async function updateResource(
   return json(result);
 }
 
+async function updateTaskSopRobotModels(
+  request: Request,
+  repository: ResourceRepository,
+  name: string,
+  options: ResourceApiOptions,
+): Promise<Response> {
+  const body = await requestObject(request);
+  const expectedEtag = requiredString(body.expectedEtag, 'expectedEtag');
+  if (!Array.isArray(body.robotModels) || body.robotModels.some((value) => typeof value !== 'string')) {
+    throw new TypeError('robotModels must be an array of resource names');
+  }
+  const robotModels = body.robotModels.map((value) => value.trim());
+  if (robotModels.some((value) => !value)) throw new TypeError('robotModels must not contain empty values');
+  if (new Set(robotModels).size !== robotModels.length) throw new TypeError('robotModels must not contain duplicates');
+  const current = await repository.getCurrent(name);
+  if (!current || current.kind !== 'TASK_SOP') throw new ResourceNotFoundError(name);
+  const task = fromDomainJsonString(TaskSopSchema, current.protoJson);
+  const updated = create(TaskSopSchema, {
+    ...task,
+    robotModels,
+    updateTime: timestampFromDate(new Date()),
+    etag: '',
+  });
+  assertValidDomainMessage(TaskSopSchema, updated);
+  const saved = await repository.updateTaskSopRobotModels({ name, expectedEtag, robotModels });
+  const result: ResourceMutationResult = {
+    resource: resourceDetail('taskSops', saved),
+    warning: options.readRowSizeWarning?.(),
+  };
+  return json(result);
+}
+
 async function archiveResource(
   request: Request,
   repository: ResourceRepository,
@@ -1147,7 +1180,7 @@ export async function handleResourceApiRequest(
     const draftExport = /^\/api\/resources\/(taskSops|requirements)\/([^/]+)\/export\.(yaml|pdf)$/.exec(pathname);
     const revisionDetailRoute = /^\/api\/revisions\/([^/]+)$/.exec(pathname);
     const attachmentRoute = /^\/api\/resources\/([^/]+)\/([^/]+)\/attachments(?:\/([^/]+)(?:\/parts\/([^/]+)(?:\/(upload-url|receipt))?|\/(complete|abort))?)?$/.exec(pathname);
-    const resourceRoute = /^\/api\/resources\/([^/]+)(?:\/([^/]+))?(?:\/(archive|restore|revisions|drafts|review-proposal|review-acknowledgements|confirmations))?$/.exec(pathname);
+    const resourceRoute = /^\/api\/resources\/([^/]+)(?:\/([^/]+))?(?:\/(archive|restore|copy|robot-models|revisions|drafts|review-proposal|review-acknowledgements|confirmations))?$/.exec(pathname);
     if (!versionRoute && !revisionExport && !draftExport && !revisionDetailRoute && !attachmentRoute && !resourceRoute) {
       return errorResponse(404, apiError('NOT_FOUND', 'API 路由不存在', undefined, options.requestId));
     }
@@ -1284,6 +1317,21 @@ export async function handleResourceApiRequest(
       return json(resourceDetail(resource.kind, record));
     }
     if (!action && method === 'PUT') return await updateResource(request, repository, resource, name, options);
+    if (resource.kind === 'taskSops' && action === 'copy' && method === 'POST') {
+      const body = await requestObject(request);
+      const copied = await repository.copyTaskSop({
+        sourceName: name,
+        expectedEtag: requiredString(body.expectedEtag, 'expectedEtag'),
+      });
+      const result: ResourceMutationResult = {
+        resource: resourceDetail(resource.kind, copied),
+        warning: options.readRowSizeWarning?.(),
+      };
+      return json(result, 201);
+    }
+    if (resource.kind === 'taskSops' && action === 'robot-models' && method === 'POST') {
+      return await updateTaskSopRobotModels(request, repository, name, options);
+    }
     if (action === 'archive' && method === 'POST') return await archiveResource(request, repository, resource, name, options);
     if (action === 'restore' && method === 'POST') return await restoreResource(request, repository, resource, name, options);
     if (action === 'revisions' && method === 'GET') {

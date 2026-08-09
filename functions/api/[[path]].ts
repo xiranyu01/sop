@@ -53,6 +53,8 @@ function operationName(method: string, pathname: string): string {
   if (/\/revisions\/?$/.test(pathname)) return 'revision.list';
   if (/\/archive\/?$/.test(pathname)) return 'resource.archive';
   if (/\/restore\/?$/.test(pathname)) return 'resource.restore';
+  if (/\/copy\/?$/.test(pathname)) return 'resource.copy';
+  if (/\/robot-models\/?$/.test(pathname)) return 'task-sop.robot-models.update';
   if (/\/drafts\/?$/.test(pathname)) {
     return method === 'DELETE' ? 'lifecycle.discard-draft' : 'lifecycle.start-draft';
   }

@@ -65,6 +65,70 @@ describe('Pages resource API adapter', () => {
     db.close();
   });
 
+  it('copies a TaskSop into 0.0.1 drafts with monotonic copy names', async () => {
+    const { db, data, request } = await harness();
+    const source = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
+    const sourceResponse = await request(`/api/resources/taskSops/${encodeURIComponent(source.name)}`);
+    const sourceDetail = await sourceResponse.json() as {
+      resource: { name: string; displayName: string; etag: string };
+    };
+    const copy = () => request(`/api/resources/taskSops/${encodeURIComponent(sourceDetail.resource.name)}/copy`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: sourceDetail.resource.etag }),
+    });
+
+    const firstResponse = await copy();
+    const secondResponse = await copy();
+    expect(firstResponse.status).toBe(201);
+    expect(secondResponse.status).toBe(201);
+    const first = await firstResponse.json() as { resource: Record<string, unknown> };
+    const second = await secondResponse.json() as { resource: Record<string, unknown> };
+    expect(first.resource).toMatchObject({
+      displayName: `${sourceDetail.resource.displayName}-副本 1`,
+      lifecycle: 'DRAFT',
+      candidateVersionLabel: '0.0.1',
+    });
+    expect(second.resource).toMatchObject({
+      displayName: `${sourceDetail.resource.displayName}-副本 2`,
+      lifecycle: 'DRAFT',
+      candidateVersionLabel: '0.0.1',
+    });
+    expect(first.resource.name).not.toBe(second.resource.name);
+    db.close();
+  });
+
+  it('updates TaskSop robot models as root metadata without creating a version', async () => {
+    const { db, data, request } = await harness();
+    const source = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
+    const sourceResponse = await request(`/api/resources/taskSops/${encodeURIComponent(source.name)}`);
+    const before = await sourceResponse.json() as {
+      resource: { etag: string; lifecycle: string; currentRevision?: string; resource: { robotModels?: string[] } };
+    };
+    const update = await request(`/api/resources/taskSops/${encodeURIComponent(source.name)}/robot-models`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expectedEtag: before.resource.etag,
+        robotModels: ['robotModels/robot-baseline'],
+      }),
+    });
+    expect(update.status).toBe(200);
+    const updated = await update.json() as {
+      resource: { etag: string; lifecycle: string; currentRevision?: string; resource: { robotModels?: string[] } };
+    };
+    expect(updated.resource.resource.robotModels).toEqual(['robotModels/robot-baseline']);
+    expect(updated.resource.lifecycle).toBe(before.resource.lifecycle.replace('LIFECYCLE_', ''));
+    expect(updated.resource.currentRevision).toBe(before.resource.currentRevision);
+    expect(updated.resource.etag).not.toBe(before.resource.etag);
+
+    const summaryResponse = await request('/api/resources/taskSops?pageSize=200');
+    const summaries = await summaryResponse.json() as { items: Array<{ name: string; robotModelNames?: string[] }> };
+    expect(summaries.items.find((item) => item.name === source.name)?.robotModelNames)
+      .toEqual(['robotModels/robot-baseline']);
+    db.close();
+  });
+
   it('rejects duplicate active Requirement names on create and update', async () => {
     const { db, data, request } = await harness();
     const source = data.currents.find((item) => item.protoSchema.endsWith('.Requirement'))!;

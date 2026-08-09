@@ -683,6 +683,7 @@ function taskPlaceholder(summary: ResourceSummary): Bound<Subscene> {
       ...emptySubsceneVersionDraft(summary.displayName),
       version: summary.candidateVersionLabel || summary.currentVersionLabel || '0.0.1',
       status: statusFromLifecycle(summary.lifecycle),
+      robotModelIds: (summary.robotModelNames ?? []).map((name) => resourceTail(name)),
     } as SubsceneVersion,
     {
       __revisionName: summary.currentRevision,
@@ -1586,6 +1587,7 @@ export default function App() {
   const [selectedRequirementVersion, setSelectedRequirementVersion] = useState('');
   const [requirementDetailOpen, setRequirementDetailOpen] = useState(false);
   const [selectedSceneId, setSelectedSceneId] = useState('');
+  const [selectedRobotModelId, setSelectedRobotModelId] = useState('');
   const [selectedSubsceneCode, setSelectedSubsceneCode] = useState('');
   const [selectedSubsceneVersion, setSelectedSubsceneVersion] = useState('');
   const [sceneDetailOpen, setSceneDetailOpen] = useState(false);
@@ -1600,6 +1602,7 @@ export default function App() {
   const [routeReady, setRouteReady] = useState(false);
   const resourceDetails = useRef(new Map<string, ResourceDetail>());
   const saveQueues = useRef(new ResourceSaveQueueRegistry());
+  const robotModelSaveQueues = useRef(new Map<string, { pending?: string[]; running: boolean }>());
   const masterDraftSyncSequence = useRef(0);
   const reviewFlows = useRef(new Map<string, DependencyReviewFlow>());
   const applyingRoute = useRef(false);
@@ -1996,6 +1999,10 @@ export default function App() {
         const name = resourceNameOf(item);
         return name ? [[item.id, name] as const] : [];
       })),
+      robotModelNameById: new Map(dataRef.current.robotModels.flatMap((item) => {
+        const name = resourceNameOf(item);
+        return name ? [[item.id, name] as const] : [];
+      })),
       materialStateRuleNameById: new Map(dataRef.current.materialStateRules.flatMap((item) => {
         const name = resourceNameOf(item);
         return name ? [[item.id, name] as const] : [];
@@ -2188,6 +2195,77 @@ export default function App() {
     const saved = queue.localValue;
     replaceTaskSopVersion(name, saved);
     return saved;
+  }
+
+  async function saveTaskSopRobotModels(subscene: Subscene, robotModelIds: string[]): Promise<boolean> {
+    const name = resourceNameOf(subscene);
+    if (!name) throw new Error('任务 SOP 资源尚未创建');
+    const robotModels = robotModelIds.flatMap((id) => {
+      const model = dataRef.current.robotModels.find((item) => item.id === id);
+      const modelName = model ? resourceNameOf(model) : undefined;
+      return modelName ? [modelName] : [];
+    });
+    if (robotModels.length !== new Set(robotModelIds).size) {
+      throw new Error('有机器人型号尚未加载完成，请刷新后重试');
+    }
+    const queue = robotModelSaveQueues.current.get(name) ?? { running: false };
+    queue.pending = [...robotModelIds];
+    robotModelSaveQueues.current.set(name, queue);
+    if (queue.running) return true;
+    queue.running = true;
+    let successful = true;
+    try {
+      while (queue.pending) {
+        const nextIds = queue.pending;
+        queue.pending = undefined;
+        const detail = resourceDetails.current.get(name) ?? await resourceClient.get('taskSops', name);
+        const nextRobotModels = nextIds.flatMap((id) => {
+          const model = dataRef.current.robotModels.find((item) => item.id === id);
+          const modelName = model ? resourceNameOf(model) : undefined;
+          return modelName ? [modelName] : [];
+        });
+        const result = await run(
+          () => resourceClient.updateTaskSopRobotModels(name, nextRobotModels, detail.etag),
+        );
+        if (!result) {
+          successful = false;
+          queue.pending = undefined;
+          break;
+        }
+        updateResourceEtag('taskSops', result.resource);
+        setData((current) => ({
+          ...current,
+          scenes: current.scenes.map((scene) => ({
+            ...scene,
+            subscenes: scene.subscenes.map((item) => resourceNameOf(item) === name
+              ? { ...item, versions: item.versions.map((version) => ({ ...version, robotModelIds: [...nextIds] })) }
+              : item),
+          })),
+        }));
+      }
+    } finally {
+      queue.running = false;
+      if (!queue.pending) robotModelSaveQueues.current.delete(name);
+    }
+    return successful;
+  }
+
+  async function copyTaskSop(subscene: Subscene): Promise<void> {
+    const name = resourceNameOf(subscene);
+    if (!name) throw new Error('任务 SOP 资源尚未创建');
+    const detail = resourceDetails.current.get(name) ?? await resourceClient.get('taskSops', name);
+    const result = await run(
+      () => resourceClient.copyTaskSop(name, detail.etag),
+      '任务 SOP 已复制为新的 0.0.1 草稿',
+    );
+    if (!result) return;
+    const loaded = replaceTaskSopResource(result.resource, []);
+    const scene = dataRef.current.scenes.find((item) => resourceNameOf(item) === loaded.identity.sceneName);
+    if (!scene) throw new Error('找不到复制任务所属场景');
+    setSelectedSceneId(scene.id);
+    setSelectedSubsceneCode(loaded.identity.code);
+    setSelectedSubsceneVersion(latest(loaded.subscene.versions).version);
+    setSceneDetailOpen(true);
   }
 
   async function confirmRoot(kind: 'taskSops' | 'requirements', value: Subscene | Requirement) {
@@ -2826,8 +2904,10 @@ export default function App() {
           <ScenePage
             globalFields={data.globalFields}
             materials={data.materials}
+            robotModels={data.robotModels}
             scenes={data.scenes}
             selectedSceneId={selectedSceneId}
+            selectedRobotModelId={selectedRobotModelId}
             selectedSubsceneCode={selectedSubsceneCode}
             selectedVersion={selectedSubsceneVersion}
             detailOpen={sceneDetailOpen}
@@ -2840,12 +2920,15 @@ export default function App() {
                 setError(cause instanceof Error ? cause.message : String(cause));
               });
             }}
+            onSelectRobotModel={setSelectedRobotModelId}
             onSelectSubscene={async (code) => {
               setSelectedSubsceneCode(code);
               const loaded = await openTaskSopResource(selectedSceneId, code);
               if (loaded) setSelectedSubsceneVersion(latest(loaded.versions).version);
             }}
             onSelectVersion={setSelectedSubsceneVersion}
+            onCopySubscene={copyTaskSop}
+            onSaveTaskSopRobotModels={saveTaskSopRobotModels}
             onDetailOpenChange={setSceneDetailOpen}
             onSaveScene={async (scene) => {
               const savedScene = await run(() => saveMaster('scenes', scene), '场景已保存');
@@ -3001,16 +3084,21 @@ export default function App() {
           <ScenePage
             globalFields={data.globalFields}
             materials={data.materials}
+            robotModels={data.robotModels}
             scenes={[archivedDetail.scene]}
             selectedSceneId={archivedDetail.scene.id}
+            selectedRobotModelId=""
             selectedSubsceneCode={archivedDetail.subscene.code}
             selectedVersion={archivedTaskVersion.version}
             detailOpen
             archivedMode
             archiveState={archivedDetail.summary.archiveState}
             onSelectScene={() => undefined}
+            onSelectRobotModel={() => undefined}
             onSelectSubscene={async () => undefined}
             onSelectVersion={setArchivedVersion}
+            onCopySubscene={async () => undefined}
+            onSaveTaskSopRobotModels={async () => false}
             onDetailOpenChange={(open) => { if (!open) setArchivedDetail(null); }}
             onSaveScene={async () => undefined}
             onSaveSubscene={async () => false}
@@ -3189,6 +3277,7 @@ function SearchPanel({
   query,
   placeholder,
   count,
+  filter,
   actions,
   onQueryChange,
 }: {
@@ -3197,6 +3286,7 @@ function SearchPanel({
   query: string;
   placeholder: string;
   count: number;
+  filter?: ReactNode;
   actions?: ReactNode;
   onQueryChange: (value: string) => void;
 }) {
@@ -3211,6 +3301,7 @@ function SearchPanel({
           <span>搜索</span>
           <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={placeholder} />
         </label>
+        {filter}
         <span className="result-count">{count} 条</span>
         {actions}
       </div>
@@ -3930,6 +4021,7 @@ function RequirementPage({
 }) {
   const [requirementQuery, setRequirementQuery] = useState('');
   const [subsceneQuery, setSubsceneQuery] = useState('');
+  const [candidateRobotModelId, setCandidateRobotModelId] = useState('');
   const [taskSopPickerItemId, setTaskSopPickerItemId] = useState('');
   const [candidateVersionSelections, setCandidateVersionSelections] = useState<Record<string, string>>({});
   const [attachmentUpload, setAttachmentUpload] = useState<{ fileName: string; progress: number } | null>(null);
@@ -3954,13 +4046,35 @@ function RequirementPage({
     }
     return items.filter(
       (item) =>
-        !subsceneQuery ||
-        item.code.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
-        item.name.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
-        item.selectedVersion.title.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
-        item.sceneName.toLowerCase().includes(subsceneQuery.toLowerCase()),
+        (!subsceneQuery ||
+          item.code.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
+          item.name.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
+          item.selectedVersion.title.toLowerCase().includes(subsceneQuery.toLowerCase()) ||
+          item.sceneName.toLowerCase().includes(subsceneQuery.toLowerCase())) &&
+        candidateSupportsRobotModel(item, candidateRobotModelId),
     );
-  }, [data.scenes, subsceneQuery, candidateVersionSelections]);
+  }, [data.scenes, data.robotModels, subsceneQuery, candidateRobotModelId, candidateVersionSelections]);
+
+  function candidateSupportsRobotModel(item: CandidateSubsceneOption, selectedId: string): boolean {
+    const ids = item.selectedVersion.robotModelIds ?? [];
+    if (!selectedId || ids.length === 0) return true;
+    const model = data.robotModels.find((candidate) => candidate.id === selectedId);
+    const modelName = model ? resourceNameOf(model) : undefined;
+    const modelTail = modelName ? resourceTail(modelName) : selectedId;
+    return ids.some((id) => id === selectedId || id === modelName || id === modelTail);
+  }
+
+  function candidateRobotModelLabels(item: CandidateSubsceneOption): string[] {
+    return (item.selectedVersion.robotModelIds ?? []).map((id) => {
+      const model = data.robotModels.find(
+        (candidate) =>
+          candidate.id === id ||
+          resourceNameOf(candidate) === id ||
+          resourceTail(resourceNameOf(candidate) || '') === id,
+      );
+      return model?.model || id;
+    });
+  }
 
   const filteredRequirements = data.requirements.filter((requirement) => {
     const current = latest(requirement.versions);
@@ -4226,6 +4340,16 @@ function RequirementPage({
     { key: 'name', title: '任务 SOP', width: 'minmax(180px, 1.4fr)', render: (item) => item.selectedVersion.title || item.name },
     { key: 'scene', title: '场景', width: '140px', render: (item) => item.sceneName },
     {
+      key: 'robotModels',
+      title: '适用机型',
+      width: 'minmax(160px, 1.1fr)',
+      render: (item) => {
+        const labels = candidateRobotModelLabels(item);
+        const text = labels.length ? labels.join('、') : '全部机型';
+        return <span className="table-ellipsis" title={text}>{text}</span>;
+      },
+    },
+    {
       key: 'version',
       title: '版本',
       width: '130px',
@@ -4457,11 +4581,27 @@ function RequirementPage({
     <Modal title={`为“${productionItemTitle(taskSopPickerItem)}”选择任务 SOP`} onClose={() => setTaskSopPickerItemId('')}>
       <SearchPanel
         title="任务 SOP 库"
-        description="按名称或场景搜索，点击行选择这个生产需求项要使用的任务 SOP 版本"
+        description="按名称、场景或机型搜索，点击行选择这个生产需求项要使用的任务 SOP 版本"
         query={subsceneQuery}
-        placeholder="搜索洗漱台整理或场景名称"
+        placeholder="搜索任务名或场景名"
         count={candidateSubscenes.length}
         onQueryChange={setSubsceneQuery}
+        filter={(
+          <label className="candidate-robot-filter">
+            <span>适用机器人型号</span>
+            <select
+              value={candidateRobotModelId}
+              onChange={(event) => setCandidateRobotModelId(event.target.value)}
+            >
+              <option value="">全部型号</option>
+              {data.robotModels.map((item) => (
+                <option value={item.id} key={item.id}>
+                  {item.model || item.id}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         actions={(
           <ResourceLoadMoreButton
             state={taskSopPageState}
@@ -4636,7 +4776,7 @@ function RequirementPage({
                 <SelectField
                   label="机器人型号"
                   value={selectedVersion.robotModelId}
-                  options={data.robotModels.map((item) => ({ value: item.id, label: `${item.brand} ${item.model}` }))}
+                  options={data.robotModels.map((item) => ({ value: item.id, label: item.model || item.id }))}
                   disabled={readonly}
                   onChange={(robotModelId) => void onSave({ robotModelId })}
                 />
@@ -4906,14 +5046,19 @@ function RequirementPage({
 function ScenePage({
   globalFields,
   materials,
+  robotModels,
   scenes,
   selectedSceneId,
+  selectedRobotModelId,
   selectedSubsceneCode,
   selectedVersion,
   detailOpen,
   onSelectScene,
+  onSelectRobotModel,
   onSelectSubscene,
   onSelectVersion,
+  onCopySubscene,
+  onSaveTaskSopRobotModels,
   onDetailOpenChange,
   onSaveScene,
   onSaveSubscene,
@@ -4939,14 +5084,19 @@ function ScenePage({
 }: {
   globalFields: GlobalField[];
   materials: Material[];
+  robotModels: RobotModel[];
   scenes: Scene[];
   selectedSceneId: string;
+  selectedRobotModelId: string;
   selectedSubsceneCode: string;
   selectedVersion: string;
   detailOpen: boolean;
   onSelectScene: (id: string) => void;
+  onSelectRobotModel: (id: string) => void;
   onSelectSubscene: (code: string) => Promise<void>;
   onSelectVersion: (version: string) => void;
+  onCopySubscene: (subscene: Subscene) => Promise<void>;
+  onSaveTaskSopRobotModels: (subscene: Subscene, robotModelIds: string[]) => Promise<boolean>;
   onDetailOpenChange: (open: boolean) => void;
   onSaveScene: (scene: Scene) => Promise<void>;
   onSaveSubscene: (sceneId: string, code: string, version: VersionPatch<SubsceneVersion>) => Promise<boolean>;
@@ -4987,14 +5137,30 @@ function ScenePage({
   const canEditVersion = !archivedMode && version?.status === 'draft' && !checkpoint;
   const canEditSubsceneTitle = Boolean(version && canEditVersion && (version.version === '0.0.1' || subscene?.versions.length === 1));
   const canEditDescription = Boolean(version && canEditVersion && version.status === 'draft');
+  const [taskRobotModelIds, setTaskRobotModelIds] = useState<string[]>(version?.robotModelIds ?? []);
+  const taskRobotModelKey = (version?.robotModelIds ?? []).join('\u0000');
+
+  useEffect(() => {
+    setTaskRobotModelIds(version?.robotModelIds ?? []);
+  }, [selectedSceneId, selectedSubsceneCode, selectedVersion, taskRobotModelKey]);
 
   useEffect(() => {
     if (selectedVersion && subscene?.versions.some((item) => item.version === selectedVersion)) return;
     onSelectVersion('');
   }, [selectedSubsceneCode, selectedSceneId, selectedVersion, subscene]);
 
+  function supportsRobotModel(item: Subscene, selectedId: string): boolean {
+    const ids = latest(item.versions).robotModelIds ?? [];
+    if (!selectedId || ids.length === 0) return true;
+    const model = robotModels.find((candidate) => candidate.id === selectedId);
+    const modelName = model ? resourceNameOf(model) : undefined;
+    const modelTail = modelName ? resourceTail(modelName) : selectedId;
+    return ids.some((id) => id === selectedId || id === modelName || id === modelTail);
+  }
+
   const filteredScenes = scenes.filter((item) => matchesQuery(sceneQuery, [item.name, item.description]));
   const filteredSubscenes = scene?.subscenes.filter((item) =>
+    supportsRobotModel(item, selectedRobotModelId) &&
     matchesQuery(subsceneQuery, [
       item.code,
       item.name,
@@ -5003,6 +5169,28 @@ function ScenePage({
       latest(item.versions).version,
     ]),
   ) || [];
+  const sceneTaskCount = (item: Scene) => selectedRobotModelId
+    ? item.subscenes.filter((candidate) => supportsRobotModel(candidate, selectedRobotModelId)).length
+    : item.subscenes.length;
+  const visibleScenes = filteredScenes.filter((item) => !selectedRobotModelId || sceneTaskCount(item) > 0);
+
+  function robotModelLabels(ids: string[]): string[] {
+    return ids.map((id) => {
+      const model = robotModels.find((item) => item.id === id || resourceTail(resourceNameOf(item) || '') === id);
+      return model?.model || id;
+    });
+  }
+
+  function changeTaskRobotModels(robotModelIds: string[]) {
+    if (!subscene) return;
+    setTaskRobotModelIds(robotModelIds);
+    void onSaveTaskSopRobotModels(subscene, robotModelIds);
+  }
+
+  useEffect(() => {
+    if (!selectedRobotModelId || !visibleScenes.length || visibleScenes.some((item) => item.id === scene?.id)) return;
+    onSelectScene(visibleScenes[0].id);
+  }, [selectedRobotModelId, scene?.id, visibleScenes, onSelectScene]);
   const filteredMaterials = materials.filter((item) =>
     matchesQuery(materialQuery, [
       item.id,
@@ -5037,6 +5225,16 @@ function ScenePage({
       width: '68px',
       align: 'right',
       render: (item) => item.versions.length,
+    },
+    {
+      key: 'robotModels',
+      title: '适用机型',
+      width: 'minmax(160px, 1.1fr)',
+      render: (item) => {
+        const labels = robotModelLabels(latest(item.versions).robotModelIds ?? []);
+        const text = labels.length ? labels.join('、') : '全部机型';
+        return <span className="table-ellipsis" title={text}>{text}</span>;
+      },
     },
     {
       key: 'latestVersion',
@@ -5483,6 +5681,11 @@ function ScenePage({
                     },
                   ]}
                 />
+                {!archivedMode && (
+                  <button className="ghost-button" onClick={() => void onCopySubscene(subscene)}>
+                    复制任务
+                  </button>
+                )}
                 {!archivedMode && onArchive && (
                   <button className="ghost-button danger" onClick={() => {
                     if (!window.confirm('归档后将从场景任务列表移至归档库，并可随时取消归档。确定继续吗？')) return;
@@ -5528,6 +5731,24 @@ function ScenePage({
                     : '当前任务 SOP 已确认，点击“编辑为草稿”会复制出新的草稿版本。'}
                 </div>
               ))}
+            <div className="task-sop-management-strip">
+              <div className="task-sop-management-copy">
+                <strong>适用机器人型号</strong>
+                <span>这是任务级设置，所有版本共用</span>
+              </div>
+              <div className="task-sop-management-control">
+                <MultiSelectInput
+                  value={taskRobotModelIds}
+                  options={robotModels.map((item) => ({
+                    value: item.id,
+                    label: item.model || item.id,
+                  }))}
+                  placeholder="全部机型"
+                  disabled={archivedMode || checkpoint}
+                  onChange={changeTaskRobotModels}
+                />
+              </div>
+            </div>
             <CollapsibleSection title="基础信息" description="0.0.1 草稿可编辑名称；草稿版本可编辑描述">
               <div className="form-grid compact-fields">
                 <CommitField
@@ -5746,7 +5967,20 @@ function ScenePage({
           description="按场景分组展示任务 SOP"
           query={sceneQuery}
           placeholder="搜索场景名称或描述"
-          count={filteredScenes.length}
+          count={visibleScenes.length}
+          filter={(
+            <label className="scene-robot-filter">
+              <span>适用机器人型号</span>
+              <select value={selectedRobotModelId} onChange={(event) => onSelectRobotModel(event.target.value)}>
+                <option value="">全部型号</option>
+                {robotModels.map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.model || item.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           onQueryChange={setSceneQuery}
           actions={
             <>
@@ -5767,16 +6001,16 @@ function ScenePage({
           }
         />
         <div className="directory-list">
-          {filteredScenes.map((item) => (
+          {visibleScenes.map((item) => (
             <div className={`directory-group ${item.id === scene.id ? 'selected' : ''}`} key={item.id}>
               <button
                 className="directory-row scene-row"
                 aria-current={item.id === scene.id ? 'page' : undefined}
-                aria-label={`${item.name} ${item.subscenes.length} 个任务 SOP`}
+                aria-label={`${item.name} ${sceneTaskCount(item)} 个任务 SOP`}
                 onClick={() => selectScene(item.id)}
               >
                 <strong>{item.name}</strong>
-                <span className="scene-row-count" aria-hidden="true">{item.subscenes.length}</span>
+                <span className="scene-row-count" aria-hidden="true">{sceneTaskCount(item)}</span>
               </button>
             </div>
           ))}
@@ -6392,6 +6626,7 @@ function SelectFieldInline({
   options,
   disabled = false,
   hideEmptyOption = false,
+  emptyLabel = '请选择',
   onChange,
 }: {
   label: string;
@@ -6399,6 +6634,7 @@ function SelectFieldInline({
   options: Array<{ value: string; label: string }>;
   disabled?: boolean;
   hideEmptyOption?: boolean;
+  emptyLabel?: string;
   onChange: (value: string) => void;
 }) {
   return (
@@ -6410,7 +6646,7 @@ function SelectFieldInline({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       >
-        <option value="" hidden={hideEmptyOption}>请选择</option>
+        <option value="" hidden={hideEmptyOption}>{emptyLabel}</option>
         {options.map((option) => (
           <option value={option.value} key={option.value}>
             {option.label}
@@ -8731,6 +8967,7 @@ function emptySubsceneVersionDraft(title = '新的任务 SOP'): Partial<Subscene
     status: 'draft',
     title,
     description: '',
+    robotModelIds: [],
     materials: [],
     robotState: { initial: '', target: '' },
     robotOperationRequirements: '',

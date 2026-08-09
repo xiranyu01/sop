@@ -56,6 +56,8 @@ export function startNextTaskSopDraft(
     name: current.name,
     uid: current.uid,
     sourceId: current.sourceId,
+    // Robot model bindings are task-level management metadata, not versioned SOP content.
+    robotModels: [...current.robotModels],
     lifecycle: Lifecycle.DRAFT,
     currentRevision: base.name,
     candidateVersionSequence: nextSequence,

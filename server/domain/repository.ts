@@ -24,6 +24,7 @@ export type ResourceSummary = {
   fieldGroup?: string;
   fieldStatus?: string;
   sceneName?: string;
+  robotModelNames?: string[];
   customerName?: string;
   robotModelRevisionName?: string;
   candidateVersionLabel?: string;
@@ -263,6 +264,12 @@ export interface ResourceRepository {
   listCurrent(kind: CurrentResourceKind, page?: PageRequest): Promise<PageResult<ResourceSummary>>;
   listArchivedCurrent(kind: Exclude<CurrentResourceKind, 'ROBOT_MODEL'>, page?: PageRequest): Promise<PageResult<ResourceSummary>>;
   createCurrent(input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
+  copyTaskSop(input: { sourceName: string; expectedEtag: string }): Promise<CurrentResourceRecord>;
+  updateTaskSopRobotModels(input: {
+    name: string;
+    expectedEtag: string;
+    robotModels: string[];
+  }): Promise<CurrentResourceRecord>;
   updateCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
   archiveCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
   archiveCurrentForLibrary(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;

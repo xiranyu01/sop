@@ -185,6 +185,8 @@ describe.skipIf(!sqliteAvailable)('resource storage SQL contract', () => {
       'SOP_META',
       'SOP_REVIEWED_DEPENDENCIES',
       'SOP_REVISIONS',
+      'SOP_TASK_SOP_COPY_COUNTERS',
+      'SOP_TASK_SOP_ROBOT_MODELS',
     ]);
   });
 

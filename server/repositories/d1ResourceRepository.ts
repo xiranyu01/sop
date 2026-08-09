@@ -1,3 +1,4 @@
+import { create } from '@bufbuild/protobuf';
 import type {
   AtomicConfirmationInput,
   AtomicConfirmationResult,
@@ -33,6 +34,9 @@ import {
   ResourceNotFoundError,
 } from '../domain/repository';
 import { guardProspectiveRow, type RowSizeWarning, type VariableLengthValue } from '../domain/rowSize';
+import { TaskSopSchema } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
+import { fromDomainJsonString, toDomainJson } from '../../shared/domain/codec';
+import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { decodeExportBundle } from '../export/codec';
 import {
   projectBundle,
@@ -98,6 +102,7 @@ type CurrentRow = {
   scene_name: string | null;
   customer_name: string | null;
   robot_model_revision_name: string | null;
+  task_robot_models_json: string;
   project_display_name: string | null;
   deadline: string | null;
   production_item_count: number | null;
@@ -128,7 +133,7 @@ type CurrentArchiveRow = {
 
 type ArchivedCurrentListRow = Pick<CurrentRow,
   'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'scene_name' | 'customer_name'
-  | 'robot_model_revision_name' | 'current_revision_name' | 'etag' | 'archived_at' | 'created_at'
+  | 'robot_model_revision_name' | 'task_robot_models_json' | 'current_revision_name' | 'etag' | 'archived_at' | 'created_at'
   | 'project_display_name' | 'deadline' | 'production_item_count' | 'aggregate_duration'> & {
     current_version_label: string | null;
     archived_from_lifecycle: CurrentArchiveState['archivedFromLifecycle'];
@@ -186,7 +191,7 @@ const CATALOG_DETAIL_COLUMNS = `name, uid, kind, source_id, display_name, sku, f
 const CURRENT_DETAIL_COLUMNS = `name, uid, kind, source_id, display_name, scene_name, customer_name,
   robot_model_revision_name, project_display_name, deadline, production_item_count, aggregate_duration, lifecycle,
   candidate_version_sequence, candidate_version_label, candidate_source_version_id, current_revision_name,
-  reviewed_manifest_digest, etag, proto_schema, proto_json, archived_at, created_at, updated_at`;
+  reviewed_manifest_digest, task_robot_models_json, etag, proto_schema, proto_json, archived_at, created_at, updated_at`;
 const REVISION_DETAIL_COLUMNS = `name, uid, owner_name, kind, version_sequence, version_label,
   previous_revision_name, revision_origin, lifecycle, export_eligible,
   confirmation_command_id, confirmed_from_etag, proto_schema, revision_proto_json,
@@ -210,6 +215,23 @@ const CURRENT_KINDS = new Set<CurrentResourceKind>(['ROBOT_MODEL', 'TASK_SOP', '
 
 function optional<T>(value: T | null): T | undefined {
   return value === null ? undefined : value;
+}
+
+function jsonStringArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) return [];
+    return parsed;
+  } catch {
+    return [];
+  }
+}
+
+function taskRobotModelRefs(protoSchema: string, protoJson: string): string[] {
+  if (protoSchema !== TaskSopSchema.typeName) return [];
+  const task = fromDomainJsonString(TaskSopSchema, protoJson);
+  return [...new Set(task.robotModels)];
 }
 
 function changes(result: D1RunResultLike | undefined): number {
@@ -361,6 +383,7 @@ function currentRecord(row: CurrentRow, archived?: CurrentArchiveState): Current
     sceneName: optional(row.scene_name),
     customerName: optional(row.customer_name),
     robotModelRevisionName: optional(row.robot_model_revision_name),
+    robotModelNames: jsonStringArray(row.task_robot_models_json),
     projectDisplayName: optional(row.project_display_name),
     deadline: optional(row.deadline),
     productionItemCount: optional(row.production_item_count),
@@ -470,30 +493,28 @@ function assertCatalogParity(row: CatalogRow): void {
 
 function assertCurrentParity(row: CurrentRow): void {
   const projected = projectResource(row.proto_schema, row.proto_json);
-  const differences = projectionDifferences(
-    {
-      name: row.name,
-      uid: row.uid,
-      kind: row.kind,
-      sourceId: optional(row.source_id),
-      displayName: row.display_name,
-      sceneName: optional(row.scene_name),
-      customerName: optional(row.customer_name),
-      robotModelRevisionName: optional(row.robot_model_revision_name),
-      projectDisplayName: optional(row.project_display_name),
-      deadline: optional(row.deadline),
-      productionItemCount: optional(row.production_item_count),
-      aggregateDuration: optional(row.aggregate_duration),
-      etag: row.etag,
-      lifecycle: row.lifecycle,
-      candidateVersionSequence: optional(row.candidate_version_sequence),
-      candidateVersionLabel: optional(row.candidate_version_label),
-      candidateSourceVersionId: optional(row.candidate_source_version_id),
-      currentRevisionName: optional(row.current_revision_name),
-      reviewedManifestDigest: optional(row.reviewed_manifest_digest),
-    },
-    projected,
-  );
+  const physical = {
+    name: row.name,
+    uid: row.uid,
+    kind: row.kind,
+    sourceId: optional(row.source_id),
+    displayName: row.display_name,
+    sceneName: optional(row.scene_name),
+    customerName: optional(row.customer_name),
+    robotModelRevisionName: optional(row.robot_model_revision_name),
+    projectDisplayName: optional(row.project_display_name),
+    deadline: optional(row.deadline),
+    productionItemCount: optional(row.production_item_count),
+    aggregateDuration: optional(row.aggregate_duration),
+    etag: row.etag,
+    lifecycle: row.lifecycle,
+    candidateVersionSequence: optional(row.candidate_version_sequence),
+    candidateVersionLabel: optional(row.candidate_version_label),
+    candidateSourceVersionId: optional(row.candidate_source_version_id),
+    currentRevisionName: optional(row.current_revision_name),
+    reviewedManifestDigest: optional(row.reviewed_manifest_digest),
+  };
+  const differences = projectionDifferences(physical, projected);
   if (differences.length > 0) throw new ProjectionMismatchError(row.name, differences);
 }
 
@@ -630,6 +651,17 @@ export function createD1ResourceRepository(
   const createEtag = options.createEtag ?? (() => crypto.randomUUID());
   const warn = options.onRowSizeWarning;
 
+  async function syncTaskRobotModels(name: string, protoSchema: string, protoJson: string): Promise<void> {
+    if (protoSchema !== TaskSopSchema.typeName) return;
+    const refs = taskRobotModelRefs(protoSchema, protoJson);
+    await db.batch([
+      db.prepare('DELETE FROM SOP_TASK_SOP_ROBOT_MODELS WHERE task_sop_name = ?').bind(name),
+      ...refs.map((robotModelName) => db.prepare(
+        `INSERT OR IGNORE INTO SOP_TASK_SOP_ROBOT_MODELS (task_sop_name, robot_model_name) VALUES (?, ?)`,
+      ).bind(name, robotModelName)),
+    ]);
+  }
+
   async function rawCatalog(name: string): Promise<CatalogRow | undefined> {
     return (await db.prepare(`SELECT ${CATALOG_DETAIL_COLUMNS}
       FROM SOP_CATALOG_RESOURCES WHERE name = ?`).bind(name).first<CatalogRow>()) ?? undefined;
@@ -717,6 +749,9 @@ export function createD1ResourceRepository(
       sourceId: projected.sourceId,
       displayName: projected.displayName,
       sceneName: projected.sceneName,
+      robotModelNames: input.protoSchema === TaskSopSchema.typeName
+        ? taskRobotModelRefs(input.protoSchema, protoJson)
+        : undefined,
       customerName: projected.customerName,
       robotModelRevisionName: projected.robotModelRevisionName,
       projectDisplayName: projected.projectDisplayName,
@@ -1034,6 +1069,7 @@ export function createD1ResourceRepository(
     const cursor = decodeCursor(page?.cursor);
     const result = await db.prepare(`SELECT current.name, current.uid, current.kind, current.source_id,
       current.display_name, current.scene_name, current.customer_name, current.robot_model_revision_name,
+      current.task_robot_models_json,
       current.lifecycle, current.current_revision_name, current.candidate_version_label,
       current.etag, current.archived_at, revision.version_label AS current_version_label,
       current.project_display_name, current.deadline, current.production_item_count, current.aggregate_duration,
@@ -1047,7 +1083,7 @@ export function createD1ResourceRepository(
       ).all<Pick<CurrentRow,
         'name' | 'uid' | 'kind' | 'source_id' | 'display_name' | 'scene_name' | 'customer_name'
         | 'robot_model_revision_name' | 'lifecycle' | 'current_revision_name' | 'candidate_version_label'
-        | 'etag' | 'archived_at' | 'created_at'> & {
+        | 'task_robot_models_json' | 'etag' | 'archived_at' | 'created_at'> & {
           current_version_label: string | null;
           project_display_name: string | null;
           deadline: string | null;
@@ -1063,6 +1099,7 @@ export function createD1ResourceRepository(
       sceneName: optional(row.scene_name),
       customerName: optional(row.customer_name),
       robotModelRevisionName: optional(row.robot_model_revision_name),
+      robotModelNames: jsonStringArray(row.task_robot_models_json),
       lifecycle: row.lifecycle,
       currentRevisionName: optional(row.current_revision_name),
       candidateVersionLabel: optional(row.candidate_version_label),
@@ -1087,6 +1124,7 @@ export function createD1ResourceRepository(
     const pattern = `%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
     const result = await db.prepare(`SELECT current.name, current.uid, current.kind, current.source_id,
       current.display_name, current.scene_name, current.customer_name, current.robot_model_revision_name,
+      current.task_robot_models_json,
       current.current_revision_name, current.etag, current.archived_at, current.created_at,
       current.project_display_name, current.deadline, current.production_item_count, current.aggregate_duration,
       revision.version_label AS current_version_label,
@@ -1129,6 +1167,7 @@ export function createD1ResourceRepository(
         sceneName: optional(row.scene_name),
         customerName: optional(row.customer_name),
         robotModelRevisionName: optional(row.robot_model_revision_name),
+        robotModelNames: jsonStringArray(row.task_robot_models_json),
         lifecycle: 'ARCHIVED',
         currentRevisionName: optional(row.current_revision_name),
         candidateVersionLabel: archived.candidateVersionLabel,
@@ -1153,8 +1192,8 @@ export function createD1ResourceRepository(
       robot_model_revision_name, project_display_name, deadline, production_item_count, aggregate_duration,
       lifecycle, candidate_version_sequence,
       candidate_version_label, candidate_source_version_id, current_revision_name,
-      reviewed_manifest_digest, etag, proto_schema, proto_json, archived_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      reviewed_manifest_digest, task_robot_models_json, etag, proto_schema, proto_json, archived_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       record.name, record.uid, record.kind, record.sourceId ?? null, record.displayName,
       record.sceneName ?? null, record.customerName ?? null, record.robotModelRevisionName ?? null,
       record.projectDisplayName ?? null, record.deadline ?? null, record.productionItemCount ?? null,
@@ -1162,10 +1201,97 @@ export function createD1ResourceRepository(
       record.lifecycle,
       record.candidateVersionSequence ?? null, record.candidateVersionLabel ?? null,
       record.candidateSourceVersionId ?? null, record.currentRevisionName ?? null,
-      record.reviewedManifestDigest ?? null, record.etag, record.protoSchema, record.protoJson,
+      record.reviewedManifestDigest ?? null, JSON.stringify(record.robotModelNames ?? []), record.etag, record.protoSchema, record.protoJson,
       record.archivedAt ?? null, record.createdAt, record.updatedAt,
     ).run();
+    await syncTaskRobotModels(record.name, record.protoSchema, record.protoJson);
     return record;
+  }
+
+  async function allocateTaskCopySequence(seriesId: string, baseName: string, updatedAt: string): Promise<number> {
+    const inserted = await db.prepare(`INSERT OR IGNORE INTO SOP_TASK_SOP_COPY_COUNTERS
+      (series_id, base_name, next_sequence, updated_at) VALUES (?, ?, 2, ?)`).bind(
+      seriesId, baseName, updatedAt,
+    ).run();
+    if (changes(inserted) === 1) return 1;
+    const row = await db.prepare(`UPDATE SOP_TASK_SOP_COPY_COUNTERS
+      SET next_sequence = next_sequence + 1, updated_at = ?
+      WHERE series_id = ?
+      RETURNING next_sequence - 1 AS sequence`).bind(updatedAt, seriesId).first<{ sequence: number }>();
+    if (!row || !Number.isSafeInteger(row.sequence) || row.sequence < 1) {
+      throw new Error(`Task SOP copy counter is unavailable: ${seriesId}`);
+    }
+    return row.sequence;
+  }
+
+  async function copyTaskSop(input: { sourceName: string; expectedEtag: string }): Promise<CurrentResourceRecord> {
+    const source = await getCurrent(input.sourceName);
+    if (!source || source.kind !== 'TASK_SOP') throw new ResourceNotFoundError(input.sourceName);
+    if (source.etag !== input.expectedEtag) throw new ResourceConflictError(input.sourceName, input.expectedEtag, source.etag);
+
+    const original = fromDomainJsonString(TaskSopSchema, source.protoJson);
+    const seriesId = original.copySeriesId || original.uid;
+    const baseName = original.copyBaseName || original.displayName;
+    const sequence = await allocateTaskCopySequence(seriesId, baseName, now());
+    const copyId = `copy-${crypto.randomUUID()}`;
+    const copyName = `${baseName}-副本 ${sequence}`;
+    const copyNow = new Date();
+    const copied = create(TaskSopSchema, {
+      ...original,
+      name: `taskSops/${copyId}`,
+      uid: crypto.randomUUID(),
+      sourceId: copyId,
+      displayName: copyName,
+      legacySubsceneCode: copyId,
+      legacySubsceneDisplayName: copyName,
+      lifecycle: 1,
+      currentRevision: '',
+      candidateVersionSequence: 1n,
+      candidateVersionLabel: '0.0.1',
+      candidateSourceVersionId: undefined,
+      candidateCreateTime: timestampFromDate(copyNow),
+      reviewedDependencyDigest: undefined,
+      createTime: timestampFromDate(copyNow),
+      updateTime: timestampFromDate(copyNow),
+      etag: '',
+      copySeriesId: seriesId,
+      copyBaseName: baseName,
+      copySequence: BigInt(sequence),
+    });
+    return createCurrent({
+      protoSchema: TaskSopSchema.typeName,
+      protoJson: JSON.stringify(toDomainJson(TaskSopSchema, copied)),
+      now: copyNow.toISOString(),
+      candidateVersionSequence: 1,
+      candidateVersionLabel: '0.0.1',
+    });
+  }
+
+  async function updateTaskSopRobotModels(input: {
+    name: string;
+    expectedEtag: string;
+    robotModels: string[];
+  }): Promise<CurrentResourceRecord> {
+    const stored = await getCurrent(input.name);
+    if (!stored || stored.kind !== 'TASK_SOP') throw new ResourceNotFoundError(input.name);
+    if (stored.archivedAt || stored.lifecycle === 'ARCHIVED') {
+      throw new TypeError('Archived TaskSops are read-only');
+    }
+    if (stored.etag !== input.expectedEtag) {
+      throw new ResourceConflictError(input.name, input.expectedEtag, stored.etag);
+    }
+    const task = fromDomainJsonString(TaskSopSchema, stored.protoJson);
+    const updated = create(TaskSopSchema, {
+      ...task,
+      robotModels: [...new Set(input.robotModels)],
+      updateTime: timestampFromDate(new Date(now())),
+      etag: '',
+    });
+    return writeCurrent(input.name, input.expectedEtag, {
+      protoSchema: TaskSopSchema.typeName,
+      protoJson: JSON.stringify(toDomainJson(TaskSopSchema, updated)),
+      now: now(),
+    }, false);
   }
 
   async function writeCurrent(
@@ -1193,17 +1319,18 @@ export function createD1ResourceRepository(
       robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
       aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
       candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
-      reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
+      reviewed_manifest_digest = ?, task_robot_models_json = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
       WHERE name = ? AND etag = ?`).bind(
       record.sourceId ?? null, record.displayName, record.sceneName ?? null, record.customerName ?? null,
       record.robotModelRevisionName ?? null, record.projectDisplayName ?? null, record.deadline ?? null,
       record.productionItemCount ?? null, record.aggregateDuration ?? null,
       record.lifecycle, record.candidateVersionSequence ?? null,
       record.candidateVersionLabel ?? null, record.candidateSourceVersionId ?? null,
-      record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, record.etag,
+      record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, JSON.stringify(record.robotModelNames ?? []), record.etag,
       record.protoSchema, record.protoJson, record.archivedAt ?? null, record.updatedAt, name, expectedEtag,
     ).run();
     if (changes(result) !== 1) return stale(name, expectedEtag, 'SOP_CURRENT_RESOURCES');
+    await syncTaskRobotModels(record.name, record.protoSchema, record.protoJson);
     return record;
   }
 
@@ -1246,14 +1373,14 @@ export function createD1ResourceRepository(
         robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
         aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
         candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
-        reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
+        reviewed_manifest_digest = ?, task_robot_models_json = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = ?, updated_at = ?
         WHERE name = ? AND etag = ?`).bind(
         record.sourceId ?? null, record.displayName, record.sceneName ?? null, record.customerName ?? null,
         record.robotModelRevisionName ?? null, record.projectDisplayName ?? null, record.deadline ?? null,
         record.productionItemCount ?? null, record.aggregateDuration ?? null,
         record.lifecycle, record.candidateVersionSequence ?? null,
         record.candidateVersionLabel ?? null, record.candidateSourceVersionId ?? null,
-        record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, record.etag,
+        record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, JSON.stringify(record.robotModelNames ?? []), record.etag,
         record.protoSchema, record.protoJson, record.archivedAt ?? null, record.updatedAt, name, expectedEtag,
       ),
     ]);
@@ -1297,14 +1424,14 @@ export function createD1ResourceRepository(
         robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
         aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
         candidate_version_label = ?, candidate_source_version_id = ?, current_revision_name = ?,
-        reviewed_manifest_digest = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = NULL, updated_at = ?
+        reviewed_manifest_digest = ?, task_robot_models_json = ?, etag = ?, proto_schema = ?, proto_json = ?, archived_at = NULL, updated_at = ?
         WHERE name = ? AND etag = ?`).bind(
         record.sourceId ?? null, record.displayName, record.sceneName ?? null, record.customerName ?? null,
         record.robotModelRevisionName ?? null, record.projectDisplayName ?? null, record.deadline ?? null,
         record.productionItemCount ?? null, record.aggregateDuration ?? null,
         record.lifecycle, record.candidateVersionSequence ?? null,
         record.candidateVersionLabel ?? null, record.candidateSourceVersionId ?? null,
-        record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, record.etag,
+        record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, JSON.stringify(record.robotModelNames ?? []), record.etag,
         record.protoSchema, record.protoJson, record.updatedAt, name, expectedEtag,
       ),
       ...(record.lifecycle === 'DRAFT'
@@ -2032,6 +2159,8 @@ export function createD1ResourceRepository(
     listCurrent,
     listArchivedCurrent,
     createCurrent,
+    copyTaskSop,
+    updateTaskSopRobotModels,
     updateCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, false),
     archiveCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, true),
     archiveCurrentForLibrary,

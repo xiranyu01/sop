@@ -14,6 +14,10 @@ export const resourceStorageMigrationSql = {
     new URL('../../migrations/0004_current_archive_library.sql', import.meta.url),
     'utf8',
   ),
+  taskSopCopyAndRobotModels: readFileSync(
+    new URL('../../migrations/0005_task_sop_copy_and_robot_models.sql', import.meta.url),
+    'utf8',
+  ),
 } as const;
 
 export const resourceStorageMigrationsSql = Object.values(resourceStorageMigrationSql).join('\n');

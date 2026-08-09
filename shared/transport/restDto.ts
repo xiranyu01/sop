@@ -233,6 +233,7 @@ export interface SubsceneVersion {
   sceneName?: string;
   subsceneName?: string;
   description: string;
+  robotModelIds?: string[];
   attachments?: RequirementAttachment[];
   requiredDurationHours?: number;
   materials: ScenarioMaterial[];

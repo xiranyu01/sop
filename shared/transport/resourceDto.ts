@@ -31,6 +31,7 @@ export type ResourceSummary = {
   fieldGroup?: string;
   fieldStatus?: string;
   sceneName?: string;
+  robotModelNames?: string[];
   customerName?: string;
   robotModelRevisionName?: string;
   candidateVersionLabel?: string;

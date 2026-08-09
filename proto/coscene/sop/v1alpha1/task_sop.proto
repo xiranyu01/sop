@@ -307,6 +307,16 @@ message TaskSop {
     (buf.validate.field).string.pattern = "^[a-f0-9]{64}$"
   ];
   google.protobuf.Timestamp candidate_create_time = 23 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // RobotModel references are management metadata for filtering and editing.
+  // They intentionally remain outside the current YAML export contract.
+  repeated string robot_models = 24 [
+    (google.api.resource_reference).type = "sop.coscene.io/RobotModel",
+    (buf.validate.field).repeated.items.string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+  ];
+  // Copy metadata is internal management data and is not exported to YAML.
+  optional string copy_series_id = 25 [(buf.validate.field).string.max_len = 128];
+  optional string copy_base_name = 26 [(buf.validate.field).string.max_len = 256];
+  optional uint64 copy_sequence = 27 [(buf.validate.field).uint64.gt = 0];
 }
 
 // TaskSopRevision is an immutable historical snapshot of a TaskSop.

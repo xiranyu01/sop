@@ -146,6 +146,23 @@ export class ApiClient {
     return this.request(`/api/resources/${kind}`, { method: 'POST', body: { resource } });
   }
 
+  copyTaskSop(name: string, expectedEtag: string): Promise<ResourceMutationResult> {
+    return this.request(`/api/resources/taskSops/${encodeURIComponent(name)}/copy`, {
+      method: 'POST', body: { expectedEtag },
+    });
+  }
+
+  updateTaskSopRobotModels(
+    name: string,
+    robotModels: string[],
+    expectedEtag: string,
+  ): Promise<ResourceMutationResult> {
+    return this.request(`/api/resources/taskSops/${encodeURIComponent(name)}/robot-models`, {
+      method: 'POST',
+      body: { robotModels, expectedEtag },
+    });
+  }
+
   update(kind: ResourceKind, name: string, resource: JsonValue, expectedEtag: string): Promise<ResourceMutationResult> {
     return this.request(`/api/resources/${kind}/${encodeURIComponent(name)}`, {
       method: 'PUT', body: { resource, expectedEtag },

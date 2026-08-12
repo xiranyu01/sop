@@ -4056,11 +4056,6 @@ function RequirementPage({
   const [taskSopPickerItemId, setTaskSopPickerItemId] = useState('');
   const [candidateVersionSelections, setCandidateVersionSelections] = useState<Record<string, string>>({});
   const [attachmentUpload, setAttachmentUpload] = useState<{ fileName: string; progress: number } | null>(null);
-  // Row selection for the batch actions on the 生产需求项 table, keyed by productionItemKey.
-  // Never trusted on its own: an item can be removed or renamed under it, so every read
-  // intersects it with the current items.
-  const [selectedProductionItemKeys, setSelectedProductionItemKeys] = useState<string[]>([]);
-  const [batchRobotModelId, setBatchRobotModelId] = useState('');
 
   const candidateSubscenes = useMemo(() => {
     const items: CandidateSubsceneOption[] = [];
@@ -4559,40 +4554,14 @@ function RequirementPage({
   const checkpoint = revisionIsCheckpoint(selectedVersion);
   const currentDraft = activeEditableDraft(selectedRequirement.versions);
   const readonly = archivedMode || selectedVersion.status === 'confirmed' || checkpoint;
-  const productionItemKeys = selectedVersion.selectedSubscenes.map(productionItemKey);
-  // Stale keys (a removed or renamed item) are dropped here rather than tracked, so a batch action
-  // can never reach a row the user cannot see ticked.
-  const batchSelectedKeys = selectedProductionItemKeys.filter((key) => productionItemKeys.includes(key));
-  const allProductionItemsSelected =
-    productionItemKeys.length > 0 && batchSelectedKeys.length === productionItemKeys.length;
   // Confirm rejects an item without a production flow (service layer, U4). Without this the user
   // only meets that as an opaque error at the very end.
   // A carried-through raw value counts as configured only when it is a real flow: Confirm
   // rejects a present-but-UNSPECIFIED flow exactly like an absent one.
   const itemsMissingProductionFlow = selectedVersion.selectedSubscenes.filter((item) =>
     !item.productionFlow && !item.productionFlowRawValue);
-  const productionItemColumns: Array<DataTableColumn<RequirementVersion['selectedSubscenes'][number]>> = readonly
-    ? selectedSubsceneColumns
-    : [
-      {
-        key: 'selection',
-        title: '选择',
-        width: '52px',
-        align: 'center',
-        render: (item) => {
-          const key = productionItemKey(item);
-          return (
-            <input
-              type="checkbox"
-              aria-label={`选择 ${productionItemTitle(item)}`}
-              checked={batchSelectedKeys.includes(key)}
-              onChange={(event) => toggleProductionItemSelection(key, event.target.checked)}
-            />
-          );
-        },
-      },
-      ...selectedSubsceneColumns,
-    ];
+  const productionItemColumns: Array<DataTableColumn<RequirementVersion['selectedSubscenes'][number]>> =
+    selectedSubsceneColumns;
   const selectedAllowedOperations = selectedVersion.allowedOperations.map((item) => item.operation);
   const selectedAcceptableOperations = (selectedVersion.acceptableOperations || []).map((item) => item.operation);
   const selectedForbiddenOperations = selectedVersion.forbiddenOperations.flatMap((group) =>
@@ -4659,27 +4628,6 @@ function RequirementPage({
       isSameProductionItem(current, item) ? { ...current, ...patch } : current,
     );
     void onSave({ selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode) });
-  }
-
-  function toggleProductionItemSelection(key: string, selected: boolean) {
-    setSelectedProductionItemKeys((current) =>
-      selected ? (current.includes(key) ? current : [...current, key]) : current.filter((item) => item !== key),
-    );
-  }
-
-  // Row selection, not apply-to-all: the point of per-item robots is divergence, so the batch
-  // action only reaches the rows the user ticked.
-  function applyRobotModelToSelectedItems() {
-    if (!selectedVersion || readonly || !batchRobotModelId) return;
-    const keys = new Set(selectedProductionItemKeys);
-    if (!selectedVersion.selectedSubscenes.some((item) => keys.has(productionItemKey(item)))) return;
-    void onSave({
-      selectedSubscenes: selectedVersion.selectedSubscenes.map((item) =>
-        stripSelectedTaskSopCode(
-          keys.has(productionItemKey(item)) ? { ...item, robotModelId: batchRobotModelId } : item,
-        ),
-      ),
-    });
   }
 
   function addProductionRequirementItem() {
@@ -5231,38 +5179,6 @@ function RequirementPage({
               </button>
             </div>
           </div>
-          {!readonly && selectedVersion.selectedSubscenes.length > 0 && (
-            <div className="table-batch-toolbar">
-              <span className="muted-text">已选 {batchSelectedKeys.length} 个采集任务</span>
-              <button
-                className="text-button"
-                onClick={() =>
-                  setSelectedProductionItemKeys(allProductionItemsSelected ? [] : productionItemKeys)}
-              >
-                {allProductionItemsSelected ? '取消全选采集任务' : '全选采集任务'}
-              </button>
-              <select
-                aria-label="批量机器人型号"
-                value={batchRobotModelId}
-                onChange={(event) => setBatchRobotModelId(event.target.value)}
-              >
-                <option value="">选择机器人型号</option>
-                {data.robotModels.map((model) => (
-                  <option value={model.id} key={model.id}>{model.model || model.id}</option>
-                ))}
-              </select>
-              <button
-                className="ghost-button"
-                disabled={batchSelectedKeys.length === 0 || !batchRobotModelId}
-                title={batchSelectedKeys.length === 0
-                  ? '请先勾选采集任务'
-                  : !batchRobotModelId ? '请先选择机器人型号' : undefined}
-                onClick={applyRobotModelToSelectedItems}
-              >
-                批量设置机器人型号（{batchSelectedKeys.length}）
-              </button>
-            </div>
-          )}
           {durationDelta !== 0 && (
             <div className="notice warning compact-notice">
               总目标时长 {Number(selectedVersion.requiredDurationHours) || 0} h，生产需求项目标时长合计{' '}

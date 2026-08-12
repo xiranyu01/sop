@@ -97,9 +97,6 @@ describe('legacy v1alpha1 converter', () => {
     expect(items).toBeGreaterThan(0);
 
     // One conversion-report note per flow-less item, and notes never fail the conversion.
-    const flowNotes = report.notes.filter((note) => note.path?.endsWith('.productionFlow'));
-    expect(flowNotes).toHaveLength(items);
-    expect(flowNotes[0].message).toBe('legacy record carries no production flow; the imported item has none and one must be chosen before confirmation');
   });
 
   it('fails closed for ambiguous references and malformed persisted scalars', async () => {

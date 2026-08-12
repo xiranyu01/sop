@@ -63,7 +63,6 @@ import {
 import {
   finalizeConversionReport,
   type ConversionIssue,
-  type ConversionNote,
   type ConversionReport,
 } from './conversionReport';
 
@@ -527,7 +526,6 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
   const data = decodeLegacyAppData(input);
   const resources = emptyConvertedFixtureResources();
   const issues: ConversionIssue[] = [];
-  const notes: ConversionNote[] = [];
   const registry = new IdentityRegistry();
   const recordFingerprints: Record<string, string> = {};
   const register = (canonical: string, owner: string, aliases: string[] = []) => registry.register(canonical, owner, aliases);
@@ -712,7 +710,6 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
         // production flow. Broadcast the robot to every item so each item is self-describing,
         // and leave `productionFlow` off the literal entirely: absence is the signal that
         // nobody ever chose a flow, which an explicit UNSPECIFIED would destroy.
-        notes.push({ owner, path: `selectedSubscenes[${index}].productionFlow`, message: 'legacy record carries no production flow; the imported item has none and one must be chosen before confirmation' });
         return { id: canonicalId(selected.id ?? selected.subsceneCode ?? `item-${index + 1}`, `${owner}:item:${index}`), robotModelRevision: robotRevision ?? '', displayName: selected.title ?? selected.subsceneName ?? resolved?.title ?? `Item ${index + 1}`, description: optional(selected.description), taskSopRevision: resolved?.revision ?? '', target, legacySceneName: optional(selected.sceneName), legacySubsceneCode: optional(selected.subsceneCode), legacySubsceneName: optional(selected.subsceneName), legacyVersionLabel: optional(selected.taskSop?.version ?? selected.version), legacyVersionId: optional(selected.taskSop?.versionId), legacyParentVersionId: optional(selected.taskSop?.parentVersionId), legacyLifecycle: selected.taskSop?.status ? lifecycle(selected.taskSop.status) : resolved?.lifecycle };
       });
       const attachmentList = (version.attachments ?? []).flatMap((attachment) => attachmentNames.get(attachment.id) ?? []);
@@ -759,6 +756,6 @@ export function convertLegacyToV1alpha1(input: unknown, sourceFingerprint = stab
   for (const key of Object.keys(resources) as Array<keyof ConvertedFixtureResources>) if (Array.isArray(resources[key])) (resources[key] as unknown[]).sort((left, right) => stableCompare((left as { name: string }).name ?? '', (right as { name: string }).name ?? ''));
   const semanticDigest = convertedSemanticDigest(resources);
   const generationId = `v1alpha1-${sourceFingerprint.slice(0, 16)}`;
-  const report = finalizeConversionReport({ generationId, sourceFingerprint, semanticDigest, cardinalities: convertedCardinalities(resources), aliases: Object.fromEntries([...registry.aliases].sort(([a], [b]) => stableCompare(a, b))), recordFingerprints: Object.fromEntries(Object.entries(recordFingerprints).sort(([a], [b]) => stableCompare(a, b))), explicitlyExcludedLegacyPaths: excludedLegacyPaths, documentedNormalizations, notes, issues });
+  const report = finalizeConversionReport({ generationId, sourceFingerprint, semanticDigest, cardinalities: convertedCardinalities(resources), aliases: Object.fromEntries([...registry.aliases].sort(([a], [b]) => stableCompare(a, b))), recordFingerprints: Object.fromEntries(Object.entries(recordFingerprints).sort(([a], [b]) => stableCompare(a, b))), explicitlyExcludedLegacyPaths: excludedLegacyPaths, documentedNormalizations, issues });
   return { resources, report };
 }

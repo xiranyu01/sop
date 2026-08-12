@@ -321,8 +321,8 @@ export type RequirementSpec = Message<"coscene.sop.v1alpha1.RequirementSpec"> & 
 
   /**
    * Default robot model for production items that do not set their own.
-   * ProductionItem.robot_model_revision is authoritative when set; this is the
-   * fallback and the value the batch-apply control writes. Still actively written.
+   * ProductionItem.robot_model_revision is authoritative when set; this remains
+   * the fallback for items without their own robot selection.
    *
    * @generated from field: string robot_model_revision = 2;
    */

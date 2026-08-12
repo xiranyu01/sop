@@ -376,9 +376,6 @@ test('collection tasks take divergent robots and their own production flow', asy
   };
   const draft = await createResource(request, 'requirements', createBody);
 
-  const savePut = () => page.waitForResponse((response) =>
-    new URL(response.url()).pathname === resourcePath('requirements', draft.name) &&
-    response.request().method() === 'PUT');
   const productionItems = async () => {
     const detail = await getResource(request, 'requirements', draft.name);
     const spec = object(object(detail.resource, 'Requirement').spec, 'Requirement spec');
@@ -390,20 +387,10 @@ test('collection tasks take divergent robots and their own production flow', asy
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
   await expect(page.getByText('2 / 2 采集任务缺少生产流程，确认前需补齐')).toBeVisible();
 
-  // Batch action reaches the ticked rows only, so tick every row first.
-  await page.getByRole('button', { name: '全选采集任务', exact: true }).click();
-  const batchRobot = page.getByLabel('批量机器人型号');
-  await batchRobot.selectOption({ index: 1 });
-  const primaryRobotId = await batchRobot.inputValue();
-  const batched = savePut();
-  await page.getByRole('button', { name: '批量设置机器人型号（2）' }).click();
-  expect((await batched).ok()).toBe(true);
-  await expect.poll(async () => (await productionItems()).map((item) => item.robotModelRevision))
-    .toEqual([expect.any(String), expect.any(String)]);
-  const batchedRevisions = (await productionItems()).map((item) => item.robotModelRevision);
-  expect(batchedRevisions[0]).toBe(batchedRevisions[1]);
-
-  // Divergence: the second collection task moves to the other robot on its own.
+  // Each collection task selects its robot independently.
+  const firstRobot = page.getByLabel('采集任务甲 机器人型号');
+  await firstRobot.selectOption({ index: 1 });
+  const primaryRobotId = await firstRobot.inputValue();
   const secondRobot = page.getByLabel('采集任务乙 机器人型号');
   await secondRobot.selectOption({ index: 2 });
   const secondRobotId = await secondRobot.inputValue();
@@ -436,7 +423,6 @@ test('collection tasks take divergent robots and their own production flow', asy
   await page.getByText(title, { exact: true }).click();
   await expect(page.getByText('归档内容只读。')).toBeVisible();
   await expect(page.getByLabel('采集任务甲 流程配置')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '批量设置机器人型号（0）' })).toHaveCount(0);
   await expect(page.getByText('未配置', { exact: true })).toHaveCount(1);
   await expect(page.locator('.subscene-group span[title="采集"]')).toHaveCount(1);
 });

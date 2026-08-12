@@ -10,6 +10,7 @@ import type {
 } from '../../gen/coscene/sop/v1alpha1/catalog_pb';
 import type { RequirementRevision } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
 import type { TaskSopRevision } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
+import { resolveItemRobotRevision } from '../../shared/domain/requirementResolution';
 import { CanonicalDataError } from '../domain/errors';
 import { compareStable, stableHash, stableJson } from '../domain/identity';
 
@@ -185,12 +186,26 @@ export function resolveExportClosure(sourceRecords: ExportClosureSource, root: E
     addFrozen(attachments, frozen.attachments, revision.name);
     requireByName([...customers.values()], requirement.spec!.customer, '客户');
     for (const name of requirement.attachments) requireByName([...attachments.values()], name, '附件');
-    const robot = robotByName.get(requirement.spec!.robotModelRevision);
-    if (!robot?.snapshot) throw new CanonicalDataError(`导出闭包缺少机器人版本：${requirement.spec!.robotModelRevision}`);
-    robots.set(robot.name, robot);
+    // The requirement-level default stays in the closure even when every item
+    // pins its own robot: the bundle's spec-level ref remains populated (决策 #7).
+    // An unfinished draft reaches this path through the preview export, which does not
+    // run Confirm's completeness check — so name the missing field the way Confirm does
+    // rather than interpolating an empty name after a colon.
+    if (!requirement.spec!.robotModelRevision) throw new CanonicalDataError('需求缺少默认机器人型号');
+    const specRobot = robotByName.get(requirement.spec!.robotModelRevision);
+    if (!specRobot?.snapshot) throw new CanonicalDataError(`导出闭包缺少机器人版本：${requirement.spec!.robotModelRevision}`);
+    robots.set(specRobot.name, specRobot);
     for (const item of requirement.spec!.productionItems) {
       if (!item.taskSopRevision) throw new CanonicalDataError(`生产需求项未固定任务 SOP 版本：${item.id}`);
       addTask(requireByName([...taskByName.values()], item.taskSopRevision, '任务 SOP 版本'));
+      // Per-item robots dedupe into the same Map — N items may resolve to one revision.
+      const resolved = resolveItemRobotRevision(item, requirement.spec!);
+      if (resolved.source !== 'item') continue;
+      const itemRobot = robotByName.get(resolved.value);
+      if (!itemRobot?.snapshot) {
+        throw new CanonicalDataError(`导出闭包缺少生产需求项机器人版本：${item.id} → ${resolved.value}`);
+      }
+      robots.set(itemRobot.name, itemRobot);
     }
   } else {
     const candidates = sourceRecords.taskSopRevisions.filter((value) =>

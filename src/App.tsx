@@ -21,7 +21,7 @@ import type {
   TextItem,
 } from './domain/viewModels';
 import { createEmptyAppViewModel } from './domain/viewModels';
-import type { ExportResult } from '../shared/transport/restDto';
+import type { ExportResult, ProductionFlow } from '../shared/transport/restDto';
 import type { ResourceDetail, ResourceKind, ResourceSummary } from '../shared/transport/resourceDto';
 import {
   ApiClient,
@@ -1542,6 +1542,33 @@ function taskSopStatus(item: RequirementVersion['selectedSubscenes'][number]): E
   return item.taskSop?.status;
 }
 
+// A stored robot reference and the robot catalog live in two id spaces: a decoded
+// `robotModelId` is the ROOT TAIL of the pinned revision (`robotModels/<tail>/revisions/…`),
+// while `RobotModel.id` is the resource's sourceId. They coincide only when the sourceId is
+// already slug-safe, so anything matching a stored value against the catalog must try both or a
+// robot silently reads as "unset" (observed on the seeded X1: sourceId `robot_mqorua3y_c7w6nr`
+// vs root tail `robot-mqorua3y-c7w6nr-50496263`).
+function findRobotModel(robotModels: RobotModel[], value: string): RobotModel | undefined {
+  if (!value) return undefined;
+  return robotModels.find((item) => item.id === value || resourceTail(resourceNameOf(item) || '') === value);
+}
+
+// Display strings only. The exported slash codes (`collect/transform/qa1`) are external contract
+// owned by shared/domain/requirementResolution.ts and must not be duplicated here; this record is
+// keyed by the transport token so the compiler flags a new flow that nobody labelled.
+const productionFlowLabels: Readonly<Record<ProductionFlow, string>> = {
+  collect_transform_qa1_auto_annotate_annotate_qa2: '采集 / 转换 / 一次质检 / 预标注 / 标注 / 二次质检',
+  collect_transform_qa1_annotate_qa2: '采集 / 转换 / 一次质检 / 标注 / 二次质检',
+  collect_qa1_annotate_qa2: '采集 / 一次质检 / 标注 / 二次质检',
+  collect_annotate_qa1: '采集 / 标注 / 一次质检',
+  collect_transform_qa1: '采集 / 转换 / 一次质检',
+  collect: '采集',
+};
+const productionFlowOptions = (Object.keys(productionFlowLabels) as ProductionFlow[]).map((value) => ({
+  value,
+  label: productionFlowLabels[value],
+}));
+
 function candidateTaskSopReference(candidate: CandidateSubsceneOption) {
   return {
     sceneName: candidate.sceneName,
@@ -2789,7 +2816,11 @@ export default function App() {
               const draft = {
                 ...emptyRequirementVersion('新的客户需求'),
                 customerId: data.customers[0]?.id || '',
-                robotModelId: data.robotModels[0]?.id || '',
+                // Default robot model — the fill value for production items, not "the" robot.
+                // Only a robot with a revision to pin: saving now refuses an unresolvable choice
+                // rather than writing '' behind the user's back, so do not seed one.
+                robotModelId: data.robotModels
+                  .find((item) => requirementContext().robotRevisionNameById.has(item.id))?.id || '',
                 allowedOperations: operationItemsFromOptions(allowedOptions),
                 acceptableOperations: operationItemsFromOptions(acceptableOptions),
                 forbiddenOperations: forbiddenGroupsFromKeys(forbiddenOptions.map((option) => option.value), forbiddenOptions),
@@ -4079,7 +4110,15 @@ function RequirementPage({
   const filteredRequirements = data.requirements.filter((requirement) => {
     const current = latest(requirement.versions);
     const customer = data.customers.find((item) => item.id === current.customerId);
-    const robot = data.robotModels.find((item) => item.id === current.robotModelId);
+    // The requirement-level robot is only the default; a collection task can diverge from it, so
+    // searching by robot has to reach every item's own robot or a diverged one is unfindable.
+    const robots = [
+      current.robotModelId,
+      ...current.selectedSubscenes.map((item) => item.robotModelId || ''),
+    ].flatMap((value) => {
+      const robot = findRobotModel(data.robotModels, value);
+      return robot ? [robot] : [];
+    });
     return matchesQuery(requirementQuery, [
       requirement.id,
       current.title,
@@ -4087,8 +4126,7 @@ function RequirementPage({
       current.status,
       current.version,
       customer?.name,
-      robot?.model,
-      robot?.brand,
+      ...robots.flatMap((robot) => [robot.model, robot.brand]),
     ]);
   });
   const taskSopPickerItem = selectedVersion?.selectedSubscenes.find((item) => productionItemKey(item) === taskSopPickerItemId);
@@ -4244,6 +4282,90 @@ function RequirementPage({
               <b aria-hidden="true">·</b>
               {status ? statusText(status) : '状态未知'}
             </span>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'robotModel',
+      title: '机器人型号',
+      width: '150px',
+      render: (item) => {
+        const value = item.robotModelId || '';
+        // Light, non-blocking: the pinned TaskSOP's 适用机型 is an applicability filter, not a
+        // constraint this page enforces. An empty filter means every model applies.
+        const offList = itemRobotOutsideTaskSop(item, value);
+        const hint = offList ? <span className="table-cell-hint">不在任务 SOP 适用机型内</span> : null;
+        if (readonly) {
+          // Plain text on readonly rows, like the 任务 SOP cell — this table never shows a
+          // disabled <select>.
+          const inherited = !value && selectedVersion ? selectedVersion.robotModelId : '';
+          const text = value
+            ? robotModelLabel(value)
+            : inherited ? `${robotModelLabel(inherited)}（继承默认）` : '未配置';
+          return (
+            <div className="table-cell-stack">
+              <span className={value || inherited ? 'table-ellipsis' : 'muted-text'} title={text}>{text}</span>
+              {hint}
+            </div>
+          );
+        }
+        return (
+          <div className="table-cell-stack">
+            <select
+              aria-label={`${productionItemTitle(item)} 机器人型号`}
+              value={robotModelOptionId(value)}
+              onChange={(event) => updateProductionItem(item, { robotModelId: event.target.value || undefined })}
+            >
+              <option value="">请选择</option>
+              {data.robotModels.map((model) => (
+                <option value={model.id} key={model.id}>{model.model || model.id}</option>
+              ))}
+            </select>
+            {hint}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'productionFlow',
+      title: '流程配置',
+      width: '190px',
+      render: (item) => {
+        const flow = item.productionFlow;
+        const label = flow ? productionFlowLabels[flow] : '';
+        // A stored value this build has no label for — a newer writer's flow. It is kept
+        // verbatim through every save, so say so rather than render it as "not chosen".
+        // A raw UNSPECIFIED (0) is not that: "未选择" is exactly what it means.
+        const unknown = !flow && item.productionFlowRawValue
+          ? `已存储此版本未知的流程（${item.productionFlowRawValue}），保存其他字段不会改动它`
+          : '';
+        if (readonly) {
+          // A confirmed or archived item without a flow predates the field — Confirm rejects a
+          // missing flow now, so absence here is legacy data, not "not chosen yet".
+          if (unknown) return <span className="table-ellipsis" title={unknown}>未知流程</span>;
+          if (!label) return <span className="muted-text">未配置</span>;
+          return <span className="table-ellipsis" title={label}>{label}</span>;
+        }
+        return (
+          <div className="table-cell-stack">
+            <select
+              aria-label={`${productionItemTitle(item)} 流程配置`}
+              title={label || unknown || undefined}
+              value={flow || ''}
+              onChange={(event) => updateProductionItem(item, {
+                productionFlow: (event.target.value || undefined) as ProductionFlow | undefined,
+                // Any deliberate edit of this cell — including clearing it — replaces a
+                // carried-through raw value; only an untouched cell keeps it.
+                productionFlowRawValue: undefined,
+              })}
+            >
+              <option value="">请选择</option>
+              {productionFlowOptions.map((option) => (
+                <option value={option.value} key={option.value}>{option.label}</option>
+              ))}
+            </select>
+            {unknown ? <span className="table-cell-hint">未知流程</span> : null}
           </div>
         );
       },
@@ -4432,6 +4554,14 @@ function RequirementPage({
   const checkpoint = revisionIsCheckpoint(selectedVersion);
   const currentDraft = activeEditableDraft(selectedRequirement.versions);
   const readonly = archivedMode || selectedVersion.status === 'confirmed' || checkpoint;
+  // Confirm rejects an item without a production flow (service layer, U4). Without this the user
+  // only meets that as an opaque error at the very end.
+  // A carried-through raw value counts as configured only when it is a real flow: Confirm
+  // rejects a present-but-UNSPECIFIED flow exactly like an absent one.
+  const itemsMissingProductionFlow = selectedVersion.selectedSubscenes.filter((item) =>
+    !item.productionFlow && !item.productionFlowRawValue);
+  const productionItemColumns: Array<DataTableColumn<RequirementVersion['selectedSubscenes'][number]>> =
+    selectedSubsceneColumns;
   const selectedAllowedOperations = selectedVersion.allowedOperations.map((item) => item.operation);
   const selectedAcceptableOperations = (selectedVersion.acceptableOperations || []).map((item) => item.operation);
   const selectedForbiddenOperations = selectedVersion.forbiddenOperations.flatMap((group) =>
@@ -4462,6 +4592,42 @@ function RequirementPage({
       return;
     }
     void onSave({});
+  }
+
+  // The catalog id an item's stored robot reference selects, '' when this build does not know it.
+  function robotModelOptionId(value: string): string {
+    return findRobotModel(data.robotModels, value)?.id || '';
+  }
+
+  function robotModelLabel(value: string): string {
+    return findRobotModel(data.robotModels, value)?.model || value;
+  }
+
+  // `TaskSop.robot_models` holds robot model *roots* (`robotModels/{id}`) while a requirement item
+  // pins a revision, so the comparison is on root tails. An empty list means the TaskSOP applies to
+  // every model — no hint. Mirrors candidateSupportsRobotModel, which filters the SOP picker.
+  function itemRobotOutsideTaskSop(
+    item: RequirementVersion['selectedSubscenes'][number],
+    robotModelId: string,
+  ): boolean {
+    if (!robotModelId) return false;
+    const applicable = findTaskSop(data.scenes, item)?.version?.robotModelIds ?? [];
+    if (applicable.length === 0) return false;
+    const model = findRobotModel(data.robotModels, robotModelId);
+    const modelName = model ? resourceNameOf(model) : undefined;
+    const modelTail = modelName ? resourceTail(modelName) : robotModelId;
+    return !applicable.some((id) => id === robotModelId || id === modelName || resourceTail(id) === modelTail);
+  }
+
+  function updateProductionItem(
+    item: RequirementVersion['selectedSubscenes'][number],
+    patch: Partial<RequirementVersion['selectedSubscenes'][number]>,
+  ) {
+    if (!selectedVersion || readonly) return;
+    const selectedSubscenes = selectedVersion.selectedSubscenes.map((current) =>
+      isSameProductionItem(current, item) ? { ...current, ...patch } : current,
+    );
+    void onSave({ selectedSubscenes: selectedSubscenes.map(stripSelectedTaskSopCode) });
   }
 
   function addProductionRequirementItem() {
@@ -4743,12 +4909,18 @@ function RequirementPage({
                 .join('；')}
             </div>
           )}
+          {!readonly && itemsMissingProductionFlow.length > 0 && (
+            <div className="notice warning">
+              {itemsMissingProductionFlow.length} / {selectedVersion.selectedSubscenes.length}{' '}
+              采集任务缺少生产流程，确认前需补齐
+            </div>
+          )}
 
           <div className="requirement-sections">
             <section className="requirement-section">
               <div className="requirement-section-header">
                 <h3>基础信息</h3>
-                <p>客户、项目、机器人、计划和客户原始输入</p>
+                <p>客户、项目、默认机器人型号、计划和客户原始输入</p>
               </div>
               <div className="requirement-section-grid">
                 <CommitField
@@ -4773,9 +4945,13 @@ function RequirementPage({
                   disabled={readonly}
                   onChange={(customerId) => void onSave({ customerId })}
                 />
+                {/* The stored value may be a pinned revision's root tail rather than
+                    RobotModel.id — they coincide only for slug-safe sourceIds — so normalise
+                    it before matching an option, or a valid robot renders as 请选择. */}
                 <SelectField
-                  label="机器人型号"
-                  value={selectedVersion.robotModelId}
+                  label="默认机器人型号"
+                  hint="作为未单独配置机器人型号的采集任务默认值；每个采集任务仍可单独选择。"
+                  value={findRobotModel(data.robotModels, selectedVersion.robotModelId)?.id || ''}
                   options={data.robotModels.map((item) => ({ value: item.id, label: item.model || item.id }))}
                   disabled={readonly}
                   onChange={(robotModelId) => void onSave({ robotModelId })}
@@ -5026,7 +5202,7 @@ function RequirementPage({
                   </div>
                   <DataTable
                     rows={rows}
-                    columns={selectedSubsceneColumns}
+                    columns={productionItemColumns}
                     rowKey={productionItemKey}
                     emptyText="当前场景下没有生产需求项"
                   />
@@ -8402,14 +8578,18 @@ function SelectField({
   options,
   disabled = false,
   onChange,
+  hint,
+  action,
 }: {
   label: string;
   value: string;
   options: Array<{ value: string; label: string }>;
   disabled?: boolean;
   onChange: (value: string) => void;
+  hint?: string;
+  action?: ReactNode;
 }) {
-  return (
+  const field = (
     <label className="field">
       <span>{label}</span>
       <select
@@ -8426,6 +8606,14 @@ function SelectField({
         ))}
       </select>
     </label>
+  );
+  if (!hint && !action) return field;
+  return (
+    <div className="field-stack">
+      {field}
+      {hint && <p className="field-note">{hint}</p>}
+      {action}
+    </div>
   );
 }
 
@@ -9015,6 +9203,7 @@ function emptyRequirementVersion(title = '新的客户需求', status: EntitySta
     priority: 'P2',
     deadline: today(),
     customerId: '',
+    // Default robot model — the fill value for production items, not "the" robot.
     robotModelId: '',
     businessGoal: '',
     requestedScenes: [],

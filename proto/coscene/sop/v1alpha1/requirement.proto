@@ -87,6 +87,17 @@ message ProductionItem {
   optional string legacy_version_id = 10 [(buf.validate.field).string.max_len = 128];
   optional string legacy_parent_version_id = 11 [(buf.validate.field).string.max_len = 128];
   optional Lifecycle legacy_lifecycle = 12 [(buf.validate.field).enum.defined_only = true];
+  // Robot model for this collection task. Authoritative when set; otherwise the
+  // requirement-level RequirementSpec.robot_model_revision default applies.
+  string robot_model_revision = 13 [
+    (google.api.resource_reference).type = "sop.coscene.io/RobotModelRevision",
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.pattern = "^robotModels/[a-z]([a-z0-9-]{0,61}[a-z0-9])?/revisions/[a-z0-9][a-z0-9-]{0,62}$"
+  ];
+  // Production pipeline for this collection task. Explicit presence: an absent
+  // field means the record predates the field, an unset choice is never stored.
+  // Completeness is enforced by the service layer at Confirm, not here.
+  optional ProductionFlow production_flow = 14 [(buf.validate.field).enum.defined_only = true];
 }
 
 // RequirementSpec is the complete desired production requirement.
@@ -96,6 +107,9 @@ message RequirementSpec {
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
     (buf.validate.field).string.pattern = "^customers/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
   ];
+  // Default robot model for production items that do not set their own.
+  // ProductionItem.robot_model_revision is authoritative when set; this remains
+  // the fallback for items without their own robot selection.
   string robot_model_revision = 2 [
     (google.api.resource_reference).type = "sop.coscene.io/RobotModelRevision",
     (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,

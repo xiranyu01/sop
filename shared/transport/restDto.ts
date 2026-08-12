@@ -10,6 +10,20 @@ export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
 export type QuantityMode = 'fixed' | 'range';
 export type ChangeFrequency = 'every_record' | 'every_n_records' | 'per_batch' | 'fixed';
 export type GlobalFieldStatus = 'active' | 'inactive';
+/**
+ * Transport spelling of the proto `ProductionFlow` enum. Deliberately its own
+ * vocabulary: the exported slash code (`collect/transform/qa1`) is external
+ * contract owned by shared/domain/requirementResolution.ts and must not be
+ * duplicated here. Mapping to and from proto is keyed off the numeric enum
+ * value in src/domain/protoFormMappings.ts, never off a name string.
+ */
+export type ProductionFlow =
+  | 'collect_transform_qa1_auto_annotate_annotate_qa2'
+  | 'collect_transform_qa1_annotate_qa2'
+  | 'collect_qa1_annotate_qa2'
+  | 'collect_annotate_qa1'
+  | 'collect_transform_qa1'
+  | 'collect';
 export type GlobalFieldGroup =
   | 'robot_state'
   | 'reference_object'
@@ -316,6 +330,29 @@ export interface RequestedSubscene {
   targetDurationHours: number;
   targetCollectionCount?: number;
   taskSop?: TaskSopReference;
+  /**
+   * Robot model for this collection task alone. Absent means the item has no
+   * robot of its own and inherits `RequirementVersion.robotModelId`; the
+   * effective value is `robotModelId ?? version.robotModelId`. Same id space as
+   * the requirement-level field (a robot model root id, not a revision).
+   */
+  robotModelId?: string;
+  /**
+   * Production pipeline for this collection task. Absent means either the stored
+   * record predates the field or it carries a value this build has no token for
+   * — `productionFlowRawValue` tells those apart. Absent with no raw value
+   * re-encodes as an unset proto field, never as the unspecified choice, so
+   * legacy records stay legacy through a round trip.
+   */
+  productionFlow?: ProductionFlow;
+  /**
+   * The stored proto enum value when the field is *present* but has no token in
+   * this build: a newer writer's flow, or an explicitly stored UNSPECIFIED (0).
+   * Carried verbatim and re-emitted so editing an unrelated field cannot destroy
+   * a value this build does not understand. The form never authors it — every
+   * flow edit clears it, and `productionFlow` wins when both are set.
+   */
+  productionFlowRawValue?: number;
 }
 
 export interface RequirementAttachment {
@@ -357,6 +394,11 @@ export interface RequirementVersion {
   globalRandomizationRequirements?: string;
   additionalNotes?: string;
   customerId: string;
+  /**
+   * Default robot model, applied to production items that carry none of their
+   * own. Demoted from "the requirement's robot" but still written on every
+   * save — `RequestedSubscene.robotModelId` is authoritative when set.
+   */
   robotModelId: string;
   businessGoal: string;
   requestedScenes: string[];

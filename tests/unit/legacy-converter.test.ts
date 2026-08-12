@@ -9,6 +9,8 @@ import scenes from '../../data/scenes.json';
 import { describe, expect, it } from 'vitest';
 import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
 import { deterministicUid, stableJson } from '../../server/domain/identity';
+import { ProductionFlow } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { resolveItemProductionFlow, resolveItemRobotRevision } from '../../shared/domain/requirementResolution';
 import { sha1, sha256 } from '../../shared/crypto/hash';
 import type { AppData } from '../../shared/transport/restDto';
 
@@ -69,6 +71,32 @@ describe('legacy v1alpha1 converter', () => {
       .find((item) => item.legacySubsceneName === '将爆米花装入盒子');
     expect(requirementWithZeroTarget?.target).toBeUndefined();
     expect(first.report.documentedNormalizations).toContain('selectedSubscenes[].targetDurationHours=0 is legacy unset and maps to absent WorkloadTarget.duration');
+  });
+
+  it('broadcasts the requirement robot to every production item and leaves the flow absent, not UNSPECIFIED', async () => {
+    const { resources, report } = convertLegacyToV1alpha1(structuredClone(fixtureData));
+    expect(report.issues).toEqual([]);
+    expect(report.ok).toBe(true);
+
+    let items = 0;
+    for (const revision of resources.requirementRevisions) {
+      const spec = revision.snapshot?.spec;
+      expect(spec).toBeDefined();
+      expect(spec!.robotModelRevision).not.toBe('');
+      expect(spec!.productionItems.length).toBeGreaterThan(0);
+      for (const item of spec!.productionItems) {
+        items += 1;
+        // Every item carries its own robot, so resolution never falls back to the spec.
+        expect(item.robotModelRevision).toBe(spec!.robotModelRevision);
+        expect(resolveItemRobotRevision(item, spec!)).toEqual({ source: 'item', value: spec!.robotModelRevision });
+        // Absent, not UNSPECIFIED: `present: false` is what tells the exporter to omit the key.
+        expect(item.productionFlow).toBeUndefined();
+        expect(resolveItemProductionFlow(item)).toEqual({ value: ProductionFlow.UNSPECIFIED, present: false });
+      }
+    }
+    expect(items).toBeGreaterThan(0);
+
+    // One conversion-report note per flow-less item, and notes never fail the conversion.
   });
 
   it('fails closed for ambiguous references and malformed persisted scalars', async () => {

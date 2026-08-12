@@ -1,5 +1,5 @@
 {
   "appDataSchemaVersion": "app_data_v0.1",
-  "requirementYamlSchemaVersion": "requirement_yaml_v0.11",
+  "requirementYamlSchemaVersion": "requirement_yaml_v0.12",
   "taskSopYamlSchemaVersion": "task_sop_yaml_v0.5"
 }

@@ -232,6 +232,15 @@ message ProductionItem {
     defined_only: true
     not_in: [0]
   }];
+  // External ref to this collection task's robot model revision. Empty while a
+  // draft is still partially filled; the requirement-level ref stays populated.
+  string robot_model_revision_ref = 12 [
+    (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+    (buf.validate.field).string.min_len = 1
+  ];
+  // Production pipeline for this collection task. Omitted entirely for
+  // revisions that predate the field — no value is invented for them.
+  optional coscene.sop.v1alpha1.ProductionFlow production_flow = 13 [(buf.validate.field).enum.defined_only = true];
 }
 
 // RequirementSpec is the import-ready Requirement content in external ref space.

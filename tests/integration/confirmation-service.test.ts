@@ -36,6 +36,58 @@ const fixtureData = {
   materialStateRules,
 } as AppData;
 
+type RequirementProto = {
+  attachments: string[];
+  spec: {
+    robotModelRevision: string;
+    productionItems: Array<{
+      id: string;
+      displayName: string;
+      taskSopRevision: string;
+      robotModelRevision?: string;
+      productionFlow?: string;
+    }>;
+  };
+} & Record<string, unknown>;
+
+const REQUIREMENT_NAME = 'requirements/req-we-home';
+
+// The imported fixture draft pins TaskSop revisions that are still draft checkpoints;
+// drop those, then let the caller shape the per-item robot/flow model under test.
+async function prepareRequirementDraft(
+  repository: ResourceRepository,
+  mutate: (proto: RequirementProto) => void,
+) {
+  const current = (await repository.getCurrent(REQUIREMENT_NAME))!;
+  const proto = JSON.parse(current.protoJson) as RequirementProto;
+  const revisions = await Promise.all(proto.spec.productionItems.map((item) =>
+    repository.getRevision(item.taskSopRevision)));
+  proto.spec.productionItems = proto.spec.productionItems.filter((_item, index) =>
+    revisions[index]?.exportEligible);
+  expect(proto.spec.productionItems.length).toBeGreaterThan(0);
+  mutate(proto);
+  const draft = await repository.updateCurrent(current.name, current.etag, {
+    protoSchema: current.protoSchema,
+    protoJson: JSON.stringify(proto),
+  });
+  return { draft, proto };
+}
+
+async function confirmPrepared(repository: ResourceRepository, rootName: string, commandId: string) {
+  const review = await reviewRootDependencies(repository, rootName);
+  const acknowledged = await acknowledgeRootDependencies(repository, {
+    rootName,
+    expectedEtag: review.proposal.rootEtag,
+    proposalDigest: review.digest,
+  });
+  return confirmRoot(repository, {
+    rootName,
+    expectedEtag: acknowledged.etag,
+    commandId,
+    now: new Date('2026-07-14T11:00:00.000Z'),
+  });
+}
+
 async function harness() {
   const db = new SqliteD1(resourceStorageMigrationsSql);
   let etag = 0;
@@ -147,20 +199,21 @@ describe('root-scoped dependency review and confirmation', () => {
 
   it('pins Requirement revision dependencies into a self-contained sealed bundle', async () => {
     const { db, repository, data } = await harness();
-    const prepared = data.currents.find((item) => item.name === 'requirements/req-we-home')!;
-    const importedDraft = (await repository.getCurrent(prepared.name))!;
-    const resource = JSON.parse(importedDraft.protoJson) as {
-      spec: { productionItems: Array<{ taskSopRevision: string }> };
-    } & Record<string, unknown>;
-    const revisions = await Promise.all(resource.spec.productionItems.map((item) =>
-      repository.getRevision(item.taskSopRevision)));
-    resource.spec.productionItems = resource.spec.productionItems.filter((_item, index) =>
-      revisions[index]?.exportEligible);
-    const draft = await repository.updateCurrent(importedDraft.name, importedDraft.etag, {
-      protoSchema: importedDraft.protoSchema,
-      protoJson: JSON.stringify(resource),
+    const prepared = data.currents.find((item) => item.name === REQUIREMENT_NAME)!;
+    const robotRevisionNames = data.revisions
+      .filter((item) => item.protoSchema.endsWith('.RobotModelRevision'))
+      .map((item) => item.name);
+    expect(robotRevisionNames.length).toBeGreaterThan(1);
+    // Divergent per-item robots: every one of them is pinned, not just the first.
+    const { draft } = await prepareRequirementDraft(repository, (proto) => {
+      proto.spec.robotModelRevision = robotRevisionNames[0]!;
+      const [first] = proto.spec.productionItems;
+      proto.spec.productionItems = [
+        { ...first!, robotModelRevision: robotRevisionNames[0]! },
+        { ...first!, id: 'second-robot-item', robotModelRevision: robotRevisionNames[1]! },
+      ];
+      proto.spec.productionItems.forEach((item) => { item.productionFlow = 'PRODUCTION_FLOW_COLLECT'; });
     });
-    expect(resource.spec.productionItems.length).toBeGreaterThan(0);
     const beforeReviewQueries = db.executed.length;
     const review = await reviewRootDependencies(repository, prepared.name);
     const dependencyReads = db.executed.slice(beforeReviewQueries);
@@ -175,6 +228,11 @@ describe('root-scoped dependency review and confirmation', () => {
       DependencyKind.ROBOT_MODEL_REVISION,
       DependencyKind.TASK_SOP_REVISION,
     ]));
+    // Every distinct per-item robot is a reviewed dependency, not just one.
+    expect(review.proposal.dependencies
+      .filter((item) => item.kind === DependencyKind.ROBOT_MODEL_REVISION)
+      .map((item) => item.resourceName))
+      .toEqual([robotRevisionNames[0], robotRevisionNames[1]].sort());
     const acknowledged = await acknowledgeRootDependencies(repository, {
       rootName: prepared.name,
       expectedEtag: draft.etag,
@@ -190,14 +248,118 @@ describe('root-scoped dependency review and confirmation', () => {
     expect(confirmed.bundle.rootKind).toBe('REQUIREMENT');
     expect(bundle.content?.requirements).toHaveLength(1);
     expect(bundle.content?.taskSops.length).toBeGreaterThan(0);
-    expect(bundle.content?.robotModelRevisions).toHaveLength(1);
+    expect(bundle.content?.robotModelRevisions).toHaveLength(2);
     expect(bundle.content?.requirements[0]?.source?.uid).toBe(confirmed.root.uid);
+    db.close();
+  });
+
+  it('resolves dependencies for divergent per-item robots with an empty spec default', async () => {
+    const { db, repository, data } = await harness();
+    const robotRevisionNames = data.revisions
+      .filter((item) => item.protoSchema.endsWith('.RobotModelRevision'))
+      .map((item) => item.name);
+    // The dropped unconditional `requireRevision(spec.robotModelRevision)` used to make
+    // this requirement unresolvable, which is exactly the shape per-item robots exist for.
+    const { draft } = await prepareRequirementDraft(repository, (proto) => {
+      proto.spec.robotModelRevision = '';
+      const [first] = proto.spec.productionItems;
+      proto.spec.productionItems = [
+        { ...first!, robotModelRevision: robotRevisionNames[0]! },
+        { ...first!, id: 'second-robot-item', robotModelRevision: robotRevisionNames[1]! },
+      ];
+      proto.spec.productionItems.forEach((item) => { item.productionFlow = 'PRODUCTION_FLOW_COLLECT'; });
+    });
+    const review = await reviewRootDependencies(repository, draft.name);
+    expect(review.proposal.dependencies
+      .filter((item) => item.kind === DependencyKind.ROBOT_MODEL_REVISION)
+      .map((item) => item.resourceName))
+      .toEqual([robotRevisionNames[0], robotRevisionNames[1]].sort());
+    db.close();
+  });
+
+  it('rejects a Requirement whose production item resolves to no robot model', async () => {
+    const { db, repository } = await harness();
+    const { draft, proto } = await prepareRequirementDraft(repository, (value) => {
+      value.spec.robotModelRevision = '';
+      value.spec.productionItems.forEach((item) => {
+        item.robotModelRevision = '';
+        item.productionFlow = 'PRODUCTION_FLOW_COLLECT';
+      });
+    });
+    await expect(confirmRoot(repository, {
+      rootName: draft.name,
+      expectedEtag: draft.etag,
+      commandId: 'confirm-missing-robot',
+    })).rejects.toThrow(`生产需求项缺少机器人型号：${proto.spec.productionItems[0]!.displayName}`);
+    expect((await repository.getCurrent(draft.name))!.lifecycle).toBe('DRAFT');
+    db.close();
+  });
+
+  it('rejects a Requirement whose items all pin a robot but whose default is empty', async () => {
+    const { db, repository, data } = await harness();
+    const robotRevisionName = data.revisions
+      .find((item) => item.protoSchema.endsWith('.RobotModelRevision'))!.name;
+    const { draft } = await prepareRequirementDraft(repository, (value) => {
+      value.spec.robotModelRevision = '';
+      value.spec.productionItems.forEach((item) => {
+        item.robotModelRevision = robotRevisionName;
+        item.productionFlow = 'PRODUCTION_FLOW_COLLECT';
+      });
+    });
+    // The default is what renders the exported top-level `robot:` block (决策 #7). Without
+    // this rule the requirement confirms and then fails inside closure.ts at export time.
+    await expect(confirmRoot(repository, {
+      rootName: draft.name,
+      expectedEtag: draft.etag,
+      commandId: 'confirm-missing-default-robot',
+    })).rejects.toThrow('需求缺少默认机器人型号');
+    expect((await repository.getCurrent(draft.name))!.lifecycle).toBe('DRAFT');
+    db.close();
+  });
+
+  it.each([
+    { stage: 'absent', flow: undefined },
+    { stage: 'explicitly unspecified', flow: 'PRODUCTION_FLOW_UNSPECIFIED' },
+  ])('rejects a Requirement whose production flow is $stage', async ({ stage, flow }) => {
+    const { db, repository, data } = await harness();
+    const robotRevisionName = data.revisions
+      .find((item) => item.protoSchema.endsWith('.RobotModelRevision'))!.name;
+    const { draft, proto } = await prepareRequirementDraft(repository, (value) => {
+      value.spec.robotModelRevision = robotRevisionName;
+      value.spec.productionItems.forEach((item) => {
+        if (flow === undefined) delete item.productionFlow;
+        else item.productionFlow = flow;
+      });
+    });
+    await expect(confirmRoot(repository, {
+      rootName: draft.name,
+      expectedEtag: draft.etag,
+      commandId: `confirm-flow-${stage.replaceAll(' ', '-')}`,
+    })).rejects.toThrow(`生产需求项缺少生产流程：${proto.spec.productionItems[0]!.displayName}`);
+    expect((await repository.getCurrent(draft.name))!.lifecycle).toBe('DRAFT');
+    db.close();
+  });
+
+  it('confirms a Requirement whose items all pin the same robot the spec default names', async () => {
+    const { db, repository, data } = await harness();
+    const robotRevisionName = data.revisions
+      .find((item) => item.protoSchema.endsWith('.RobotModelRevision'))!.name;
+    const { draft } = await prepareRequirementDraft(repository, (value) => {
+      value.spec.robotModelRevision = robotRevisionName;
+      value.spec.productionItems.forEach((item) => {
+        item.robotModelRevision = '';
+        item.productionFlow = 'PRODUCTION_FLOW_COLLECT';
+      });
+    });
+    const confirmed = await confirmPrepared(repository, draft.name, 'confirm-default-robot');
+    const bundle = decodeExportBundle(confirmed.bundle.bundleProtoJson);
+    expect(bundle.content?.robotModelRevisions).toHaveLength(1);
     db.close();
   });
 
   it('rejects 501 direct Requirement dependencies before dependency detail reads', async () => {
     const { db, repository, data } = await harness();
-    const prepared = data.currents.find((item) => item.name === 'requirements/req-we-home')!;
+    const prepared = data.currents.find((item) => item.name === REQUIREMENT_NAME)!;
     const current = (await repository.getCurrent(prepared.name))!;
     const proto = JSON.parse(current.protoJson) as {
       attachments: string[];
@@ -223,8 +385,10 @@ describe('root-scoped dependency review and confirmation', () => {
       },
     } satisfies ResourceRepository;
 
+    // The breakdown is the actionable part: per-item robots put several kinds on one
+    // budget, and a raw total does not tell the user which of them to consolidate.
     await expect(reviewRootDependencies(counted, oversized.name))
-      .rejects.toThrow('Direct dependency limit exceeded: 501 > 500');
+      .rejects.toThrow('直接依赖数量超出上限：501 > 500（客户 1 / 附件 499 / 机器人型号 1）');
     expect(catalogReads).toBe(0);
     expect(revisionReads).toBe(0);
     db.close();

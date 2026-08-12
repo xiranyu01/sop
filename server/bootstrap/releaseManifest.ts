@@ -10,7 +10,7 @@ import type { RepositoryBootstrapManifest } from './status';
 export const repositoryReleaseManifest = Object.freeze({
   schemaVersion: 'resource-storage-v1',
   bootstrapVersion: 'repository-fixtures-v1',
-  datasetDigest: 'd268d8ce3b3255beb63220ef4bba1e95f3222b2bbf0980017866e8d7fabd7842',
+  datasetDigest: '8a0781484fe425f9ddaa5e4d65887af8a03b9f5b5e69e3d29d573da220f3c3b2',
   expectedCounts: Object.freeze({
     catalogs: 113,
     currents: 6,

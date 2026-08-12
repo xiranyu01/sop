@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { Lifecycle, ProductionFlow, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { buildExportBundle } from '../../server/export/bundle';
 import { resolveExportClosure } from '../../server/export/closure';
 import { convertLegacyToV1alpha1 } from '../../server/bootstrap/legacyToV1alpha1';
@@ -163,6 +163,28 @@ describe('versioned frozen PDF view', () => {
     });
     expect(model.sections.some((item) => item.id === 'task-1-annotation-steps')).toBe(true);
     expect(JSON.stringify(model)).not.toContain('revisions/');
+  });
+
+  it('shows the per-item robot and production flow, and a dash when the flow is absent', () => {
+    const legacy = renderFrozenPdfModel(requirementBundle().content!);
+    const legacyTable = legacy.sections.find((item) => item.id === 'production-items')?.tables?.[0];
+    // Inherits the requirement-level robot; the flow predates the field, so '—'.
+    expect(legacyTable?.columns).toEqual([
+      '生产需求项', '描述', '任务 SOP', '版本', '状态',
+      '机器人型号', '生产流程', '目标采集时长', '目标采集数量',
+    ]);
+    const requirementRobot = legacy.sections.find((item) => item.id === 'basic')
+      ?.rows?.find((row) => row.label === '机器人型号')?.value;
+    expect(requirementRobot).not.toBe('—');
+    expect(legacyTable?.rows[0][5]).toBe(requirementRobot);
+    expect(legacyTable?.rows[0][6]).toBe('—');
+
+    const content = requirementBundle().content!;
+    const item = content.requirements[0].spec!.productionItems[0];
+    item.productionFlow = ProductionFlow.COLLECT_QA1_ANNOTATE_QA2;
+    const withFlow = renderFrozenPdfModel(content);
+    const row = withFlow.sections.find((section) => section.id === 'production-items')?.tables?.[0].rows[0];
+    expect(row?.[6]).toBe('collect/qa1/annotate/qa2');
   });
 
   it('rejects a renderer version without silently using the latest implementation', () => {

@@ -18,11 +18,13 @@ import {
   Lifecycle,
   OperationStepSchema,
   Priority,
+  ProductionFlow,
   DependencyKind,
   DependencyReviewProposalSchema,
   RevisionOrigin,
 } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import {
+  ProductionItemSchema,
   RequirementRevisionSchema,
   RequirementSchema,
   RequirementSpecSchema,
@@ -279,6 +281,40 @@ describe('generated Proto runtime', () => {
       origin: RevisionOrigin.IMPORTED_CONFIRMED,
       exportEligible: true,
     }).kind).toBe('invalid');
+  });
+
+  it('distinguishes an absent production flow from an explicitly chosen one', () => {
+    const base = {
+      id: 'item-1',
+      displayName: 'Pick up cup',
+      robotModelRevision: 'robotModels/g1/revisions/1',
+    };
+    const legacy = create(ProductionItemSchema, base);
+    const chosen = create(ProductionItemSchema, { ...base, productionFlow: ProductionFlow.COLLECT });
+
+    // Absent: omitted from ProtoJSON entirely, so a stored record that predates
+    // the field stays distinguishable from one whose flow is still unchosen.
+    expect(legacy.productionFlow).toBeUndefined();
+    expect(toJson(ProductionItemSchema, legacy)).not.toHaveProperty('productionFlow');
+
+    // Present: round-trips through both ProtoJSON and deterministic binary.
+    expect(chosen.productionFlow).toBe(ProductionFlow.COLLECT);
+    const json = toJson(ProductionItemSchema, chosen);
+    expect(json).toHaveProperty('productionFlow', 'PRODUCTION_FLOW_COLLECT');
+    expect(fromJson(ProductionItemSchema, json)).toEqual(chosen);
+    expect(fromBinary(ProductionItemSchema, toBinary(ProductionItemSchema, chosen))).toEqual(chosen);
+
+    // Presence survives a binary round-trip of the absent case too.
+    expect(fromBinary(ProductionItemSchema, toBinary(ProductionItemSchema, legacy)).productionFlow)
+      .toBeUndefined();
+
+    const validator = createValidator();
+    expect(validator.validate(ProductionItemSchema, legacy).kind).toBe('valid');
+    expect(validator.validate(ProductionItemSchema, chosen).kind).toBe('valid');
+    expect(validator.validate(ProductionItemSchema, create(ProductionItemSchema, {
+      ...base,
+      robotModelRevision: 'not-a-resource-name',
+    })).kind).toBe('invalid');
   });
 
   it('round-trips the normalized dependency review proposal through deterministic Proto binary', () => {

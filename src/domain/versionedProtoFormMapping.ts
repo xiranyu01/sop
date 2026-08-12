@@ -37,7 +37,12 @@ import {
   lifecycleView,
   optionalText,
   priorityView,
+  productionFlowView,
 } from './protoFormMappings';
+import {
+  resolveItemProductionFlow,
+  resolveItemRobotRevision,
+} from '../../shared/domain/requirementResolution';
 
 export type RevisionBound = {
   __revisionName?: string;
@@ -435,25 +440,41 @@ function requirementVersion(
       languages: (spec.delivery?.languages ?? []).map((item) => ({ code: item.code, name: item.displayName || '' })),
       dataStructureUrl: spec.delivery?.dataStructureUri || '',
     },
-    selectedSubscenes: spec.productionItems.map((item) => ({
-      id: item.id,
-      title: item.displayName,
-      description: item.description,
-      subsceneCode: item.legacySubsceneCode,
-      subsceneName: item.legacySubsceneName,
-      sceneName: item.legacySceneName || '',
-      version: item.legacyVersionLabel,
-      targetDurationHours: durationHoursView.fromProto(item.target?.duration),
-      targetCollectionCount: collectionCountView.fromProto(item.target?.collectionCount),
-      taskSop: item.taskSopRevision ? {
+    selectedSubscenes: spec.productionItems.map((item) => {
+      // Precedence and presence both come from the shared resolver. Only the
+      // item's *own* robot reaches the DTO: decoding the spec fallback into
+      // every row would re-encode it into records that never carried one.
+      const robot = resolveItemRobotRevision(item, spec);
+      const flow = resolveItemProductionFlow(item);
+      return {
+        id: item.id,
+        title: item.displayName,
+        description: item.description,
+        subsceneCode: item.legacySubsceneCode,
+        subsceneName: item.legacySubsceneName,
         sceneName: item.legacySceneName || '',
-        title: item.legacySubsceneName || item.displayName,
-        version: item.legacyVersionLabel || '',
-        versionId: item.legacyVersionId,
-        parentVersionId: item.legacyParentVersionId,
-        status: item.legacyLifecycle ? status(item.legacyLifecycle) : undefined,
-      } : undefined,
-    })),
+        version: item.legacyVersionLabel,
+        targetDurationHours: durationHoursView.fromProto(item.target?.duration),
+        targetCollectionCount: collectionCountView.fromProto(item.target?.collectionCount),
+        taskSop: item.taskSopRevision ? {
+          sceneName: item.legacySceneName || '',
+          title: item.legacySubsceneName || item.displayName,
+          version: item.legacyVersionLabel || '',
+          versionId: item.legacyVersionId,
+          parentVersionId: item.legacyParentVersionId,
+          status: item.legacyLifecycle ? status(item.legacyLifecycle) : undefined,
+        } : undefined,
+        robotModelId: robot.source === 'item' ? rootTail(robot.value) : undefined,
+        // The form only has tokens for the flows this build knows. A present value
+        // with no token — a newer writer's flow, or an explicitly stored
+        // UNSPECIFIED — rides along as a raw number so re-encoding restores it
+        // instead of silently dropping a field nobody on this screen touched.
+        productionFlow: flow.present ? productionFlowView.fromProto(flow.value) : undefined,
+        productionFlowRawValue: flow.present && productionFlowView.fromProto(flow.value) === undefined
+          ? flow.value
+          : undefined,
+      };
+    }),
     updatedAt: timestamp(requirement.updateTime),
   };
   return revisionBound(result, metadata);
@@ -738,6 +759,24 @@ export function createTaskSopResource(
   return encodeTaskSopVersion(version, toDomainJson(TaskSopSchema, empty), context);
 }
 
+/**
+ * Robot ids reach the encoder in TWO id spaces: decoding emits the pinned
+ * revision's root tail (`robotModels/<tail>/revisions/…`), while every picker and
+ * batch action in the form writes the catalog `RobotModel.id` — a sourceId. They
+ * coincide only for slug-safe sourceIds. The context map is keyed by sourceId
+ * alone, so index it under both keys; a lookup that missed used to fall through
+ * to `''`, which reads back as "this item has no robot of its own" — an ERASE
+ * dressed up as a save.
+ */
+function robotRevisionResolver(context: RequirementFormContext): (id: string) => string | undefined {
+  const byId = new Map(context.robotRevisionNameById ?? []);
+  for (const revision of context.robotRevisionNameById?.values() ?? []) {
+    const tail = rootTail(revision);
+    if (tail && !byId.has(tail)) byId.set(tail, revision);
+  }
+  return (id: string) => byId.get(id);
+}
+
 function currentProductionItems(current: RequirementMessage): Map<string, NonNullable<RequirementMessage['spec']>['productionItems'][number]> {
   return new Map((current.spec?.productionItems ?? []).map((item) => [item.id, item]));
 }
@@ -750,11 +789,25 @@ export function encodeRequirementVersion(
   const current = fromDomainJson(RequirementSchema, currentResource);
   const currentItems = currentProductionItems(current);
   const attachmentById = attachmentNames(current.attachments, context.attachmentNameById);
+  const robotRevision = robotRevisionResolver(context);
   const productionItems = version.selectedSubscenes.map((item, index) => {
     const id = safeId(item.id || item.subsceneCode || `item-${index + 1}`, `item-${index + 1}`);
     const previous = currentItems.get(id);
     const duration = durationHoursView.toProto(item.targetDurationHours);
     const collectionCount = collectionCountView.toProto(item.targetCollectionCount || 0);
+    // Same resolution order as the spec-level robot below: the context map wins,
+    // and the stored revision is kept when the id is unchanged and unmapped. An
+    // item with no robot of its own writes '' and keeps inheriting the default.
+    // A robot the user DID choose must never reach that '': either it resolves or
+    // the save fails loudly, because the silent version is indistinguishable from
+    // the user asking to inherit.
+    const itemRobotRevision = item.robotModelId
+      ? robotRevision(item.robotModelId)
+        || (previous && rootTail(previous.robotModelRevision) === item.robotModelId ? previous.robotModelRevision : '')
+      : '';
+    if (item.robotModelId && !itemRobotRevision) {
+      throw new Error(`生产需求项 ${id} 的机器人型号无法解析，保存已取消：${item.robotModelId}`);
+    }
     return {
       id,
       displayName: item.title || item.subsceneName || `生产需求项 ${index + 1}`,
@@ -768,13 +821,27 @@ export function encodeRequirementVersion(
       legacyVersionId: optionalText(item.taskSop?.versionId),
       legacyParentVersionId: optionalText(item.taskSop?.parentVersionId),
       legacyLifecycle: item.taskSop?.status ? lifecycleView.toProto(item.taskSop.status) : undefined,
+      robotModelRevision: itemRobotRevision,
+      // undefined leaves the `optional` field unset, so an item that decoded
+      // without a flow re-encodes without one. Never write UNSPECIFIED here:
+      // absence is the signal that a record predates the field. A raw value the
+      // form could not name goes back verbatim — including an explicit
+      // UNSPECIFIED (0), which stays present and stays distinct from absent.
+      productionFlow: item.productionFlow
+        ? productionFlowView.toProto(item.productionFlow)
+        : item.productionFlowRawValue,
     };
   });
   const currentSpec = current.spec;
   const customer = context.customerNameById?.get(version.customerId) ||
     (currentSpec && rootTail(currentSpec.customer) === version.customerId ? currentSpec.customer : '');
-  const robotRevision = context.robotRevisionNameById?.get(version.robotModelId) ||
-    (currentSpec && rootTail(currentSpec.robotModelRevision) === version.robotModelId ? currentSpec.robotModelRevision : '');
+  const specRobotRevision = version.robotModelId
+    ? robotRevision(version.robotModelId)
+      || (currentSpec && rootTail(currentSpec.robotModelRevision) === version.robotModelId ? currentSpec.robotModelRevision : '')
+    : '';
+  if (version.robotModelId && !specRobotRevision) {
+    throw new Error(`默认机器人型号无法解析，保存已取消：${version.robotModelId}`);
+  }
   const aggregateDuration = version.requiredDurationHours > 0
     ? durationHoursView.toProto(version.requiredDurationHours)
     : undefined;
@@ -787,7 +854,7 @@ export function encodeRequirementVersion(
     : undefined;
   const spec = {
     customer,
-    robotModelRevision: robotRevision,
+    robotModelRevision: specRobotRevision,
     projectDisplayName: optionalText(version.projectName),
     businessGoal: version.businessGoal,
     deadline: dateView.toProto(version.deadline),

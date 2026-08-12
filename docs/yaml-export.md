@@ -70,6 +70,64 @@ delivery_requirements:
 - Unknown existing codes and names are exported losslessly so consumers can
   warn or add support without the producer discarding data.
 
+## Per-item robot and production flow
+
+Each entry of `production_requirement_items` carries the robot model and the
+production pipeline that apply to that collection task:
+
+```yaml
+production_requirement_items:
+  - title: 基线任务 SOP
+    description: ""
+    target_duration_hours: 1
+    target_collection_count: 2
+    robot:
+      id: 0614b3b9-ee56-5f99-8397-822cb4e79e20
+      brand: coScene
+      model: Baseline
+      terminal: 夹爪
+      topics:
+        /camera: ""
+    production_flow: collect/transform/qa1/annotate/qa2
+    task_sop:
+      title: 基线任务 SOP
+```
+
+- The item-level `robot:` block has the same shape as the requirement-level
+  `robot:` block, which is **unchanged** and still emitted. The requirement-level
+  block is the default; an item that does not pin its own robot renders the
+  default, so the item block is always complete on its own and a consumer never
+  has to implement the fallback.
+- `production_flow` is **omitted entirely** when the stored revision predates the
+  field, or when a writer explicitly stored the unset choice. It is never emitted
+  as an empty string, and no value is invented for a legacy revision. A consumer
+  must treat an absent key as "unknown", not as a default pipeline.
+- Accepted `production_flow` values:
+  - `collect/transform/qa1/auto-annotate/annotate/qa2`
+  - `collect/transform/qa1/annotate/qa2`
+  - `collect/qa1/annotate/qa2`
+  - `collect/annotate/qa1`
+  - `collect/transform/qa1`
+  - `collect`
+- **Convention bend, deliberate.** `docs/proto-v1alpha1.md` states that
+  slash-delimited multi-values are not supported. `production_flow` does not
+  violate that rule: the stored value is a single atomic
+  `coscene.sop.v1alpha1.ProductionFlow` enum value, and only its *external code*
+  spells the pipeline stages with slashes. It is one opaque identifier, not a
+  list. Consumers must match the whole string and must not split it on `/` to
+  derive stages, and producers must not compose a new code by concatenation.
+- These keys are additive, so **no consumer-visible version changes**:
+  `schema_version` stays `2.1.0` and there is no other version field in the
+  rendered YAML. `requirementYamlSchemaVersion` in `data/metadata.json` did move
+  (`requirement_yaml_v0.11` → `requirement_yaml_v0.12`), but that value is an
+  internal bootstrap-fixture marker — it is never embedded in exported YAML and a
+  consumer cannot observe it. Detect the new keys by presence, not by version.
+- `production_flow` is **permanently absent** for requirements that were imported
+  as already-CONFIRMED: they never traverse Confirm, so nothing ever asked their
+  author to choose a pipeline and nothing ever will. Consumers must treat the key
+  as optional forever — not as a field that "will be there once everyone
+  re-confirms".
+
 ## Identity and references
 
 Requirement and Task SOP version IDs identify immutable source revisions.

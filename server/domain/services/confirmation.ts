@@ -15,12 +15,19 @@ import {
   type RobotModelRevision,
   type Scene,
 } from '../../../gen/coscene/sop/v1alpha1/catalog_pb';
-import { DependencyKind, Lifecycle, RevisionOrigin } from '../../../gen/coscene/sop/v1alpha1/common_pb';
+import {
+  DependencyKind,
+  Lifecycle,
+  ProductionFlow,
+  RevisionOrigin,
+} from '../../../gen/coscene/sop/v1alpha1/common_pb';
 import {
   RequirementRevisionSchema,
   RequirementSchema,
+  type ProductionItem,
   type Requirement,
   type RequirementRevision,
+  type RequirementSpec,
 } from '../../../gen/coscene/sop/v1alpha1/requirement_pb';
 import {
   TaskSopRevisionSchema,
@@ -29,6 +36,10 @@ import {
   type TaskSopRevision,
 } from '../../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import { fromDomainJsonString, toDomainJson } from '../../../shared/domain/codec';
+import {
+  resolveItemProductionFlow,
+  resolveItemRobotRevision,
+} from '../../../shared/domain/requirementResolution';
 import { assertValidDomainMessage } from '../../../shared/domain/validation';
 import type {
   AtomicConfirmationResult,
@@ -193,10 +204,88 @@ function requireRevision<Desc extends DescMessage>(
   return { record, value: fromDomainJsonString(schema, record.revisionProtoJson) };
 }
 
+// Keyed by the numeric enum value; an unknown kind falls back to its number so the
+// breakdown never swallows a dependency it cannot name.
+const DEPENDENCY_KIND_LABELS: Readonly<
+  Record<Exclude<DependencyKind, DependencyKind.UNSPECIFIED>, string>
+> = {
+  [DependencyKind.CUSTOMER]: '客户',
+  [DependencyKind.MATERIAL]: '物料',
+  [DependencyKind.SCENE]: '场景',
+  [DependencyKind.GLOBAL_FIELD]: '全局字段',
+  [DependencyKind.MATERIAL_STATE_RULE]: '物料状态规则',
+  [DependencyKind.ATTACHMENT]: '附件',
+  [DependencyKind.TASK_SOP_REVISION]: '任务 SOP',
+  [DependencyKind.ROBOT_MODEL_REVISION]: '机器人型号',
+};
+
+function dependencyKindLabel(kind: DependencyKind): string {
+  return (DEPENDENCY_KIND_LABELS as Readonly<Record<number, string | undefined>>)[kind]
+    ?? `未知类型 ${kind}`;
+}
+
 function assertDependencyLookupLimit(values: Array<Pick<DirectDependency, 'kind' | 'resourceName'>>): void {
-  const count = new Set(values.map((value) => `${value.kind}\0${value.resourceName}`)).size;
+  const distinct = new Set(values.map((value) => `${value.kind}\0${value.resourceName}`));
+  const count = distinct.size;
   if (count > MAX_DIRECT_DEPENDENCIES) {
-    throw new CanonicalDataError(`Direct dependency limit exceeded: ${count} > ${MAX_DIRECT_DEPENDENCIES}`);
+    // A raw total tells the user nothing about what to consolidate — per-item robots
+    // put several kinds on the same budget, so the message names each one's share.
+    const byKind = new Map<DependencyKind, number>();
+    for (const key of distinct) {
+      const kind = Number(key.split('\0')[0]) as DependencyKind;
+      byKind.set(kind, (byKind.get(kind) ?? 0) + 1);
+    }
+    const breakdown = [...byKind.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([kind, kindCount]) => `${dependencyKindLabel(kind)} ${kindCount}`)
+      .join(' / ');
+    throw new CanonicalDataError(
+      `直接依赖数量超出上限：${count} > ${MAX_DIRECT_DEPENDENCIES}（${breakdown}）`,
+    );
+  }
+}
+
+function productionItemLabel(item: ProductionItem): string {
+  return item.displayName || item.id;
+}
+
+// The distinct robot revisions a requirement depends on: every per-item resolution plus
+// the requirement-level default whenever it is populated — the export closure keeps the
+// spec-level ref regardless of how many items override it (决策 #7), so a requirement with
+// zero items still depends on its default. An item that resolves to neither contributes
+// nothing: resolution stays total so reviewing or previewing an unfinished draft still
+// works, and Confirm is where incompleteness is fatal.
+function requirementRobotRevisionNames(spec: RequirementSpec): string[] {
+  return uniqueSorted([
+    ...(spec.robotModelRevision ? [spec.robotModelRevision] : []),
+    ...spec.productionItems
+      .map((item) => resolveItemRobotRevision(item, spec).value)
+      .filter((name): name is string => Boolean(name)),
+  ]);
+}
+
+// Confirm-time completeness for the per-item robot/flow model, service layer only:
+// a protovalidate rule for the same thing would fail every read of an already-stored
+// snapshot (six revalidation sites), so it can only live on the write path.
+function assertRequirementItemsComplete(requirement: Requirement): void {
+  const spec = requirement.spec;
+  if (!spec) throw new CanonicalDataError('Requirement spec is missing');
+  for (const item of spec.productionItems) {
+    if (resolveItemRobotRevision(item, spec).source === 'none') {
+      throw new CanonicalDataError(`生产需求项缺少机器人型号：${productionItemLabel(item)}`);
+    }
+    const flow = resolveItemProductionFlow(item);
+    if (!flow.present || flow.value === ProductionFlow.UNSPECIFIED) {
+      throw new CanonicalDataError(`生产需求项缺少生产流程：${productionItemLabel(item)}`);
+    }
+  }
+  // The requirement-level default stays mandatory even when every item overrides it:
+  // 决策 #7 keeps the exported top-level `robot:` block always present, and it renders from
+  // this field alone — closure.ts, bundle.ts and yaml.ts all resolve it unconditionally, so
+  // an empty default would confirm here and then die at export with an opaque message.
+  // Checked after the per-item loop so the more specific item error wins when both apply.
+  if (!spec.robotModelRevision) {
+    throw new CanonicalDataError('需求缺少默认机器人型号');
   }
 }
 
@@ -322,10 +411,11 @@ async function resolveRequirementDependencies(
   if (taskRevisionNames.some((name) => !name)) {
     throw new CanonicalDataError('Requirement production item must pin a TaskSop revision');
   }
+  const robotRevisionNames = requirementRobotRevisionNames(requirement.spec);
   assertDependencyLookupLimit([
     { kind: DependencyKind.CUSTOMER, resourceName: requirement.spec.customer },
     ...attachmentNames.map((resourceName) => ({ kind: DependencyKind.ATTACHMENT, resourceName })),
-    { kind: DependencyKind.ROBOT_MODEL_REVISION, resourceName: requirement.spec.robotModelRevision },
+    ...robotRevisionNames.map((resourceName) => ({ kind: DependencyKind.ROBOT_MODEL_REVISION, resourceName })),
     ...taskRevisionNames.map((resourceName) => ({ kind: DependencyKind.TASK_SOP_REVISION, resourceName })),
   ]);
 
@@ -346,17 +436,16 @@ async function resolveRequirementDependencies(
   }
 
   const revisions = revisionMap(await repository.getRevisions([
-    requirement.spec.robotModelRevision,
+    ...robotRevisionNames,
     ...taskRevisionNames,
   ]));
-  const robot = requireRevision(
-    revisions,
-    requirement.spec.robotModelRevision,
-    'ROBOT_MODEL_REVISION',
-    RobotModelRevisionSchema,
-  );
-  records.set(robot.record.name, robot.record);
-  direct.push(revisionUidDependency(DependencyKind.ROBOT_MODEL_REVISION, robot.record));
+  const robots: RobotModelRevision[] = [];
+  for (const name of robotRevisionNames) {
+    const robot = requireRevision(revisions, name, 'ROBOT_MODEL_REVISION', RobotModelRevisionSchema);
+    robots.push(robot.value);
+    records.set(robot.record.name, robot.record);
+    direct.push(revisionUidDependency(DependencyKind.ROBOT_MODEL_REVISION, robot.record));
+  }
 
   const tasks: TaskSopRevision[] = [];
   for (const name of taskRevisionNames) {
@@ -377,7 +466,7 @@ async function resolveRequirementDependencies(
       attachments,
     }),
     taskSopRevisions: tasks,
-    robotModelRevisions: [robot.value],
+    robotModelRevisions: robots,
   };
 }
 
@@ -612,16 +701,19 @@ export async function buildRequirementCheckpointExportBundle(
   const taskRevisionNames = uniqueSorted(
     spec.productionItems.map((item) => item.taskSopRevision).filter(Boolean),
   );
+  // Same set as resolveRequirementDependencies computes for a draft, replayed against an
+  // already-sealed revision: N per-item robots plus the spec-level default when populated.
+  const robotRevisionNames = requirementRobotRevisionNames(spec);
   const dependencyRecords = revisionMap(await repository.getRevisions([
-    spec.robotModelRevision,
+    ...robotRevisionNames,
     ...taskRevisionNames,
   ]));
-  const robot = requireRevision(
+  const robots = robotRevisionNames.map((name) => requireRevision(
     dependencyRecords,
-    spec.robotModelRevision,
+    name,
     'ROBOT_MODEL_REVISION',
     RobotModelRevisionSchema,
-  );
+  ).value);
   const tasks = taskRevisionNames.map((name) => requireRevision(
     dependencyRecords,
     name,
@@ -631,7 +723,7 @@ export async function buildRequirementCheckpointExportBundle(
   return buildExportBundle(resolveExportClosure({
     requirementRevisions: [previewRevision],
     taskSopRevisions: tasks,
-    robotModelRevisions: [robot.value],
+    robotModelRevisions: robots,
   }, {
     kind: 'requirement',
     sourceId: rootSourceId(snapshot),
@@ -666,6 +758,9 @@ export async function confirmRoot(
   const resolution = await resolveRoot(repository, input.rootName, now.toISOString());
   if (resolution.root.etag !== input.expectedEtag) {
     throw new ResourceConflictError(input.rootName, input.expectedEtag, resolution.root.etag);
+  }
+  if (resolution.message.$typeName.endsWith('Requirement')) {
+    assertRequirementItemsComplete(resolution.message as Requirement);
   }
   const proposal = buildDependencyReviewProposal(input.rootName, input.expectedEtag, resolution.direct);
   const reviewed = await repository.loadReviewedDependencies(input.rootName);

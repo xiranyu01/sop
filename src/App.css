@@ -2079,6 +2079,26 @@ summary:focus-visible,
   font-size: 12px;
 }
 
+.field-stack {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+/* A .field-stack is taller than a plain .field; without this its row would stretch the
+   neighbouring field's input to match. */
+.requirement-section-grid {
+  align-items: start;
+}
+
+.field-stack .field-note {
+  margin: 0;
+}
+
+.field-stack .ghost-button {
+  justify-self: start;
+}
+
 .section-title {
   display: flex;
   align-items: center;
@@ -2149,6 +2169,21 @@ summary:focus-visible,
   justify-content: flex-end;
   gap: 6px;
   white-space: nowrap;
+}
+
+/* A cell that stacks a control over a hint. `min-width: 0` keeps the hint's ellipsis working
+   inside the table's grid track instead of widening the column. */
+.table-cell-stack {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+
+.table-cell-hint {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--color-attention-fg);
 }
 
 .subscene-group-list {

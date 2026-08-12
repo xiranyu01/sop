@@ -183,7 +183,7 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   const path = await download.path();
   expect(path).toBeTruthy();
   expect(YAML.parse(await readFile(path!, 'utf8'))).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', schema_version: '2.0.1', task_sop: expect.objectContaining({ status: '已确认' }),
+    format: 'coscene.sop.export', schema_version: '2.1.0', task_sop: expect.objectContaining({ status: '已确认' }),
   }));
 
   await page.getByRole('button', { name: '导出' }).click();
@@ -598,7 +598,7 @@ test('revision export is addressed only by the canonical encoded revision name',
   expect(yaml.ok()).toBe(true);
   expect(yaml.headers()['content-type']).toContain('application/yaml');
   expect(YAML.parse(await yaml.text())).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', schema_version: '2.0.1', task_sop: expect.objectContaining({ status: '已确认' }),
+    format: 'coscene.sop.export', schema_version: '2.1.0', task_sop: expect.objectContaining({ status: '已确认' }),
   }));
 
   const detail = await apiJson<{ name: string; ownerName: string }>(

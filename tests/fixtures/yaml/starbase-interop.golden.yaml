@@ -61,6 +61,13 @@ requirement:
       description: Starbase 互操作契约
       target_duration_hours: 1
       target_collection_count: 2
+      robot:
+        id: 0614b3b9-ee56-5f99-8397-822cb4e79e20
+        brand: coScene
+        model: Baseline
+        terminal: 夹爪
+        topics:
+          /camera: ""
       task_sop:
         title: 基线任务 SOP
         scene_name: 基线场景

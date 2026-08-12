@@ -42,7 +42,10 @@ async function firstExportableTaskRevision(
 ): Promise<ExportableTaskFixture> {
   const scenes = await listResourceSummaries(request, 'scenes');
   for (const root of await listResourceSummaries(request, 'taskSops')) {
-    if (!root.lifecycle?.endsWith('CONFIRMED')) continue;
+    // The ROOT's lifecycle is not the fixture requirement: a TaskSop with an editable draft
+    // candidate reports DRAFT while still owning confirmed, export-eligible revisions — which is
+    // exactly the shape the seeded 洗漱台整理 has. An export-eligible revision is confirmed by
+    // definition, so that alone is the predicate.
     const revision = (await listRevisions(request, 'taskSops', root.name)).find((item) => item.exportEligible);
     if (!revision) continue;
     const detail = await apiJson<RevisionDetail>(request, 'GET', `/api/revisions/${encodeURIComponent(revision.name)}`);
@@ -154,6 +157,9 @@ test('Requirement create → ETag update → review → confirm → export → n
       legacySubsceneName: task.taskDisplayName,
       legacyVersionLabel: task.revision.versionLabel,
       legacyLifecycle: 'LIFECYCLE_CONFIRMED',
+      // Confirm rejects an item without a production flow, so a fixture that reaches 确认版本
+      // has to carry one. Divergent per-item robots and flows are covered by the next test.
+      productionFlow: 'PRODUCTION_FLOW_COLLECT',
     }],
     aggregateTarget: { collectionCount: '2' },
     requestedSceneNames: ['家庭场景'],
@@ -258,7 +264,9 @@ test('Requirement create → ETag update → review → confirm → export → n
   expect(yamlPath).toBeTruthy();
   const exportedDocument = YAML.parse(await readFile(yamlPath!, 'utf8'));
   expect(exportedDocument).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', schema_version: '2.0.1', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
+    // 2.1.0 since the export carries per-item robot and production flow; tests/unit/yaml-export
+    // asserts the same version.
+    format: 'coscene.sop.export', schema_version: '2.1.0', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
   }));
   expect(exportedDocument.requirement.production_requirement_items[0].target_collection_count).toBe(2);
   expect(exportedDocument.requirement.task_sop_details).toHaveLength(1);
@@ -323,4 +331,112 @@ test('Requirement create → ETag update → review → confirm → export → n
   await expect(listRevisions(request, 'requirements', draft.name)).resolves.toEqual([
     expect.objectContaining({ name: confirmed.revision.name, versionLabel: '0.0.1', exportEligible: true }),
   ]);
+});
+
+test('collection tasks take divergent robots and their own production flow', async ({ page, request }, testInfo) => {
+  const title = `E2E 分歧机型需求 R${testInfo.retry}`;
+  const [template, customer, task] = await Promise.all([
+    firstResource(request, 'requirements', (item) => !item.archived),
+    firstResource(request, 'customers', (item) => !item.archived),
+    firstExportableTaskRevision(request),
+  ]);
+  const robots = (await listResourceSummaries(request, 'robotModels'))
+    .filter((item) => !item.archived && item.currentRevision);
+  expect(robots.length, 'divergent per-item robots need two RobotModel fixtures').toBeGreaterThanOrEqual(2);
+
+  const createBody = object(cloneResourceForCreate(template.resource, {
+    displayName: title,
+    description: '每个采集任务各自的机器人型号和生产流程',
+    sourceId: `e2e-divergent-robots-r${testInfo.retry}`,
+    lifecycle: 'LIFECYCLE_DRAFT',
+    attachments: [],
+  }), 'Requirement');
+  const templateSpec = object(object(template.resource, 'Requirement template').spec, 'Requirement spec');
+  // Neither item carries a robot or a flow: the default fills the robot in, and the flow is the
+  // gap the banner has to report.
+  const productionItem = (id: string, displayName: string) => ({
+    id,
+    displayName,
+    taskSopRevision: task.revision.name,
+    target: { collectionCount: '1' },
+    legacySceneName: task.sceneDisplayName,
+    ...(task.subsceneCode ? { legacySubsceneCode: task.subsceneCode } : {}),
+    legacySubsceneName: task.taskDisplayName,
+    legacyVersionLabel: task.revision.versionLabel,
+    legacyLifecycle: 'LIFECYCLE_CONFIRMED',
+  });
+  createBody.spec = {
+    ...structuredClone(templateSpec),
+    customer: customer.name,
+    robotModelRevision: robots[0]!.currentRevision!,
+    projectDisplayName: 'E2E 项目',
+    productionItems: [productionItem('item-a', '采集任务甲'), productionItem('item-b', '采集任务乙')],
+    aggregateTarget: { collectionCount: '2' },
+    requestedSceneNames: ['家庭场景'],
+  };
+  const draft = await createResource(request, 'requirements', createBody);
+
+  const savePut = () => page.waitForResponse((response) =>
+    new URL(response.url()).pathname === resourcePath('requirements', draft.name) &&
+    response.request().method() === 'PUT');
+  const productionItems = async () => {
+    const detail = await getResource(request, 'requirements', draft.name);
+    const spec = object(object(detail.resource, 'Requirement').spec, 'Requirement spec');
+    return (spec.productionItems as JsonValue[]).map((item) => object(item, 'ProductionItem'));
+  };
+
+  await openAuthenticated(page);
+  await page.goto(`/requirements/${draft.uid}`);
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
+  await expect(page.getByText('2 / 2 采集任务缺少生产流程，确认前需补齐')).toBeVisible();
+
+  // Batch action reaches the ticked rows only, so tick every row first.
+  await page.getByRole('button', { name: '全选采集任务', exact: true }).click();
+  const batchRobot = page.getByLabel('批量机器人型号');
+  await batchRobot.selectOption({ index: 1 });
+  const primaryRobotId = await batchRobot.inputValue();
+  const batched = savePut();
+  await page.getByRole('button', { name: '批量设置机器人型号（2）' }).click();
+  expect((await batched).ok()).toBe(true);
+  await expect.poll(async () => (await productionItems()).map((item) => item.robotModelRevision))
+    .toEqual([expect.any(String), expect.any(String)]);
+  const batchedRevisions = (await productionItems()).map((item) => item.robotModelRevision);
+  expect(batchedRevisions[0]).toBe(batchedRevisions[1]);
+
+  // Divergence: the second collection task moves to the other robot on its own.
+  const secondRobot = page.getByLabel('采集任务乙 机器人型号');
+  await secondRobot.selectOption({ index: 2 });
+  const secondRobotId = await secondRobot.inputValue();
+  expect(secondRobotId).not.toBe(primaryRobotId);
+  const secondRobotLabel = (await secondRobot.locator('option:checked').textContent())?.trim() || '';
+  await expect(page.getByLabel('采集任务甲 机器人型号')).toHaveValue(primaryRobotId);
+  await expect.poll(async () => {
+    const items = await productionItems();
+    return items[0]!.robotModelRevision !== items[1]!.robotModelRevision;
+  }).toBe(true);
+
+  // One flow set, one still missing — the banner counts down rather than disappearing.
+  await page.getByLabel('采集任务甲 流程配置').selectOption('collect');
+  await expect(page.getByText('1 / 2 采集任务缺少生产流程，确认前需补齐')).toBeVisible();
+  await expect.poll(async () => (await productionItems())[0]!.productionFlow).toBe('PRODUCTION_FLOW_COLLECT');
+  expect((await productionItems())[1]!.productionFlow).toBeUndefined();
+
+  // Search reaches a robot that only one collection task uses — the requirement-level default is
+  // the other one.
+  await page.getByRole('button', { name: /^客户需求/ }).click();
+  await page.getByPlaceholder('搜索需求名称、客户、项目').fill(secondRobotLabel);
+  await expect(page.getByRole('button', { name: new RegExp(title) }).first()).toBeVisible();
+
+  // Readonly rows render plain text, and an item that never got a flow reads 未配置 — distinct
+  // from the 请选择 an editable row shows.
+  await page.goto(`/requirements/${draft.uid}`);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: '归档', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '归档库' })).toBeVisible();
+  await page.getByText(title, { exact: true }).click();
+  await expect(page.getByText('归档内容只读。')).toBeVisible();
+  await expect(page.getByLabel('采集任务甲 流程配置')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '批量设置机器人型号（0）' })).toHaveCount(0);
+  await expect(page.getByText('未配置', { exact: true })).toHaveCount(1);
+  await expect(page.locator('.subscene-group span[title="采集"]')).toHaveCount(1);
 });

@@ -37,6 +37,46 @@ describe('canonical export closure', () => {
     expect(bundle.content?.requirements[0].spec?.productionItems[0].taskSopRef).toBe(bundle.content?.taskSops[0].ref);
   });
 
+  it('collects one entry per distinct per-item robot revision and dedupes repeats', () => {
+    const twoRobots = requirementSnapshot();
+    const second = structuredClone(twoRobots.robotModelRevisions[0]);
+    second.name = 'robotModels/second-arm/revisions/v-0-0-1';
+    second.uid = 'robot-revision-second-arm';
+    second.snapshot!.name = 'robotModels/second-arm';
+    second.snapshot!.sourceId = 'second-arm';
+    second.snapshot!.uid = 'robot-second-arm';
+    second.snapshot!.displayName = '第二台机器人';
+    twoRobots.robotModelRevisions.push(second);
+    const items = twoRobots.requirementRevisions[0].snapshot!.spec!.productionItems;
+    items[0].robotModelRevision = second.name;
+    items[1].robotModelRevision = second.name;
+
+    const deduped = resolveExportClosure(twoRobots, {
+      kind: 'requirement', sourceId: 'REQ001', versionLabel: '0.0.1',
+    });
+    // Two items pinning the same revision plus the requirement-level default (decision #7).
+    expect(deduped.robotModelRevisions.map((item) => item.name)).toEqual([
+      twoRobots.robotModelRevisions[0].name,
+      second.name,
+    ]);
+
+    const distinct = structuredClone(twoRobots);
+    distinct.requirementRevisions[0].snapshot!.spec!.productionItems[1].robotModelRevision =
+      distinct.robotModelRevisions[0].name;
+    expect(resolveExportClosure(distinct, {
+      kind: 'requirement', sourceId: 'REQ001', versionLabel: '0.0.1',
+    }).robotModelRevisions).toHaveLength(2);
+  });
+
+  it('names the offending production item when its pinned robot revision is missing', () => {
+    const snapshot = requirementSnapshot();
+    const items = snapshot.requirementRevisions[0].snapshot!.spec!.productionItems;
+    items[1].robotModelRevision = 'robotModels/ghost-arm/revisions/v-0-0-1';
+    expect(() => resolveExportClosure(snapshot, {
+      kind: 'requirement', sourceId: 'REQ001', versionLabel: '0.0.1',
+    })).toThrow(`导出闭包缺少生产需求项机器人版本：${items[1].id} → robotModels/ghost-arm/revisions/v-0-0-1`);
+  });
+
   it('exports a standalone TaskSop without inventing Requirement or Robot dependencies', () => {
     const snapshot = convertLegacyToV1alpha1(structuredClone(seedData)).resources;
     const closure = resolveExportClosure(snapshot, {
@@ -65,6 +105,20 @@ describe('canonical export closure', () => {
     expect(() => resolveExportClosure(missing, {
       kind: 'requirement', sourceId: 'REQ001', versionLabel: '0.0.1',
     })).toThrow('缺少机器人版本');
+  });
+
+  it('names the missing requirement default instead of interpolating an empty name', () => {
+    // Reachable through the draft/preview export: that path forces the snapshot to
+    // CONFIRMED without running Confirm's completeness check, so an unfinished draft
+    // arrives here with no default at all. The old message ended in a bare colon.
+    const incomplete = requirementSnapshot();
+    incomplete.requirementRevisions[0].snapshot!.spec!.robotModelRevision = '';
+    expect(() => resolveExportClosure(incomplete, {
+      kind: 'requirement', sourceId: 'REQ001', versionLabel: '0.0.1',
+    })).toThrow('需求缺少默认机器人型号');
+    expect(() => resolveExportClosure(incomplete, {
+      kind: 'requirement', sourceId: 'REQ001', versionLabel: '0.0.1',
+    })).not.toThrow(/导出闭包缺少机器人版本：$/);
   });
 
   it('does not let one TaskSop frozen closure compensate for another missing dependency', () => {

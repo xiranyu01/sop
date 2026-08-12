@@ -11,6 +11,10 @@ import {
   normalizeDeliveryLanguage,
 } from '../../src/domain/deliveryLanguage';
 import { removeLegacySyntheticMaterialRandomizationConstraints } from '../../shared/domain/randomization';
+import {
+  resolveBundleItemFlowCode,
+  resolveBundleItemRobot,
+} from '../../shared/domain/requirementResolution';
 import { resolveRandomFieldDisplayName } from '../../shared/domain/randomFieldPresentation';
 import { verifyExportBundle } from './codec';
 
@@ -18,6 +22,7 @@ type TaskSopEntry = FrozenExportContent['taskSops'][number];
 type RequirementEntry = FrozenExportContent['requirements'][number];
 type AttachmentEntry = FrozenExportContent['attachments'][number];
 type GlobalFieldEntry = FrozenExportContent['globalFields'][number];
+type RobotModelRevisionEntry = FrozenExportContent['robotModelRevisions'][number];
 type TaskSopSpec = NonNullable<TaskSopEntry['spec']>;
 
 export type DomainYamlOptions = {
@@ -308,6 +313,19 @@ function forbiddenRequirementRules(values: OperationPolicy['forbidden']) {
   }));
 }
 
+// One shape for both the requirement-level default block and the per-item block:
+// the top-level `robot:` output must stay byte-identical (决策 #7), so neither
+// caller may drift from the other.
+function robotBlock(robot: RobotModelRevisionEntry): Record<string, unknown> {
+  return {
+    id: robot.source?.uid || '',
+    brand: robot.manufacturer || '',
+    model: robot.modelCode || robot.displayName,
+    terminal: robot.endEffector || '',
+    topics: topicMap(robot.topics),
+  };
+}
+
 function requirementDocument(
   content: FrozenExportContent,
   requirement: RequirementEntry,
@@ -352,13 +370,7 @@ function requirementDocument(
         email: customer.primaryContact?.email || '',
       },
     },
-    robot: {
-      id: robot.source?.uid || '',
-      brand: robot.manufacturer || '',
-      model: robot.modelCode || robot.displayName,
-      terminal: robot.endEffector || '',
-      topics: topicMap(robot.topics),
-    },
+    robot: robotBlock(robot),
     global_requirements: {
       extra_topic_requirements: requirement.spec?.extraTopicRequirementsText || '',
       global_randomization_requirements: global?.randomizationNotes || '',
@@ -390,11 +402,16 @@ function requirementDocument(
     production_requirement_items: productionItems.map((item, index) => {
       const { content: taskContent, taskSop: task } = selectedTaskSops[index];
       const scene = taskContent.scenes.find((candidate) => candidate.ref === task.sceneRef);
+      const itemRobot = resolveBundleItemRobot(item, content.robotModelRevisions, robot);
+      if (!itemRobot) throw new TypeError(`生产需求项缺少机器人型号信息：${item.displayName}`);
+      const flowCode = resolveBundleItemFlowCode(item);
       return {
         title: item.displayName,
         description: item.description || '',
         target_duration_hours: hours(item.target?.duration),
         target_collection_count: count(item.target?.collectionCount),
+        robot: robotBlock(itemRobot),
+        ...(flowCode ? { production_flow: flowCode } : {}),
         task_sop: {
           title: task.displayName,
           scene_name: scene?.displayName || item.legacySceneName || '',

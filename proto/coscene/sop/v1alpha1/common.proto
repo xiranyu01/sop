@@ -88,6 +88,26 @@ enum Priority {
   PRIORITY_P3 = 4;
 }
 
+// ProductionFlow is the closed set of production pipelines a collection task
+// can follow. Each value carries the stable slash-delimited code exported to
+// downstream importers; the code is external contract and must not change.
+// UI labels are localization and never appear here.
+enum ProductionFlow {
+  PRODUCTION_FLOW_UNSPECIFIED = 0;
+  // collect/transform/qa1/auto-annotate/annotate/qa2
+  PRODUCTION_FLOW_COLLECT_TRANSFORM_QA1_AUTO_ANNOTATE_ANNOTATE_QA2 = 1;
+  // collect/transform/qa1/annotate/qa2
+  PRODUCTION_FLOW_COLLECT_TRANSFORM_QA1_ANNOTATE_QA2 = 2;
+  // collect/qa1/annotate/qa2
+  PRODUCTION_FLOW_COLLECT_QA1_ANNOTATE_QA2 = 3;
+  // collect/annotate/qa1
+  PRODUCTION_FLOW_COLLECT_ANNOTATE_QA1 = 4;
+  // collect/transform/qa1
+  PRODUCTION_FLOW_COLLECT_TRANSFORM_QA1 = 5;
+  // collect
+  PRODUCTION_FLOW_COLLECT = 6;
+}
+
 // AnnotationReadiness records whether task-level annotation instructions are usable.
 enum AnnotationReadiness {
   ANNOTATION_READINESS_UNSPECIFIED = 0;

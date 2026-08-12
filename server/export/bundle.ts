@@ -7,7 +7,15 @@ import {
   type FrozenExportContent,
   type SourceIdentity,
 } from '../../gen/coscene/sop/export/v1alpha1/bundle_pb';
+import type {
+  ProductionItem,
+  RequirementSpec,
+} from '../../gen/coscene/sop/v1alpha1/requirement_pb';
 import type { TaskSop } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
+import {
+  resolveItemProductionFlow,
+  resolveItemRobotRevision,
+} from '../../shared/domain/requirementResolution';
 import { CanonicalDataError } from '../domain/errors';
 import { bundleRef, type ExportClosure } from './closure';
 import {
@@ -138,6 +146,20 @@ function taskSpec(
   };
 }
 
+// The closure guarantees both the per-item pin and the requirement-level default
+// are present, so a missing bundle ref here is a closure bug, not draft data.
+function itemRobotRef(
+  item: ProductionItem,
+  spec: RequirementSpec,
+  refs: Map<string, string>,
+): string {
+  const resolved = resolveItemRobotRevision(item, spec);
+  if (!resolved.value) throw new CanonicalDataError(`生产需求项缺少机器人版本：${item.id}`);
+  const ref = refs.get(resolved.value);
+  if (!ref) throw new CanonicalDataError(`导出闭包缺少生产需求项机器人版本：${item.id} → ${resolved.value}`);
+  return ref;
+}
+
 function rootRevision(closure: ExportClosure) {
   const revision = closure.root.kind === 'requirement'
     ? closure.requirements.find((item) => bundleRef('requirement', item.name) === closure.rootRef)
@@ -189,6 +211,13 @@ export function buildFrozenExportContent(closure: ExportClosure): FrozenExportCo
             displayName: production.displayName,
             description: production.description,
             taskSopRef: refs.get(production.taskSopRevision)!,
+            // Resolved per item: an item without its own robot carries the
+            // requirement-level default, which stays populated above (决策 #7).
+            robotModelRevisionRef: itemRobotRef(production, spec, refs),
+            // Presence-preserving: a revision that predates the field gets no value.
+            productionFlow: resolveItemProductionFlow(production).present
+              ? production.productionFlow
+              : undefined,
             target: workload(production.target),
             legacySceneName: production.legacySceneName,
             legacySubsceneCode: production.legacySubsceneCode,

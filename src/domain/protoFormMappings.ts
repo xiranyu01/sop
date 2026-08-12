@@ -7,6 +7,7 @@ import {
   Lifecycle as ProtoLifecycle,
   OperationStepSchema,
   Priority as ProtoPriority,
+  ProductionFlow as ProtoProductionFlow,
   type OperationStep as ProtoOperationStep,
 } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { DateSchema, type Date as ProtoDate } from '../../gen/google/type/date_pb';
@@ -17,6 +18,7 @@ import type {
   GlobalFieldStatus,
   OperationStep,
   Priority,
+  ProductionFlow,
 } from '../../shared/transport/restDto';
 
 const lifecycleTokens: Readonly<Record<number, EntityStatus>> = {
@@ -26,6 +28,18 @@ const lifecycleTokens: Readonly<Record<number, EntityStatus>> = {
 };
 const priorityTokens: Readonly<Record<number, Priority>> = {
   [ProtoPriority.P0]: 'P0', [ProtoPriority.P1]: 'P1', [ProtoPriority.P2]: 'P2', [ProtoPriority.P3]: 'P3',
+};
+// Keyed off the numeric enum value on purpose: a flow has four spellings (TS
+// member, ProtoJSON name, exported slash code, this token) and keying off any
+// name string works in one direction and silently fails in the other.
+// UNSPECIFIED is absent — the transport DTO spells "no flow" as an absent field.
+const productionFlowTokens: Readonly<Record<number, ProductionFlow>> = {
+  [ProtoProductionFlow.COLLECT_TRANSFORM_QA1_AUTO_ANNOTATE_ANNOTATE_QA2]: 'collect_transform_qa1_auto_annotate_annotate_qa2',
+  [ProtoProductionFlow.COLLECT_TRANSFORM_QA1_ANNOTATE_QA2]: 'collect_transform_qa1_annotate_qa2',
+  [ProtoProductionFlow.COLLECT_QA1_ANNOTATE_QA2]: 'collect_qa1_annotate_qa2',
+  [ProtoProductionFlow.COLLECT_ANNOTATE_QA1]: 'collect_annotate_qa1',
+  [ProtoProductionFlow.COLLECT_TRANSFORM_QA1]: 'collect_transform_qa1',
+  [ProtoProductionFlow.COLLECT]: 'collect',
 };
 const changeFrequencyTokens: Readonly<Record<number, ChangeFrequency>> = {
   [ProtoChangeFrequency.EVERY_RECORD]: 'every_record',
@@ -79,6 +93,13 @@ export const lifecycleView = {
 export const priorityView = {
   fromProto: (value: ProtoPriority): Priority => enumToken(value, priorityTokens, 'Priority'),
   toProto: (token: Priority): ProtoPriority => protoEnum(token, priorityTokens, 'Priority') as ProtoPriority,
+};
+export const productionFlowView = {
+  // Tolerant where the other views throw: proto3 enums are open, so a newer
+  // writer's value must reach an older reader as "no flow" rather than break
+  // the whole requirement. UNSPECIFIED takes the same path.
+  fromProto: (value: ProtoProductionFlow): ProductionFlow | undefined => productionFlowTokens[value],
+  toProto: (token: ProductionFlow): ProtoProductionFlow => protoEnum(token, productionFlowTokens, 'ProductionFlow') as ProtoProductionFlow,
 };
 export const changeFrequencyView = {
   fromProto: (value: ProtoChangeFrequency): ChangeFrequency => enumToken(value, changeFrequencyTokens, 'ChangeFrequency'),

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { create } from '@bufbuild/protobuf';
 import YAML from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
-import { ChangeFrequency, ChangePolicySchema, Lifecycle, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
+import { ChangeFrequency, ChangePolicySchema, Lifecycle, ProductionFlow, RevisionOrigin } from '../../gen/coscene/sop/v1alpha1/common_pb';
 import { DeliveryLanguageSchema } from '../../gen/coscene/sop/v1alpha1/requirement_pb';
 import { ObjectRandomizationSchema, RobotRandomizationSchema } from '../../gen/coscene/sop/v1alpha1/task_sop_pb';
 import { exportRequirementYaml, exportTaskSopYaml } from '../../server/export';
@@ -120,6 +120,66 @@ describe('deterministic canonical YAML export', () => {
   it('matches the reviewed Starbase interoperability golden', async () => {
     const output = exportRequirementYaml(starbaseInteropResources(), 'REQ001', '0.0.1');
     expect(output).toBe(await golden('starbase-interop.golden.yaml'));
+  });
+
+  it('renders a per-item robot block and the production-flow code for each production item', () => {
+    const snapshot = starbaseInteropResources();
+    const spec = snapshot.requirementRevisions[0].snapshot!.spec!;
+    const second = structuredClone(snapshot.robotModelRevisions[0]);
+    second.name = 'robotModels/second-arm/revisions/v-0-0-1';
+    second.uid = '2f1b8c40-0000-4000-8000-00000000a001';
+    second.snapshot!.name = 'robotModels/second-arm';
+    second.snapshot!.sourceId = 'second-arm';
+    second.snapshot!.uid = '2f1b8c40-0000-4000-8000-00000000a002';
+    second.snapshot!.manufacturer = '第二厂商';
+    second.snapshot!.modelCode = 'SecondArm';
+    second.snapshot!.endEffector = '吸盘';
+    snapshot.robotModelRevisions.push(second);
+    spec.productionItems[0].robotModelRevision = second.name;
+    spec.productionItems[0].productionFlow = ProductionFlow.COLLECT_TRANSFORM_QA1_AUTO_ANNOTATE_ANNOTATE_QA2;
+
+    const output = exportRequirementYaml(snapshot, 'REQ001', '0.0.1');
+    const document = YAML.parse(output);
+    const item = document.requirement.production_requirement_items[0];
+
+    expect(item.robot).toEqual({
+      id: '2f1b8c40-0000-4000-8000-00000000a002',
+      brand: '第二厂商',
+      model: 'SecondArm',
+      terminal: '吸盘',
+      topics: { '/camera': '' },
+    });
+    expect(item.production_flow).toBe('collect/transform/qa1/auto-annotate/annotate/qa2');
+    // 决策 #7: the requirement-level block is untouched by a per-item override.
+    expect(document.requirement.robot).toEqual({
+      id: '0614b3b9-ee56-5f99-8397-822cb4e79e20',
+      brand: 'coScene',
+      model: 'Baseline',
+      terminal: '夹爪',
+      topics: { '/camera': '' },
+    });
+    // Key order must stay deterministic or every bundle hash churns.
+    expect(output).toContain([
+      '      target_collection_count: 2',
+      '      robot:',
+    ].join('\n'));
+    expect(output).toMatch(/ {8}\/camera: ""\n {6}production_flow: collect\/transform\/qa1\/auto-annotate\/annotate\/qa2\n {6}task_sop:/);
+  });
+
+  it('omits production_flow entirely for a legacy revision and for an explicit unset choice', () => {
+    const legacy = starbaseInteropResources();
+    const legacyOutput = exportRequirementYaml(legacy, 'REQ001', '0.0.1');
+    const legacyItem = YAML.parse(legacyOutput).requirement.production_requirement_items[0];
+
+    // 决策 #8: absent, not empty — the item still renders its inherited robot.
+    expect(legacyItem).not.toHaveProperty('production_flow');
+    expect(legacyOutput).not.toContain('production_flow');
+    expect(legacyItem.robot).toEqual(YAML.parse(legacyOutput).requirement.robot);
+
+    const explicitUnspecified = starbaseInteropResources();
+    explicitUnspecified.requirementRevisions[0].snapshot!.spec!.productionItems[0].productionFlow =
+      ProductionFlow.UNSPECIFIED;
+    expect(exportRequirementYaml(explicitUnspecified, 'REQ001', '0.0.1')).not.toContain('production_flow');
   });
 
   it('never rewrites enum-looking free text', () => {

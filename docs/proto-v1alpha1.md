@@ -97,6 +97,8 @@ The service layer must additionally validate rules that require graph or collect
 - initial and target state entries have unique object IDs, and confirmed SOPs cover every object required by the task outcome;
 - every `TopicBinding.id` is unique in a RobotModel revision and every `TopicRequirement.topic_id` resolves in the pinned `RobotModelRevision.snapshot`;
 - confirmation requires complete SOP object/robot/operation/annotation state and complete Requirement customer, robot, priority, deadline, production-item, and positive workload fields;
+- every Requirement production item resolves to a robot model revision — its own `robot_model_revision` when populated, otherwise the `RequirementSpec.robot_model_revision` default — and confirmation rejects the requirement naming the item that resolves to neither;
+- every Requirement production item carries a present `production_flow` other than `PRODUCTION_FLOW_UNSPECIFIED`, and confirmation rejects the requirement naming the item that does not; both of these are Confirm-time service rules rather than Protovalidate rules, because stored snapshots are revalidated on read and can never be rewritten. This is a rule about *passing Confirm*, not an invariant of stored CONFIRMED data: a requirement imported as already-CONFIRMED never traverses Confirm, so its items keep an absent `production_flow` permanently. Readers and exporters must treat the field as optional on every revision, whatever its lifecycle;
 - revision snapshot names and `previous_revision` references share the same parent as the revision;
 - every resource reference exists and points to an allowed lifecycle/revision;
 - a Requirement can only be confirmed when all pinned SOP revisions are confirmed;

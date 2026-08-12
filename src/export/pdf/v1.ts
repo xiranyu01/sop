@@ -4,6 +4,10 @@ import type { FrozenExportContent } from '../../../gen/coscene/sop/export/v1alph
 import { materialStateSentence } from '../../../shared/domain/materialStatePresentation';
 import { resolveRandomFieldDisplayName } from '../../../shared/domain/randomFieldPresentation';
 import { removeLegacySyntheticMaterialRandomizationConstraints } from '../../../shared/domain/randomization';
+import {
+  resolveBundleItemFlowCode,
+  resolveBundleItemRobot,
+} from '../../../shared/domain/requirementResolution';
 import type { PdfAttachment, PdfDocumentModel, PdfSection, PdfTable } from './model';
 
 export const PDF_RENDERER_V1 = 'sop-pdf-v1' as const;
@@ -213,12 +217,16 @@ function requirementSections(view: ExportBundleView): PdfSection[] {
   const rootAttachments = attachments(view.content, requirement.attachmentRefs);
   const productionRows = (spec?.productionItems ?? []).map((item) => {
     const task = view.content.taskSops.find((candidate) => candidate.ref === item.taskSopRef);
+    const itemRobot = resolveBundleItemRobot(item, view.content.robotModelRevisions, robot);
     return [
       item.displayName,
       text(item.description),
       text(task?.displayName),
       text(task?.revision?.versionLabel || item.legacyVersionLabel),
       '已确认',
+      text(itemRobot?.displayName),
+      // Absent flow, explicit unset, and an unknown newer value all render as '—'.
+      text(resolveBundleItemFlowCode(item)),
       hours(item.target?.duration),
       item.target?.collectionCount === undefined ? '—' : String(item.target.collectionCount),
     ];
@@ -261,7 +269,7 @@ function requirementSections(view: ExportBundleView): PdfSection[] {
     { id: 'global-annotation-forbidden', heading: '标注禁止操作', items: operationItems(global?.annotationPolicy, 'forbidden') },
     {
       id: 'production-items', heading: '生产需求项', tables: [{
-        columns: ['生产需求项', '描述', '任务 SOP', '版本', '状态', '目标采集时长', '目标采集数量'],
+        columns: ['生产需求项', '描述', '任务 SOP', '版本', '状态', '机器人型号', '生产流程', '目标采集时长', '目标采集数量'],
         rows: productionRows,
       }],
     },

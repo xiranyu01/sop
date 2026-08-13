@@ -138,7 +138,7 @@ function repositoryMethods(source) {
     return new Set();
   }
   const body = source.slice(open + 1, close);
-  return new Set([...body.matchAll(/^\s*([A-Za-z_$][\w$]*)\s*\(/gm)].map((match) => match[1]));
+  return new Set([...body.matchAll(/^\s*([A-Za-z_$][\w$]*)\??\s*\(/gm)].map((match) => match[1]));
 }
 
 if (manifest.version !== 1 || !Array.isArray(manifest.routes) || !Array.isArray(manifest.repositoryMutations)) {
@@ -212,6 +212,7 @@ const repositoryMethodExceptions = new Set([
   'listRevisions',
   'getExportBundle',
   'loadReviewedDependencies',
+  'replayTaskSopMutation',
   'getMeta',
   'assertMeta',
   'auditProjectionParity',

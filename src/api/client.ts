@@ -163,9 +163,15 @@ export class ApiClient {
     });
   }
 
-  update(kind: ResourceKind, name: string, resource: JsonValue, expectedEtag: string): Promise<ResourceMutationResult> {
+  update(
+    kind: ResourceKind,
+    name: string,
+    resource: JsonValue,
+    expectedEtag: string,
+    mutation?: { mutationId: string; editorSessionId: string },
+  ): Promise<ResourceMutationResult> {
     return this.request(`/api/resources/${kind}/${encodeURIComponent(name)}`, {
-      method: 'PUT', body: { resource, expectedEtag },
+      method: 'PUT', body: { resource, expectedEtag, ...mutation },
     });
   }
 

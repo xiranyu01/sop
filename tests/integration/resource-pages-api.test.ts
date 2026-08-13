@@ -7,6 +7,7 @@ import { createD1ResourceRepository } from '../../server/repositories/d1Resource
 import { seedData } from '../e2e/fixtures/seed';
 import { SqliteD1 } from '../helpers/sqliteD1';
 import { resourceStorageMigrationsSql } from '../helpers/resourceStorageMigrations';
+import type { ResourceDetail, ResourceMutationResult } from '../../shared/transport/resourceDto';
 
 async function harness() {
   const db = new SqliteD1(resourceStorageMigrationsSql);
@@ -556,6 +557,50 @@ describe('Pages resource API adapter', () => {
       productionItemCount: requirementResource.spec.productionItems?.length ?? 0,
       aggregateDuration: requirementResource.spec.aggregateTarget?.duration,
     });
+    db.close();
+  });
+
+  it('replays an identical TaskSop mutation and rejects mutation-id reuse with different content', async () => {
+    const { db, data, request } = await harness();
+    const task = data.currents.find((item) => item.protoSchema.endsWith('.TaskSop'))!;
+    const detailResponse = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}`);
+    const confirmed = await detailResponse.json() as ResourceDetail;
+    const draftResponse = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedEtag: confirmed.etag }),
+    });
+    expect(draftResponse.status).toBe(200);
+    const detail = (await draftResponse.json() as ResourceMutationResult).resource;
+    const changed = { ...(detail.resource as Record<string, unknown>), displayName: 'Idempotent TaskSop' };
+    const body = {
+      resource: changed,
+      expectedEtag: detail.etag,
+      mutationId: 'api-mutation-1',
+      editorSessionId: 'api-editor-1',
+    };
+
+    const first = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const firstBody = await first.json();
+    expect(first.status, JSON.stringify(firstBody)).toBe(200);
+    const firstResult = firstBody as ResourceMutationResult;
+
+    const replay = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({ resource: { etag: firstResult.resource.etag } });
+    expect(db.database.prepare('SELECT count(*) AS count FROM SOP_RESOURCE_MUTATION_RECEIPTS').get()).toEqual({ count: 1 });
+
+    const reused = await request(`/api/resources/taskSops/${encodeURIComponent(task.name)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, resource: { ...changed, displayName: 'Different content' } }),
+    });
+    expect(reused.status).toBe(409);
+    await expect(reused.json()).resolves.toMatchObject({ error: { kind: 'IDEMPOTENCY_KEY_REUSE' } });
     db.close();
   });
 

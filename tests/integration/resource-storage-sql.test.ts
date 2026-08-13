@@ -183,6 +183,7 @@ describe.skipIf(!sqliteAvailable)('resource storage SQL contract', () => {
       'SOP_CURRENT_RESOURCES',
       'SOP_EXPORT_BUNDLES',
       'SOP_META',
+      'SOP_RESOURCE_MUTATION_RECEIPTS',
       'SOP_REVIEWED_DEPENDENCIES',
       'SOP_REVISIONS',
       'SOP_TASK_SOP_COPY_COUNTERS',

@@ -49,9 +49,9 @@ export function createApiResourceSaveTransport<T>(
       return { value: options.decode(detail.resource), etag: detail.etag };
     },
 
-    async save(resourceName, value, expectedEtag) {
+    async save(resourceName, value, expectedEtag, mutation?: { mutationId: string; editorSessionId: string }) {
       try {
-        const result = await options.client.update(options.kind, resourceName, options.encode(value), expectedEtag);
+        const result = await options.client.update(options.kind, resourceName, options.encode(value), expectedEtag, mutation);
         options.onDetail?.(result.resource);
         return { etag: result.resource.etag, warning: result.warning };
       } catch (error) {

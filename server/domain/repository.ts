@@ -130,6 +130,20 @@ export type CurrentResourceWriteInput = ResourceWriteInput & {
   reviewedManifestDigest?: string;
 };
 
+export type IdempotentTaskSopUpdateInput = {
+  name: string;
+  expectedEtag: string;
+  mutationId: string;
+  requestDigest: string;
+  editorSessionId?: string;
+  current: CurrentResourceWriteInput;
+};
+
+export type IdempotentTaskSopUpdateResult = {
+  record: CurrentResourceRecord;
+  idempotent: boolean;
+};
+
 export type RevisionWriteInput = {
   protoSchema: string;
   revisionProtoJson: string;
@@ -225,6 +239,14 @@ export class ResourceConflictError extends ResourceRepositoryError {
   }
 }
 
+export class MutationIdReuseError extends ResourceRepositoryError {
+  readonly code = 'IDEMPOTENCY_KEY_REUSE' as const;
+  constructor(readonly mutationId: string) {
+    super(`Mutation id was already used for different content: ${mutationId}`);
+    this.name = 'MutationIdReuseError';
+  }
+}
+
 export class ProjectionMismatchError extends ResourceRepositoryError {
   readonly code = 'PROJECTION_MISMATCH' as const;
   constructor(readonly resourceName: string, readonly fields: string[]) {
@@ -271,6 +293,10 @@ export interface ResourceRepository {
     robotModels: string[];
   }): Promise<CurrentResourceRecord>;
   updateCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
+  replayTaskSopMutation?(
+    input: Pick<IdempotentTaskSopUpdateInput, 'name' | 'mutationId' | 'requestDigest'>,
+  ): Promise<IdempotentTaskSopUpdateResult | undefined>;
+  updateTaskSopIdempotent?(input: IdempotentTaskSopUpdateInput): Promise<IdempotentTaskSopUpdateResult>;
   archiveCurrent(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
   archiveCurrentForLibrary(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;
   restoreCurrentFromLibrary(name: string, expectedEtag: string, input: CurrentResourceWriteInput): Promise<CurrentResourceRecord>;

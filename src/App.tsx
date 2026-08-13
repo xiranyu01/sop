@@ -55,6 +55,13 @@ import {
   encodeSceneForm,
 } from './domain/protoFormMapping';
 import { createApiResourceSaveTransport } from './persistence/apiResourceSaveTransport';
+import { IndexedDbTaskSopDraftStore } from './persistence/taskSopDraftStore';
+import {
+  TaskSopSyncEngine,
+  type TaskSopConflictState,
+  type TaskSopSyncState,
+  type TaskSopSyncTransport,
+} from './persistence/taskSopSyncEngine';
 import { DependencyReviewFlow } from './persistence/dependencyReviewFlow';
 import { ResourceSaveQueueRegistry } from './persistence/resourceSaveQueueRegistry';
 import type { PdfDocumentModel } from './export/pdf';
@@ -1602,7 +1609,13 @@ export default function App() {
   const [routeReady, setRouteReady] = useState(false);
   const resourceDetails = useRef(new Map<string, ResourceDetail>());
   const saveQueues = useRef(new ResourceSaveQueueRegistry());
-  const robotModelSaveQueues = useRef(new Map<string, { pending?: string[]; running: boolean }>());
+  const taskSopDraftStore = useRef(new IndexedDbTaskSopDraftStore<SubsceneVersion>());
+  const taskSopSyncEngines = useRef(new Map<string, TaskSopSyncEngine<SubsceneVersion>>());
+  const [taskSopConflict, setTaskSopConflict] = useState<{
+    resourceName: string;
+    value: TaskSopConflictState<SubsceneVersion>;
+  } | null>(null);
+  const [taskSopBlockingMessage, setTaskSopBlockingMessage] = useState('');
   const masterDraftSyncSequence = useRef(0);
   const reviewFlows = useRef(new Map<string, DependencyReviewFlow>());
   const applyingRoute = useRef(false);
@@ -1615,6 +1628,15 @@ export default function App() {
 
   useEffect(() => saveQueues.current.subscribe(() => setSaveStateEpoch((value) => value + 1)), []);
   useEffect(() => saveQueues.current.installNavigationWarning(window), []);
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (![...taskSopSyncEngines.current.values()].some((engine) => engine.hasUnsavedChanges)) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => window.removeEventListener('beforeunload', beforeUnload);
+  }, []);
 
   function replaceMasterValue(kind: MasterResourceKind, value: MasterResourceValue) {
     const name = resourceNameOf(value);
@@ -1832,9 +1854,11 @@ export default function App() {
       await queue.whenSettled();
       if (queue.hasUnsavedChanges) throw new Error('仍有尚未成功保存的修改，处理保存问题后才能归档');
     }
+    if (kind === 'taskSops') await flushTaskSopBeforeBoundary(name, '归档');
     const detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
     const result = await resourceClient.archive(kind, name, detail.etag);
     saveQueues.current.remove(name);
+    if (kind === 'taskSops') removeTaskSopSyncEngine(name, true);
     resourceDetails.current.delete(name);
     if (kind === 'requirements') {
       setData((current) => ({
@@ -1923,6 +1947,14 @@ export default function App() {
     ]);
     await hydrateOwnerAttachmentReferences('taskSops', name, [detail.resource, ...revisions.map((revision) => revision.resource)]);
     const loaded = replaceTaskSopResource(detail, revisions);
+    const editable = activeEditableDraft(loaded.subscene.versions);
+    if (editable) {
+      const engine = await ensureTaskSopSyncEngine(name, editable, detail);
+      loaded.subscene = {
+        ...loaded.subscene,
+        versions: loaded.subscene.versions.map((version) => version.version === editable.version ? engine.localValue : version),
+      };
+    }
     setSelectedSubsceneCode(loaded.identity.code);
     return loaded.subscene;
   }
@@ -1977,6 +2009,8 @@ export default function App() {
         ...revisions.map((revision) => revision.resource),
       ]);
       const loaded = replaceTaskSopResource(detail, revisions);
+      const editable = activeEditableDraft(loaded.subscene.versions);
+      if (editable) await ensureTaskSopSyncEngine(target.ownerName, editable, detail);
       if (!loaded.subscene.versions.some((version) => version.version === target.versionLabel)) {
         throw new Error(`找不到任务 SOP 版本 v${target.versionLabel}`);
       }
@@ -2079,6 +2113,82 @@ export default function App() {
     }));
   }
 
+  function handleTaskSopSyncState(resourceName: string, state: TaskSopSyncState<SubsceneVersion>) {
+    if (state.kind === 'conflict') {
+      setTaskSopConflict({ resourceName, value: state.conflict });
+      return;
+    }
+    setTaskSopConflict((current) => current?.resourceName === resourceName ? null : current);
+    if (state.kind === 'blocked') {
+      setTaskSopBlockingMessage(state.message);
+      return;
+    }
+    setTaskSopBlockingMessage('');
+    if (state.kind === 'terminal') {
+      if (state.code === 'UNAUTHORIZED' || state.code === 'HTTP_403') {
+        clearStoredPassword();
+        setLocked(true);
+      }
+      setError(`修改已记录，处理以下问题后会继续保存：${state.message}`);
+    }
+  }
+
+  async function ensureTaskSopSyncEngine(
+    name: string,
+    base: SubsceneVersion,
+    detail: ResourceDetail,
+  ): Promise<TaskSopSyncEngine<SubsceneVersion>> {
+    const existing = taskSopSyncEngines.current.get(name);
+    if (existing) {
+      await existing.initialized();
+      return existing;
+    }
+    const transport = createApiResourceSaveTransport<SubsceneVersion>({
+      client: resourceClient,
+      kind: 'taskSops',
+      encode: (value) => {
+        const authoritative = resourceDetails.current.get(name);
+        if (!authoritative) throw new Error(`资源详情未加载：${name}`);
+        return encodeTaskSopVersion(value, authoritative.resource, taskSopContext());
+      },
+      decode: (resource) => {
+        const versions = decodeTaskSopVersions(resource, [], taskSopContext());
+        if (!versions.length) throw new Error(`任务 SOP 当前版本不可编辑：${name}`);
+        return latest(versions);
+      },
+      onDetail: (value) => updateResourceEtag('taskSops', value),
+    }) as TaskSopSyncTransport<SubsceneVersion>;
+    const engine = new TaskSopSyncEngine({
+      resourceName: name,
+      initial: { value: base, etag: detail.etag },
+      store: taskSopDraftStore.current,
+      transport,
+      onLocalValue: (value) => replaceTaskSopVersion(name, value),
+      onStateChange: (state) => handleTaskSopSyncState(name, state),
+    });
+    taskSopSyncEngines.current.set(name, engine);
+    await engine.initialized();
+    replaceTaskSopVersion(name, engine.localValue);
+    return engine;
+  }
+
+  function removeTaskSopSyncEngine(name: string, removeDraft = false) {
+    const engine = taskSopSyncEngines.current.get(name);
+    engine?.destroy();
+    taskSopSyncEngines.current.delete(name);
+    if (removeDraft) void taskSopDraftStore.current.remove(name);
+    setTaskSopConflict((current) => current?.resourceName === name ? null : current);
+  }
+
+  async function flushTaskSopBeforeBoundary(name: string, operation: string): Promise<void> {
+    const engine = taskSopSyncEngines.current.get(name);
+    if (!engine) return;
+    await engine.flushNow();
+    if (engine.hasUnsavedChanges) {
+      throw new Error(`仍有修改尚未同步，处理保存问题后才能${operation}`);
+    }
+  }
+
   async function saveRequirementDraft(
     requirement: Requirement,
     selected: RequirementVersion,
@@ -2150,49 +2260,26 @@ export default function App() {
     if (selected.status === 'confirmed') {
       const started = await resourceClient.startDraft('taskSops', name, detail.etag);
       saveQueues.current.remove(name);
+      removeTaskSopSyncEngine(name, true);
       const revisions = await loadRevisionDetails('taskSops', name);
       const loaded = replaceTaskSopResource(started.resource, revisions).subscene;
       detail = started.resource;
       base = latest(loaded.versions);
       setSelectedSubsceneVersion(base.version);
     }
-    const next = { ...base, ...patch, status: 'draft' as const };
-    let queue = saveQueues.current.get<SubsceneVersion>(name);
-    if (!queue) {
-      queue = saveQueues.current.register('taskSops', {
-        resourceName: name,
-        initial: { value: base, etag: detail.etag },
-        transport: createApiResourceSaveTransport<SubsceneVersion>({
-          client: resourceClient,
-          kind: 'taskSops',
-          encode: (value) => {
-            const authoritative = resourceDetails.current.get(name);
-            if (!authoritative) throw new Error(`资源详情未加载：${name}`);
-            return encodeTaskSopVersion(value, authoritative.resource, taskSopContext());
-          },
-          decode: (resource) => {
-            const versions = decodeTaskSopVersions(resource, [], taskSopContext());
-            if (!versions.length) throw new Error(`任务 SOP 当前版本不可编辑：${name}`);
-            return latest(versions);
-          },
-          onDetail: (value) => updateResourceEtag('taskSops', value),
-        }),
-      });
-    }
+    const engine = await ensureTaskSopSyncEngine(name, base, detail);
+    const next = { ...engine.localValue, ...patch, status: 'draft' as const };
     replaceTaskSopVersion(name, next);
-    const state = await queue.submit(next);
-    if (state.kind === 'paused-conflict' || state.kind === 'paused-retryable' || state.kind === 'paused-terminal') {
-      if (state.kind === 'paused-terminal' && state.code === 'ALREADY_EXISTS') {
-        const message = state.message;
-        queue.discardTerminalChanges(true);
-        replaceTaskSopVersion(name, queue.localValue);
-        window.alert(message);
-        return undefined;
-      }
-      setError(state.message);
-      return undefined;
+    const patchKeys = Object.keys(patch);
+    const urgency = patchKeys.every((key) => ['description', 'operation', 'annotation'].includes(key))
+      ? 'debounced'
+      : 'immediate';
+    if (!await engine.submit(next, urgency)) return undefined;
+    if (patch.attachments) {
+      await engine.flushNow();
+      if (engine.hasUnsavedChanges) return undefined;
     }
-    const saved = queue.localValue;
+    const saved = engine.localValue;
     replaceTaskSopVersion(name, saved);
     return saved;
   }
@@ -2208,46 +2295,16 @@ export default function App() {
     if (robotModels.length !== new Set(robotModelIds).size) {
       throw new Error('有机器人型号尚未加载完成，请刷新后重试');
     }
-    const queue = robotModelSaveQueues.current.get(name) ?? { running: false };
-    queue.pending = [...robotModelIds];
-    robotModelSaveQueues.current.set(name, queue);
-    if (queue.running) return true;
-    queue.running = true;
-    let successful = true;
-    try {
-      while (queue.pending) {
-        const nextIds = queue.pending;
-        queue.pending = undefined;
-        const detail = resourceDetails.current.get(name) ?? await resourceClient.get('taskSops', name);
-        const nextRobotModels = nextIds.flatMap((id) => {
-          const model = dataRef.current.robotModels.find((item) => item.id === id);
-          const modelName = model ? resourceNameOf(model) : undefined;
-          return modelName ? [modelName] : [];
-        });
-        const result = await run(
-          () => resourceClient.updateTaskSopRobotModels(name, nextRobotModels, detail.etag),
-        );
-        if (!result) {
-          successful = false;
-          queue.pending = undefined;
-          break;
-        }
-        updateResourceEtag('taskSops', result.resource);
-        setData((current) => ({
-          ...current,
-          scenes: current.scenes.map((scene) => ({
-            ...scene,
-            subscenes: scene.subscenes.map((item) => resourceNameOf(item) === name
-              ? { ...item, versions: item.versions.map((version) => ({ ...version, robotModelIds: [...nextIds] })) }
-              : item),
-          })),
-        }));
-      }
-    } finally {
-      queue.running = false;
-      if (!queue.pending) robotModelSaveQueues.current.delete(name);
-    }
-    return successful;
+    const detail = resourceDetails.current.get(name) ?? await resourceClient.get('taskSops', name);
+    const currentSubscene = dataRef.current.scenes
+      .flatMap((scene) => scene.subscenes)
+      .find((item) => resourceNameOf(item) === name) ?? subscene;
+    const draft = activeEditableDraft(currentSubscene.versions) ?? latest(currentSubscene.versions);
+    if (draft.status !== 'draft') throw new Error('请先创建任务 SOP 草稿，再修改适用机型');
+    const engine = await ensureTaskSopSyncEngine(name, draft, detail);
+    const next = { ...engine.localValue, robotModelIds: [...robotModelIds] };
+    replaceTaskSopVersion(name, next);
+    return engine.submit(next, 'immediate');
   }
 
   async function copyTaskSop(subscene: Subscene): Promise<void> {
@@ -2276,6 +2333,7 @@ export default function App() {
       await pendingQueue.whenSettled();
       if (pendingQueue.hasUnsavedChanges) throw new Error('仍有尚未成功保存的本地修改，处理保存冲突后才能确认版本');
     }
+    if (kind === 'taskSops') await flushTaskSopBeforeBoundary(name, '确认版本');
     const detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
     let flow = reviewFlows.current.get(name);
     if (!flow || flow.state.kind === 'confirmed') {
@@ -2311,6 +2369,7 @@ export default function App() {
         replaceRequirementResource(result.resource, revisions);
         setSelectedRequirementVersion(result.revision.versionLabel);
       } else {
+        removeTaskSopSyncEngine(name, true);
         replaceTaskSopResource(result.resource, revisions);
         setSelectedSubsceneVersion(result.revision.versionLabel);
       }
@@ -2371,6 +2430,7 @@ export default function App() {
         throw new Error('仍有尚未成功保存的修改，处理保存问题后才能导出');
       }
     }
+    await flushTaskSopBeforeBoundary(name, '导出');
     return resourceClient.exportDraft('taskSops', name, format);
   }
 
@@ -2523,6 +2583,8 @@ export default function App() {
 
       next.scenes = appendTaskSopSummariesToScenes(next.scenes, pages.taskSops?.summaries ?? []);
 
+      for (const engine of taskSopSyncEngines.current.values()) engine.destroy();
+      taskSopSyncEngines.current.clear();
       saveQueues.current.clear(true);
       reviewFlows.current.clear();
       setResourcePages(pages);
@@ -2969,11 +3031,19 @@ export default function App() {
                 }
                 return Boolean(created);
               }
-              const saved = await run(
-                () => saveTaskSopDraft(subscene, target, patch),
-                target.status === 'confirmed' ? '已创建草稿版本' : '已保存任务 SOP 版本',
-              );
-              return Boolean(saved);
+              if (target.status === 'confirmed') {
+                const saved = await run(
+                  () => saveTaskSopDraft(subscene, target, patch),
+                  '已创建草稿版本',
+                );
+                return Boolean(saved);
+              }
+              try {
+                return Boolean(await saveTaskSopDraft(subscene, target, patch));
+              } catch (cause) {
+                setError(cause instanceof Error ? cause.message : String(cause));
+                return false;
+              }
             }}
             onDeleteSubsceneVersion={async (sceneId, code, _version) => {
               const subscene = dataRef.current.scenes.find((item) => item.id === sceneId)?.subscenes.find((item) => item.code === code);
@@ -2983,6 +3053,7 @@ export default function App() {
               const result = await run(() => resourceClient.discardDraft('taskSops', name, detail.etag), '草稿版本已删除');
               if (!result) return;
               saveQueues.current.remove(name);
+              removeTaskSopSyncEngine(name, true);
               if (result.resource.archived || result.resource.lifecycle?.endsWith('ARCHIVED')) {
                 setData((current) => ({
                   ...current,
@@ -3181,8 +3252,149 @@ export default function App() {
             }}
           />
         )}
+        {taskSopConflict && (
+          <TaskSopConflictModal
+            conflict={taskSopConflict.value}
+            onResolve={async (resolutions) => {
+              const engine = taskSopSyncEngines.current.get(taskSopConflict.resourceName);
+              if (!engine) throw new Error('保存会话已失效，请重新打开任务 SOP');
+              await engine.resolveConflict(resolutions);
+            }}
+          />
+        )}
+        {taskSopBlockingMessage && (
+          <Modal title="暂时无法继续编辑" onClose={() => undefined}>
+            <div className="modal-body">
+              <div className="notice error" role="alert">{taskSopBlockingMessage}</div>
+            </div>
+          </Modal>
+        )}
       </main>
     </div>
+  );
+}
+
+function conflictDisplayValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === undefined) return '（删除）';
+  return JSON.stringify(value, null, 2);
+}
+
+function parseConflictManualValue(text: string, exemplar: unknown): unknown {
+  if (typeof exemplar === 'string') return text;
+  if (text.trim() === '（删除）' || text.trim() === '') return undefined;
+  return JSON.parse(text);
+}
+
+function conflictPathLabel(path: Array<string | number>): string {
+  const labels: Record<string, string> = {
+    title: '任务 SOP 名称',
+    description: '任务 SOP 描述',
+    robotModelIds: '适用机器人型号',
+    operation: '采集配置',
+    annotation: '标注配置',
+    steps: '步骤',
+    materials: '物料',
+    attachments: '附件',
+  };
+  return path.map((part) => labels[String(part)] ?? String(part).replace(/^(id|uid|name):/u, '')).join(' / ') || '整个任务 SOP';
+}
+
+function TaskSopConflictModal({
+  conflict,
+  onResolve,
+}: {
+  conflict: TaskSopConflictState<SubsceneVersion>;
+  onResolve: (resolutions: Map<string, unknown>) => Promise<void>;
+}) {
+  const signature = JSON.stringify(conflict.conflicts.map((item) => [item.path, item.localValue, item.remoteValue]));
+  const [resolutions, setResolutions] = useState<Map<string, unknown>>(new Map());
+  const [manualValues, setManualValues] = useState<Record<string, string>>({});
+  const [resolving, setResolving] = useState(false);
+  const [resolutionError, setResolutionError] = useState('');
+
+  useEffect(() => {
+    setResolutions(new Map());
+    setManualValues({});
+    setResolutionError('');
+  }, [signature]);
+
+  function choose(key: string, value: unknown) {
+    setResolutions((current) => new Map(current).set(key, structuredClone(value)));
+  }
+
+  return (
+    <Modal title="检测到其他编辑者的修改" onClose={() => undefined}>
+      <div className="modal-body task-sop-conflict-modal">
+        <p>没有冲突的内容已经自动合并。请只处理下面这些同时被修改的内容。</p>
+        {conflict.conflicts.map((item) => {
+          const key = JSON.stringify(item.path);
+          const selected = resolutions.get(key);
+          const hasSelection = resolutions.has(key);
+          const exemplar = item.localValue ?? item.remoteValue;
+          return (
+            <section className="conflict-field" key={key}>
+              <h3>{conflictPathLabel(item.path)}</h3>
+              <div className="conflict-options">
+                <button
+                  type="button"
+                  className={hasSelection && JSON.stringify(selected) === JSON.stringify(item.remoteValue) ? 'selected' : ''}
+                  onClick={() => choose(key, item.remoteValue)}
+                >
+                  <strong>服务器最新版本</strong>
+                  <pre>{conflictDisplayValue(item.remoteValue)}</pre>
+                </button>
+                <button
+                  type="button"
+                  className={hasSelection && JSON.stringify(selected) === JSON.stringify(item.localValue) ? 'selected' : ''}
+                  onClick={() => choose(key, item.localValue)}
+                >
+                  <strong>你的修改</strong>
+                  <pre>{conflictDisplayValue(item.localValue)}</pre>
+                </button>
+              </div>
+              <label className="field wide">
+                <span>手工合并</span>
+                <textarea
+                  value={manualValues[key] ?? ''}
+                  placeholder={conflictDisplayValue(item.localValue)}
+                  onChange={(event) => setManualValues((current) => ({ ...current, [key]: event.target.value }))}
+                />
+              </label>
+              <button type="button" className="text-button" onClick={() => {
+                try {
+                  choose(key, parseConflictManualValue(manualValues[key] ?? '', exemplar));
+                  setResolutionError('');
+                } catch {
+                  setResolutionError(`${conflictPathLabel(item.path)}的手工内容不是有效 JSON`);
+                }
+              }}>使用手工合并结果</button>
+            </section>
+          );
+        })}
+        {resolutionError && <div className="notice error">{resolutionError}</div>}
+        <div className="form-actions">
+          <button
+            type="button"
+            className="primary-button"
+            disabled={resolving || resolutions.size !== conflict.conflicts.length}
+            onClick={() => void (async () => {
+              setResolving(true);
+              setResolutionError('');
+              try {
+                await onResolve(resolutions);
+              } catch (cause) {
+                setResolutionError(cause instanceof Error ? cause.message : String(cause));
+              } finally {
+                setResolving(false);
+              }
+            })()}
+          >
+            {resolving ? '正在保存…' : '应用并保存'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -5744,7 +5956,7 @@ function ScenePage({
                     label: item.model || item.id,
                   }))}
                   placeholder="全部机型"
-                  disabled={archivedMode || checkpoint}
+                  disabled={!canEditVersion}
                   onChange={changeTaskRobotModels}
                 />
               </div>
@@ -6794,18 +7006,13 @@ function StepsTable({
   }
 
   function updateStepDraft(index: number, patch: Partial<OperationStep>) {
-    setDraftSteps((currentSteps) =>
-      normalize(
-        currentSteps.map((step, currentIndex) =>
-          currentIndex === index
-            ? {
-                ...step,
-                ...patch,
-              }
-            : step,
-        ),
+    const nextSteps = normalize(
+      draftSteps.map((step, currentIndex) =>
+        currentIndex === index ? { ...step, ...patch } : step,
       ),
     );
+    setDraftSteps(nextSteps);
+    if (operationStepsReadyToSave(nextSteps)) onChange(nextSteps);
   }
 
   function addStep() {
@@ -8460,7 +8667,10 @@ function TextArea({
         value={draft}
         disabled={disabled}
         onBlur={commit}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          onChange(event.target.value);
+        }}
         onCompositionStart={() => {
           composingRef.current = true;
         }}

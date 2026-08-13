@@ -32,7 +32,7 @@
   "repositoryMutations": [
     { "operation": "global-fields.replace", "scope": "collection", "repositoryMethods": ["replaceGlobalFields"] },
     { "operation": "resource.create", "scope": "resource", "repositoryMethods": ["createCatalog", "createCurrent", "createRobotModel"] },
-    { "operation": "resource.update", "scope": "resource", "repositoryMethods": ["updateCatalog", "updateCurrent", "saveRobotModel"] },
+    { "operation": "resource.update", "scope": "resource", "repositoryMethods": ["updateCatalog", "updateCurrent", "updateTaskSopIdempotent", "saveRobotModel"] },
     { "operation": "resource.archive", "scope": "resource", "repositoryMethods": ["archiveCatalog", "archiveCurrent", "archiveCurrentForLibrary"] },
     { "operation": "resource.restore", "scope": "resource", "repositoryMethods": ["restoreCurrentFromLibrary"] },
     { "operation": "resource.copy", "scope": "resource", "repositoryMethods": ["copyTaskSop", "createCurrent"] },

@@ -233,12 +233,17 @@ test('blocks a new Task SOP from reusing an active name in the same Scene', asyn
   const rejectedSave = page.waitForResponse((response) =>
     new URL(response.url()).pathname.startsWith('/api/resources/taskSops/') &&
     response.request().method() === 'PUT');
-  const alertPromise = page.waitForEvent('dialog');
-  const blur = page.getByLabel('任务 SOP 描述').click();
-  const alert = await alertPromise;
-  expect(alert.message()).toContain('当前场景中已存在同名任务 SOP，请使用其他名称');
-  await alert.accept();
-  await blur;
+  await page.getByLabel('任务 SOP 描述').click();
   expect((await rejectedSave).status()).toBe(409);
-  await expect(nameInput).toHaveValue('新的任务 SOP');
+  await expect(page.getByText(/修改已记录.*当前场景中已存在同名任务 SOP，请使用其他名称/)).toBeVisible();
+  await expect(nameInput).toHaveValue(title);
+
+  const correctedTitle = `${title} 修正`;
+  const correctedSave = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith('/api/resources/taskSops/') &&
+    response.request().method() === 'PUT' && response.ok());
+  await nameInput.fill(correctedTitle);
+  await page.getByLabel('任务 SOP 描述').click();
+  await correctedSave;
+  await expect(nameInput).toHaveValue(correctedTitle);
 });

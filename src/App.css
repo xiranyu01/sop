@@ -2485,6 +2485,51 @@ summary:focus-visible,
   padding: 18px;
 }
 
+.task-sop-conflict-modal {
+  gap: 18px;
+}
+
+.conflict-field {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--primer-radius-medium);
+}
+
+.conflict-field h3 {
+  margin: 0;
+}
+
+.conflict-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.conflict-options > button {
+  min-width: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--primer-radius-medium);
+  background: var(--color-canvas-overlay);
+  color: var(--color-fg-default);
+  padding: 10px;
+  text-align: left;
+}
+
+.conflict-options > button.selected {
+  border-color: var(--color-accent-fg);
+  box-shadow: 0 0 0 1px var(--color-accent-fg);
+}
+
+.conflict-options pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .long-text-editor {
   min-height: 180px;
   width: 100%;

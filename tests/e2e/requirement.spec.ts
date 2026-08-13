@@ -258,7 +258,7 @@ test('Requirement create → ETag update → review → confirm → export → n
   expect(yamlPath).toBeTruthy();
   const exportedDocument = YAML.parse(await readFile(yamlPath!, 'utf8'));
   expect(exportedDocument).toEqual(expect.objectContaining({
-    format: 'coscene.sop.export', schema_version: '2.0.1', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
+    format: 'coscene.sop.export', schema_version: '2.1.0', requirement: expect.objectContaining({ basic_info: expect.any(Object) }),
   }));
   expect(exportedDocument.requirement.production_requirement_items[0].target_collection_count).toBe(2);
   expect(exportedDocument.requirement.task_sop_details).toHaveLength(1);
@@ -313,10 +313,8 @@ test('Requirement create → ETag update → review → confirm → export → n
   await expect(page.getByText('草稿版本已删除')).toBeVisible();
   await expect(page.getByLabel('版本')).toHaveValue('0.0.1');
 
-  await page.reload();
-  await page.getByRole('button', { name: /^客户需求/ }).click();
-  await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
-  await page.getByRole('button', { name: new RegExp(title) }).first().click();
+  await page.goto(`/requirements/${confirmed.revision.uid}`);
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
   await expect(page.getByLabel('版本').locator('option')).toHaveCount(1);
   await expect(page.getByText('当前版本已确认')).toBeVisible();
   await expect(getResource(request, 'requirements', draft.name)).resolves.toMatchObject({ lifecycle: 'CONFIRMED' });

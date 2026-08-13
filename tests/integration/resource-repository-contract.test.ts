@@ -6,6 +6,7 @@ import {
 } from '../../server/repositories/d1ResourceRepository';
 import {
   InvalidCursorError,
+  MutationIdReuseError,
   ProjectionMismatchError,
   RepositoryNotReadyError,
   ResourceConflictError,
@@ -483,6 +484,118 @@ describe('D1 resource repository contract', () => {
     db.database.prepare('UPDATE SOP_CATALOG_RESOURCES SET display_name = ? WHERE name = ?').run('Corrupt', created.name);
     await expect(repository.getCatalog(created.name)).rejects.toBeInstanceOf(ProjectionMismatchError);
     await expect(repository.auditProjectionParity()).rejects.toBeInstanceOf(ProjectionMismatchError);
+  });
+
+  it('replays idempotent TaskSop updates and atomically maintains robot projections', async () => {
+    const repository = createD1ResourceRepository(db, options);
+    const created = await repository.createCurrent({
+      protoSchema: 'coscene.sop.v1alpha1.TaskSop',
+      protoJson: taskSopDraft('durable-save'),
+    });
+    const next = {
+      ...JSON.parse(created.protoJson) as Record<string, unknown>,
+      displayName: 'Durably saved',
+      robotModels: ['robotModels/a', 'robotModels/b'],
+    };
+    const input = {
+      name: created.name,
+      expectedEtag: created.etag,
+      mutationId: 'mutation-1',
+      requestDigest: 'digest-1',
+      editorSessionId: 'editor-1',
+      current: { protoSchema: 'coscene.sop.v1alpha1.TaskSop', protoJson: JSON.stringify(next) },
+    };
+
+    const saved = await repository.updateTaskSopIdempotent!(input);
+    expect(saved).toMatchObject({ idempotent: false, record: { displayName: 'Durably saved', etag: 'etag-2' } });
+    expect(db.database.prepare(`SELECT robot_model_name FROM SOP_TASK_SOP_ROBOT_MODELS
+      WHERE task_sop_name = ? ORDER BY robot_model_name`).all(created.name)).toEqual([
+      { robot_model_name: 'robotModels/a' },
+      { robot_model_name: 'robotModels/b' },
+    ]);
+    expect(db.database.prepare('SELECT count(*) AS count FROM SOP_RESOURCE_MUTATION_RECEIPTS').get()).toEqual({ count: 1 });
+
+    const replayed = await repository.updateTaskSopIdempotent!(input);
+    expect(replayed).toMatchObject({ idempotent: true, record: { etag: 'etag-2' } });
+    expect(etagSequence).toBe(2);
+    expect(db.database.prepare('SELECT count(*) AS count FROM SOP_RESOURCE_MUTATION_RECEIPTS').get()).toEqual({ count: 1 });
+
+    await expect(repository.updateTaskSopIdempotent!({ ...input, requestDigest: 'different' }))
+      .rejects.toBeInstanceOf(MutationIdReuseError);
+  });
+
+  it('cleans only mutation receipts older than 30 days after a successful TaskSop update', async () => {
+    const repository = createD1ResourceRepository(db, options);
+    const created = await repository.createCurrent({
+      protoSchema: 'coscene.sop.v1alpha1.TaskSop',
+      protoJson: taskSopDraft('receipt-retention'),
+    });
+    const insertReceipt = db.database.prepare(`INSERT INTO SOP_RESOURCE_MUTATION_RECEIPTS (
+      mutation_id, resource_name, request_digest, expected_etag, result_etag,
+      result_json, editor_session_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`);
+    insertReceipt.run('expired-receipt', created.name, 'expired-digest', 'old-etag', 'old-result', '{}', '2026-06-13T23:59:59.999Z');
+    insertReceipt.run('boundary-receipt', created.name, 'boundary-digest', 'old-etag', 'old-result', '{}', '2026-06-14T10:00:00.000Z');
+    insertReceipt.run('recent-receipt', created.name, 'recent-digest', 'old-etag', 'old-result', '{}', '2026-07-13T10:00:00.000Z');
+
+    const changed = {
+      ...JSON.parse(created.protoJson) as Record<string, unknown>,
+      displayName: 'Receipt retention saved',
+      robotModels: ['robotModels/retained'],
+    };
+    const saved = await repository.updateTaskSopIdempotent!({
+      name: created.name,
+      expectedEtag: created.etag,
+      mutationId: 'current-receipt',
+      requestDigest: 'current-digest',
+      current: { protoSchema: created.protoSchema, protoJson: JSON.stringify(changed) },
+    });
+
+    expect(saved).toMatchObject({ idempotent: false, record: { displayName: 'Receipt retention saved' } });
+    expect(db.database.prepare(`SELECT mutation_id FROM SOP_RESOURCE_MUTATION_RECEIPTS
+      ORDER BY mutation_id`).all()).toEqual([
+      { mutation_id: 'boundary-receipt' },
+      { mutation_id: 'current-receipt' },
+      { mutation_id: 'recent-receipt' },
+    ]);
+    await expect(repository.getCurrent(created.name)).resolves.toMatchObject({
+      etag: saved.record.etag,
+      displayName: 'Receipt retention saved',
+    });
+    expect(db.database.prepare(`SELECT robot_model_name FROM SOP_TASK_SOP_ROBOT_MODELS
+      WHERE task_sop_name = ?`).all(created.name)).toEqual([{ robot_model_name: 'robotModels/retained' }]);
+  });
+
+  it('rolls back the canonical TaskSop row and receipt when projection maintenance fails', async () => {
+    const repository = createD1ResourceRepository(db, options);
+    const created = await repository.createCurrent({
+      protoSchema: 'coscene.sop.v1alpha1.TaskSop',
+      protoJson: taskSopDraft('atomic-failure'),
+    });
+    db.exec(`CREATE TRIGGER TEST_FAIL_TASK_ROBOT_PROJECTION
+      BEFORE INSERT ON SOP_TASK_SOP_ROBOT_MODELS
+      WHEN NEW.robot_model_name = 'robotModels/fail'
+      BEGIN SELECT RAISE(ABORT, 'projection failure'); END;`);
+    const changed = {
+      ...JSON.parse(created.protoJson) as Record<string, unknown>,
+      displayName: 'Must roll back',
+      robotModels: ['robotModels/fail'],
+    };
+
+    await expect(repository.updateTaskSopIdempotent!({
+      name: created.name,
+      expectedEtag: created.etag,
+      mutationId: 'mutation-failure',
+      requestDigest: 'digest-failure',
+      current: { protoSchema: 'coscene.sop.v1alpha1.TaskSop', protoJson: JSON.stringify(changed) },
+    })).rejects.toThrow('projection failure');
+
+    await expect(repository.getCurrent(created.name)).resolves.toMatchObject({
+      etag: created.etag,
+      displayName: created.displayName,
+    });
+    expect(db.database.prepare('SELECT count(*) AS count FROM SOP_TASK_SOP_ROBOT_MODELS').get()).toEqual({ count: 0 });
+    expect(db.database.prepare('SELECT count(*) AS count FROM SOP_RESOURCE_MUTATION_RECEIPTS').get()).toEqual({ count: 0 });
   });
 
   it('audits Proto payloads in explicit bounded pages', async () => {

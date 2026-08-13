@@ -27,10 +27,12 @@ import type {
   ConfirmationResult,
 } from '../../shared/transport/resourceDto';
 import { fromDomainJson, fromDomainJsonString, ProtoJsonDecodeError, toDomainJson } from '../../shared/domain/codec';
+import { sha256 } from '../../shared/crypto/hash';
 import { assertValidDomainMessage, DomainValidationError } from '../../shared/domain/validation';
 import {
   InvalidCursorError,
   MAX_BULK_RESOURCE_NAMES,
+  MutationIdReuseError,
   ProjectionMismatchError,
   RepositoryNotReadyError,
   ResourceConflictError,
@@ -928,6 +930,24 @@ async function updateResource(
   if (item.kind === 'attachments') throw new TypeError('Attachment metadata is immutable');
   const body = await requestObject(request);
   const expectedEtag = requiredString(body.expectedEtag, 'expectedEtag');
+  const mutationId = body.mutationId === undefined ? undefined : requiredString(body.mutationId, 'mutationId');
+  const editorSessionId = body.editorSessionId === undefined
+    ? undefined
+    : requiredString(body.editorSessionId, 'editorSessionId');
+  if (mutationId && mutationId.length > 128) throw new TypeError('mutationId must not exceed 128 characters');
+  if (editorSessionId && editorSessionId.length > 128) throw new TypeError('editorSessionId must not exceed 128 characters');
+  const requestDigest = mutationId
+    ? sha256(`${name}\u0000${expectedEtag}\u0000${JSON.stringify(body.resource)}`)
+    : undefined;
+  if (item.kind === 'taskSops' && mutationId && requestDigest && repository.replayTaskSopMutation) {
+    const replayed = await repository.replayTaskSopMutation({ name, mutationId, requestDigest });
+    if (replayed) {
+      return json({
+        resource: resourceDetail(item.kind, replayed.record),
+        warning: options.readRowSizeWarning?.(),
+      } satisfies ResourceMutationResult);
+    }
+  }
   if (item.kind === 'robotModels') {
     const protoJson = JSON.stringify(parseObject(body.resource, 'resource'));
     const saved = await saveRobotModel(repository, {
@@ -970,7 +990,16 @@ async function updateResource(
       protoJson,
       now: catalogWriteTime!.toISOString(),
     })
-    : await repository.updateCurrent(name, expectedEtag, { protoSchema: item.value.schema.typeName, protoJson });
+    : item.kind === 'taskSops' && mutationId && repository.updateTaskSopIdempotent
+      ? (await repository.updateTaskSopIdempotent({
+        name,
+        expectedEtag,
+        mutationId,
+        editorSessionId,
+        requestDigest: requestDigest!,
+        current: { protoSchema: item.value.schema.typeName, protoJson },
+      })).record
+      : await repository.updateCurrent(name, expectedEtag, { protoSchema: item.value.schema.typeName, protoJson });
   const result: ResourceMutationResult = {
     resource: resourceDetail(item.kind, record),
     warning: options.readRowSizeWarning?.(),
@@ -1114,6 +1143,11 @@ function apiFailure(error: unknown, requestId?: string): Response {
       resourceName: error.resourceName,
       expectedEtag: error.expectedEtag,
       actualEtag: error.actualEtag,
+    }, requestId));
+  }
+  if (error instanceof MutationIdReuseError) {
+    return errorResponse(409, apiError('IDEMPOTENCY_KEY_REUSE', '保存请求标识已被用于其他内容', {
+      mutationId: error.mutationId,
     }, requestId));
   }
   if (error instanceof ResourceNotFoundError) {

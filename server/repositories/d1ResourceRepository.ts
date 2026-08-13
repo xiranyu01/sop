@@ -10,6 +10,8 @@ import type {
   CurrentResourceKind,
   CurrentResourceRecord,
   CurrentArchiveState,
+  IdempotentTaskSopUpdateInput,
+  IdempotentTaskSopUpdateResult,
   CurrentResourceWriteInput,
   ExportBundleRecord,
   ExportBundleWriteInput,
@@ -28,6 +30,7 @@ import type {
 import {
   InvalidCursorError,
   MAX_BULK_RESOURCE_NAMES,
+  MutationIdReuseError,
   ProjectionMismatchError,
   RepositoryNotReadyError,
   ResourceConflictError,
@@ -91,6 +94,13 @@ type CatalogRow = {
   archived_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type MutationReceiptRow = {
+  mutation_id: string;
+  resource_name: string;
+  request_digest: string;
+  result_json: string;
 };
 
 type CurrentRow = {
@@ -660,6 +670,21 @@ export function createD1ResourceRepository(
         `INSERT OR IGNORE INTO SOP_TASK_SOP_ROBOT_MODELS (task_sop_name, robot_model_name) VALUES (?, ?)`,
       ).bind(name, robotModelName)),
     ]);
+  }
+
+  async function mutationReceipt(mutationId: string): Promise<MutationReceiptRow | undefined> {
+    return (await db.prepare(`SELECT mutation_id, resource_name, request_digest, result_json
+      FROM SOP_RESOURCE_MUTATION_RECEIPTS WHERE mutation_id = ?`).bind(mutationId).first<MutationReceiptRow>()) ?? undefined;
+  }
+
+  function replayMutationReceipt(
+    receipt: MutationReceiptRow,
+    mutation: Pick<IdempotentTaskSopUpdateInput, 'name' | 'mutationId' | 'requestDigest'>,
+  ): IdempotentTaskSopUpdateResult {
+    if (receipt.resource_name !== mutation.name || receipt.request_digest !== mutation.requestDigest) {
+      throw new MutationIdReuseError(mutation.mutationId);
+    }
+    return { record: JSON.parse(receipt.result_json) as CurrentResourceRecord, idempotent: true };
   }
 
   async function rawCatalog(name: string): Promise<CatalogRow | undefined> {
@@ -1294,12 +1319,17 @@ export function createD1ResourceRepository(
     }, false);
   }
 
-  async function writeCurrent(
+  async function writeCurrentResult(
     name: string,
     expectedEtag: string,
     input: CurrentResourceWriteInput,
     archive: boolean,
-  ): Promise<CurrentResourceRecord> {
+    mutation?: Pick<IdempotentTaskSopUpdateInput, 'mutationId' | 'requestDigest' | 'editorSessionId'>,
+  ): Promise<IdempotentTaskSopUpdateResult> {
+    if (mutation) {
+      const receipt = await mutationReceipt(mutation.mutationId);
+      if (receipt) return replayMutationReceipt(receipt, { ...mutation, name });
+    }
     const stored = await getCurrent(name);
     if (!stored) throw new ResourceNotFoundError(name);
     if (stored.etag !== expectedEtag) throw new ResourceConflictError(name, expectedEtag, stored.etag);
@@ -1314,7 +1344,7 @@ export function createD1ResourceRepository(
     );
     if (identityDifferences.length > 0) projectionError(name, identityDifferences);
     if (archive && record.lifecycle !== 'ARCHIVED') projectionError(name, ['lifecycle']);
-    const result = await db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
+    const update = db.prepare(`UPDATE SOP_CURRENT_RESOURCES SET
       source_id = ?, display_name = ?, scene_name = ?, customer_name = ?,
       robot_model_revision_name = ?, project_display_name = ?, deadline = ?, production_item_count = ?,
       aggregate_duration = ?, lifecycle = ?, candidate_version_sequence = ?,
@@ -1328,10 +1358,87 @@ export function createD1ResourceRepository(
       record.candidateVersionLabel ?? null, record.candidateSourceVersionId ?? null,
       record.currentRevisionName ?? null, record.reviewedManifestDigest ?? null, JSON.stringify(record.robotModelNames ?? []), record.etag,
       record.protoSchema, record.protoJson, record.archivedAt ?? null, record.updatedAt, name, expectedEtag,
-    ).run();
-    if (changes(result) !== 1) return stale(name, expectedEtag, 'SOP_CURRENT_RESOURCES');
-    await syncTaskRobotModels(record.name, record.protoSchema, record.protoJson);
-    return record;
+    );
+
+    if (record.protoSchema !== TaskSopSchema.typeName) {
+      const result = await update.run();
+      if (changes(result) !== 1) return stale(name, expectedEtag, 'SOP_CURRENT_RESOURCES');
+      return { record, idempotent: false };
+    }
+
+    const refs = taskRobotModelRefs(record.protoSchema, record.protoJson);
+    const guardedCurrent = `EXISTS (SELECT 1 FROM SOP_CURRENT_RESOURCES WHERE name = ? AND etag = ?)`;
+    const statements: D1PreparedStatementLike[] = [
+      update,
+      db.prepare(`DELETE FROM SOP_TASK_SOP_ROBOT_MODELS
+        WHERE task_sop_name = ? AND ${guardedCurrent}`).bind(name, name, record.etag),
+      ...refs.map((robotModelName) => db.prepare(
+        `INSERT OR IGNORE INTO SOP_TASK_SOP_ROBOT_MODELS (task_sop_name, robot_model_name)
+         SELECT ?, ? WHERE ${guardedCurrent}`,
+      ).bind(name, robotModelName, name, record.etag)),
+    ];
+    if (mutation) {
+      statements.push(db.prepare(`INSERT INTO SOP_RESOURCE_MUTATION_RECEIPTS (
+          mutation_id, resource_name, request_digest, expected_etag, result_etag,
+          result_json, editor_session_id, created_at
+        ) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guardedCurrent}`).bind(
+        mutation.mutationId,
+        name,
+        mutation.requestDigest,
+        expectedEtag,
+        record.etag,
+        JSON.stringify(record),
+        mutation.editorSessionId ?? null,
+        record.updatedAt,
+        name,
+        record.etag,
+      ));
+      const retentionCutoff = new Date(Date.parse(record.updatedAt) - 30 * 24 * 60 * 60 * 1_000).toISOString();
+      statements.push(db.prepare(`DELETE FROM SOP_RESOURCE_MUTATION_RECEIPTS
+        WHERE created_at < ? AND ${guardedCurrent}`).bind(retentionCutoff, name, record.etag));
+    }
+
+    let results: D1RunResultLike[];
+    try {
+      results = await db.batch(statements);
+    } catch (error) {
+      if (mutation) {
+        const receipt = await mutationReceipt(mutation.mutationId);
+        if (receipt) return replayMutationReceipt(receipt, { ...mutation, name });
+      }
+      throw error;
+    }
+    if (results.some((result) => result.success === false)) {
+      throw new Error(`Atomic TaskSop update failed for ${name}`);
+    }
+    if (changes(results[0]) !== 1) {
+      if (mutation) {
+        const receipt = await mutationReceipt(mutation.mutationId);
+        if (receipt) return replayMutationReceipt(receipt, { ...mutation, name });
+      }
+      return stale(name, expectedEtag, 'SOP_CURRENT_RESOURCES');
+    }
+    return { record, idempotent: false };
+  }
+
+  async function writeCurrent(
+    name: string,
+    expectedEtag: string,
+    input: CurrentResourceWriteInput,
+    archive: boolean,
+  ): Promise<CurrentResourceRecord> {
+    return (await writeCurrentResult(name, expectedEtag, input, archive)).record;
+  }
+
+  async function updateTaskSopIdempotent(input: IdempotentTaskSopUpdateInput): Promise<IdempotentTaskSopUpdateResult> {
+    return writeCurrentResult(input.name, input.expectedEtag, input.current, false, input);
+  }
+
+  async function replayTaskSopMutation(
+    input: Pick<IdempotentTaskSopUpdateInput, 'name' | 'mutationId' | 'requestDigest'>,
+  ): Promise<IdempotentTaskSopUpdateResult | undefined> {
+    const receipt = await mutationReceipt(input.mutationId);
+    return receipt ? replayMutationReceipt(receipt, input) : undefined;
   }
 
   async function archiveCurrentForLibrary(
@@ -2162,6 +2269,8 @@ export function createD1ResourceRepository(
     copyTaskSop,
     updateTaskSopRobotModels,
     updateCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, false),
+    replayTaskSopMutation,
+    updateTaskSopIdempotent,
     archiveCurrent: (name, expectedEtag, input) => writeCurrent(name, expectedEtag, input, true),
     archiveCurrentForLibrary,
     restoreCurrentFromLibrary,

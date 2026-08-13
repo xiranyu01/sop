@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const systemBrowserPath = process.env.PLAYWRIGHT_EXECUTABLE_PATH;
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
@@ -13,6 +15,7 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:8787',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    ...(systemBrowserPath ? { launchOptions: { executablePath: systemBrowserPath } } : {}),
   },
   projects: [{ name: 'chromium-pages', use: { ...devices['Desktop Chrome'] } }],
   webServer: {

@@ -3,6 +3,7 @@ export type ApiErrorKind =
   | 'VALIDATION'
   | 'ALREADY_EXISTS'
   | 'STALE_RESOURCE'
+  | 'IDEMPOTENCY_KEY_REUSE'
   | 'DEPENDENCY_CHANGED'
   | 'ROW_SIZE_REJECTED'
   | 'NOT_INITIALIZED'
@@ -18,6 +19,7 @@ export type ApiErrorDetails = {
   resourceName?: string;
   expectedEtag?: string;
   actualEtag?: string;
+  mutationId?: string;
   measuredBytes?: number;
   limitBytes?: number;
   retryable?: boolean;

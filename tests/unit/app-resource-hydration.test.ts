@@ -6,6 +6,7 @@ import {
   findTaskSop,
   loadReferencedAttachmentMetadata,
   loadSummaryAttachmentMetadata,
+  missingRequirementTaskSopSelections,
   sourceLikeId,
 } from '../../src/App';
 import { ApiClientError, type AttachmentMetadata } from '../../src/api/client';
@@ -13,6 +14,23 @@ import type { ResourceSummary } from '../../shared/transport/resourceDto';
 import type { RequirementVersion, Scene } from '../../src/domain/viewModels';
 
 describe('resource detail hydration', () => {
+  it('does not recompute frozen Requirement export availability from a paginated TaskSop list', () => {
+    const selected = {
+      id: 'item-101',
+      title: '生产需求项 101',
+      taskSop: { title: '药房取药', version: '0.0.1', status: 'confirmed' },
+    } as RequirementVersion['selectedSubscenes'][number];
+    const confirmed = Object.assign({
+      selectedSubscenes: [selected],
+    }, { __revisionExportEligible: true }) as unknown as RequirementVersion;
+    const draft = Object.assign({
+      selectedSubscenes: [selected],
+    }, { __revisionExportEligible: false }) as unknown as RequirementVersion;
+
+    expect(missingRequirementTaskSopSelections([], confirmed)).toEqual([]);
+    expect(missingRequirementTaskSopSelections([], draft)).toEqual([selected]);
+  });
+
   it('discovers unique attachment resource references and hydrates their metadata by uid', async () => {
     const resources = [{
       images: ['attachments/photo-1', 'attachments/photo-1'],

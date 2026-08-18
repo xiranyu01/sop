@@ -243,13 +243,25 @@ test('Requirement create → ETag update → review → confirm → export → n
   await page.goto(`/requirements/${confirmed.revision.uid}`);
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
+  await page.route('**/api/resources/taskSops*', async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (route.request().method() !== 'GET' || requestUrl.pathname !== '/api/resources/taskSops') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const body = await response.json() as { items: unknown[]; nextCursor?: string };
+    await route.fulfill({ response, json: { ...body, items: [] } });
+  });
   await page.reload();
+  await expect(page.getByText(/生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到/)).toHaveCount(0);
   await page.getByRole('button', { name: /^客户需求/ }).click();
   await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
   await page.getByRole('button', { name: new RegExp(title) }).first().click();
   await expect(page.getByText('当前版本已确认')).toBeVisible();
 
   await page.getByRole('button', { name: '导出' }).click();
+  await expect(page.getByRole('button', { name: '导出 YAML' })).toBeEnabled();
   const yamlDownloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '导出 YAML' }).click();
   const yamlDownload = await yamlDownloadPromise;
@@ -263,6 +275,9 @@ test('Requirement create → ETag update → review → confirm → export → n
   expect(exportedDocument.requirement.production_requirement_items[0].target_collection_count).toBe(2);
   expect(exportedDocument.requirement.task_sop_details).toHaveLength(1);
   expect(exportedDocument.requirement.robot).toEqual(expect.objectContaining({ model: expect.any(String) }));
+  await page.unroute('**/api/resources/taskSops*');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
   await page.getByRole('button', { name: '导出' }).click();
   await page.getByRole('button', { name: '导出 PDF' }).click();

@@ -1525,6 +1525,15 @@ export function findTaskSop(scenes: Scene[], selected: RequirementVersion['selec
   return undefined;
 }
 
+export function missingRequirementTaskSopSelections(
+  scenes: Scene[],
+  version: RequirementVersion | undefined,
+  archivedMode = false,
+): RequirementVersion['selectedSubscenes'] {
+  if (!version || archivedMode || revisionExportEligible(version)) return [];
+  return version.selectedSubscenes.filter((item) => !taskSopVersion(item) || !findTaskSop(scenes, item));
+}
+
 function productionItemTitle(item: RequirementVersion['selectedSubscenes'][number]): string {
   return item.title || item.subsceneName || item.taskSop?.title || '未命名生产需求项';
 }
@@ -4318,10 +4327,7 @@ function RequirementPage({
   const selectedSubsceneDurationTotal =
     selectedVersion?.selectedSubscenes.reduce((total, item) => total + (Number(item.targetDurationHours) || 0), 0) || 0;
   const durationDelta = selectedVersion ? selectedSubsceneDurationTotal - (Number(selectedVersion.requiredDurationHours) || 0) : 0;
-  const missingSelectedSubscenes =
-    archivedMode
-      ? []
-      : selectedVersion?.selectedSubscenes.filter((item) => !taskSopVersion(item) || !findTaskSop(data.scenes, item)) || [];
+  const missingSelectedSubscenes = missingRequirementTaskSopSelections(data.scenes, selectedVersion, archivedMode);
   const unconfirmedSelectedSubscenes =
     selectedVersion?.selectedSubscenes.filter((item) => {
       const target = findTaskSop(data.scenes, item);

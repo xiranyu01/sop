@@ -208,6 +208,7 @@ const repositoryMethodExceptions = new Set([
   'findActiveRequirementReferrers',
   'getRevision',
   'getRevisionByUid',
+  'findRevisionsBySourceVersionId',
   'getRevisions',
   'listRevisions',
   'getExportBundle',

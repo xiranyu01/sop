@@ -292,6 +292,19 @@ async function findRevisionByVersion(
   return undefined;
 }
 
+async function resolveHistoricalTaskSopRevision(
+  repository: ResourceRepository,
+  ownerName: string,
+  versionLabel: string,
+  versionUid?: string,
+): Promise<RevisionSummary | undefined> {
+  if (versionUid) {
+    const exact = await repository.getRevisionByUid(versionUid);
+    if (exact?.kind === 'TASK_SOP_REVISION' && exact.versionLabel === versionLabel) return exact;
+  }
+  return findRevisionByVersion(repository, ownerName, versionLabel);
+}
+
 async function domainYamlOptions(
   repository: ResourceRepository,
   bundle: ReturnType<typeof decodeExportBundle>,
@@ -310,9 +323,16 @@ async function domainYamlOptions(
       const referenced = content.taskSops.find((task) => task.ref === item.taskSopRef);
       if (!referenced?.revision) throw new CanonicalDataError(`生产需求项缺少任务 SOP 版本：${item.displayName}`);
       const requestedVersion = item.legacyVersionLabel || referenced.revision.versionLabel;
-      if (requestedVersion === referenced.revision.versionLabel) continue;
+      const referencedVersionMatches = requestedVersion === referenced.revision.versionLabel
+        && (!item.legacyVersionId || item.legacyVersionId === referenced.revision.revisionUid);
+      if (referencedVersionMatches) continue;
       const ownerName = referenced.revision.revisionName.split('/revisions/')[0];
-      const revision = await findRevisionByVersion(repository, ownerName, requestedVersion);
+      const revision = await resolveHistoricalTaskSopRevision(
+        repository,
+        ownerName,
+        requestedVersion,
+        item.legacyVersionId,
+      );
       if (!revision) throw new CanonicalDataError(`找不到任务 SOP 历史版本：${referenced.displayName} v${requestedVersion}`);
       const stored = await repository.getExportBundle(revision.name);
       if (!stored) throw new CanonicalDataError(`任务 SOP 历史版本没有冻结导出包：${revision.name}`);

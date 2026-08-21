@@ -2401,11 +2401,16 @@ export default function App() {
       await flow.accept();
       const acceptedState = flow.state as { kind: string };
       if (acceptedState.kind === 'acknowledged') {
+        const finalAttemptEtag = flow.state.etag;
         const next = await resourceClient.get(kind, name);
+        if (kind === 'taskSops' && next.etag !== finalAttemptEtag) {
+          await reloadTaskSopBeforeConfirmation(name, next);
+          return;
+        }
         updateResourceEtag(kind, next);
         if (kind === 'taskSops') {
           await flow.requestConfirmation();
-          if (await recoverTaskSopConfirmationConflict(kind, name, flow, next.etag)) return;
+          if (await recoverTaskSopConfirmationConflict(kind, name, flow, finalAttemptEtag)) return;
         } else {
           setMessage('依赖审阅已确认，请再次点击确认版本');
           return;

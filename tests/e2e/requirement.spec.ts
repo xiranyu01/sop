@@ -42,7 +42,6 @@ async function firstExportableTaskRevision(
 ): Promise<ExportableTaskFixture> {
   const scenes = await listResourceSummaries(request, 'scenes');
   for (const root of await listResourceSummaries(request, 'taskSops')) {
-    if (!root.lifecycle?.endsWith('CONFIRMED')) continue;
     const revision = (await listRevisions(request, 'taskSops', root.name)).find((item) => item.exportEligible);
     if (!revision) continue;
     const detail = await apiJson<RevisionDetail>(request, 'GET', `/api/revisions/${encodeURIComponent(revision.name)}`);
@@ -255,9 +254,7 @@ test('Requirement create → ETag update → review → confirm → export → n
   });
   await page.reload();
   await expect(page.getByText(/生产需求项未选择任务 SOP，或引用的任务 SOP 版本未找到/)).toHaveCount(0);
-  await page.getByRole('button', { name: /^客户需求/ }).click();
-  await page.getByPlaceholder('搜索需求名称、客户、项目').fill(title);
-  await page.getByRole('button', { name: new RegExp(title) }).first().click();
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
   await expect(page.getByText('当前版本已确认')).toBeVisible();
 
   await page.getByRole('button', { name: '导出' }).click();

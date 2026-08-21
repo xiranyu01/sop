@@ -2316,12 +2316,26 @@ export default function App() {
     return engine.submit(next, 'immediate');
   }
 
+  async function latestTaskSopBoundaryDetail(name: string, operation: string): Promise<ResourceDetail> {
+    await flushTaskSopBeforeBoundary(name, operation);
+    const cached = resourceDetails.current.get(name);
+    const latestDetail = await resourceClient.get('taskSops', name);
+    if (cached && cached.etag !== latestDetail.etag) {
+      updateResourceEtag('taskSops', latestDetail);
+      throw new Error(`服务器内容刚刚更新，请刷新页面并检查最新内容后再次${operation}`);
+    }
+    updateResourceEtag('taskSops', latestDetail);
+    return latestDetail;
+  }
+
   async function copyTaskSop(subscene: Subscene): Promise<void> {
     const name = resourceNameOf(subscene);
     if (!name) throw new Error('任务 SOP 资源尚未创建');
-    const detail = resourceDetails.current.get(name) ?? await resourceClient.get('taskSops', name);
     const result = await run(
-      () => resourceClient.copyTaskSop(name, detail.etag),
+      async () => {
+        const detail = await latestTaskSopBoundaryDetail(name, '复制任务');
+        return resourceClient.copyTaskSop(name, detail.etag);
+      },
       '任务 SOP 已复制为新的 0.0.1 草稿',
     );
     if (!result) return;
@@ -3104,9 +3118,11 @@ export default function App() {
             onDeleteSubsceneVersion={async (sceneId, code, _version) => {
               const subscene = dataRef.current.scenes.find((item) => item.id === sceneId)?.subscenes.find((item) => item.code === code);
               const name = resourceNameOf(subscene);
-              const detail = name ? resourceDetails.current.get(name) : undefined;
-              if (!subscene || !name || !detail) return;
-              const result = await run(() => resourceClient.discardDraft('taskSops', name, detail.etag), '草稿版本已删除');
+              if (!subscene || !name) return;
+              const result = await run(async () => {
+                const detail = await latestTaskSopBoundaryDetail(name, '删除草稿');
+                return resourceClient.discardDraft('taskSops', name, detail.etag);
+              }, '草稿版本已删除');
               if (!result) return;
               saveQueues.current.remove(name);
               removeTaskSopSyncEngine(name, true);

@@ -2342,10 +2342,33 @@ export default function App() {
       await pendingQueue.whenSettled();
       if (pendingQueue.hasUnsavedChanges) throw new Error('仍有尚未成功保存的本地修改，处理保存冲突后才能确认版本');
     }
-    if (kind === 'taskSops') await flushTaskSopBeforeBoundary(name, '确认版本');
-    const detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
+    let detail: ResourceDetail;
+    if (kind === 'taskSops') {
+      await flushTaskSopBeforeBoundary(name, '确认版本');
+      const cached = resourceDetails.current.get(name);
+      const latestDetail = await resourceClient.get(kind, name);
+      if (cached && cached.etag !== latestDetail.etag) {
+        const revisions = await loadRevisionDetails(kind, name);
+        await hydrateOwnerAttachmentReferences(kind, name, [
+          latestDetail.resource,
+          ...revisions.map((revision) => revision.resource),
+        ]);
+        removeTaskSopSyncEngine(name, true);
+        const refreshed = replaceTaskSopResource(latestDetail, revisions).subscene;
+        const refreshedDraft = activeEditableDraft(refreshed.versions);
+        if (refreshedDraft) await ensureTaskSopSyncEngine(name, refreshedDraft, latestDetail);
+        setSelectedSubsceneVersion(refreshedDraft?.version || latest(refreshed.versions).version);
+        reviewFlows.current.delete(name);
+        setMessage('检测到服务器内容刚刚更新，已同步最新版本；请检查后再次确认任务 SOP');
+        return;
+      }
+      updateResourceEtag(kind, latestDetail);
+      detail = latestDetail;
+    } else {
+      detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
+    }
     let flow = reviewFlows.current.get(name);
-    if (!flow || flow.state.kind === 'confirmed') {
+    if (!flow || !flow.canReuse(detail.etag)) {
       flow = new DependencyReviewFlow({ api: resourceClient, kind, resourceName: name, initialEtag: detail.etag });
       reviewFlows.current.set(name, flow);
     }

@@ -64,6 +64,10 @@ export class DependencyReviewFlow {
     return this.current;
   }
 
+  canReuse(etag: string): boolean {
+    return !['confirmed', 'failed'].includes(this.current.kind) && this.current.etag === etag;
+  }
+
   cancel(): void {
     if (this.current.kind !== 'review-required') return;
     this.setState({ kind: 'idle', etag: this.current.etag });

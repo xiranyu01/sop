@@ -21,6 +21,7 @@ import {
   listRevisions,
   openAuthenticated,
   resourcePath,
+  updateResource,
   waitForPrintedDocument,
 } from './helpers/app';
 
@@ -136,6 +137,22 @@ test('TaskSop draft → review → confirm → export → next draft → restore
     expectedEtag: draft.etag,
   });
   expect(review).toMatchObject({ rootName: draft.name, rootEtag: draft.etag });
+
+  // Reproduce a metadata-equivalent write landing after the editor loaded but
+  // before confirmation. Confirmation must refresh the latest ETag instead of
+  // surfacing a transient STALE_RESOURCE error.
+  const externallyUpdated = await updateResource(request, 'taskSops', draft, draft.resource);
+  expect(externallyUpdated.etag).not.toBe(draft.etag);
+
+  let confirmationRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === `${rootPath}/confirmations` && request.method() === 'POST') {
+      confirmationRequests += 1;
+    }
+  });
+  await page.getByRole('button', { name: '确认任务 SOP' }).click();
+  await expect(page.getByText('检测到服务器内容刚刚更新，已同步最新版本；请检查后再次确认任务 SOP')).toBeVisible();
+  expect(confirmationRequests).toBe(0);
 
   const blockedConfirmation = page.waitForResponse((response) =>
     new URL(response.url()).pathname === `${rootPath}/confirmations` &&

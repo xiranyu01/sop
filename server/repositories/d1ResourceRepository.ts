@@ -1146,7 +1146,6 @@ export function createD1ResourceRepository(
     const limit = pageLimit(page);
     const cursor = decodeCursor(page?.cursor);
     const query = page?.query?.trim() ?? '';
-    const pattern = `%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
     const result = await db.prepare(`SELECT current.name, current.uid, current.kind, current.source_id,
       current.display_name, current.scene_name, current.customer_name, current.robot_model_revision_name,
       current.task_robot_models_json,
@@ -1164,13 +1163,13 @@ export function createD1ResourceRepository(
       LEFT JOIN SOP_CATALOG_RESOURCES AS related
         ON related.name = COALESCE(current.customer_name, current.scene_name)
       WHERE archive.resource_kind = ? AND current.archived_at IS NOT NULL
-        AND (? = '' OR current.display_name LIKE ? ESCAPE '\\'
-          OR COALESCE(related.display_name, '') LIKE ? ESCAPE '\\'
-          OR COALESCE(current.customer_name, current.scene_name, '') LIKE ? ESCAPE '\\'
-          OR COALESCE(archive.candidate_version_label, revision.version_label, '') LIKE ? ESCAPE '\\')
+        AND (? = '' OR instr(lower(current.display_name), lower(?)) > 0
+          OR instr(lower(COALESCE(related.display_name, '')), lower(?)) > 0
+          OR instr(lower(COALESCE(current.customer_name, current.scene_name, '')), lower(?)) > 0
+          OR instr(lower(COALESCE(archive.candidate_version_label, revision.version_label, '')), lower(?)) > 0)
         AND (? = '' OR archive.archived_at < ? OR (archive.archived_at = ? AND current.name > ?))
       ORDER BY archive.archived_at DESC, current.name ASC LIMIT ?`).bind(
-        kind, query, pattern, pattern, pattern, pattern,
+        kind, query, query, query, query, query,
         cursor.createdAt, cursor.createdAt, cursor.createdAt, cursor.name, limit + 1,
       ).all<ArchivedCurrentListRow>();
     return toArchivedPage(result.results.map((row) => {

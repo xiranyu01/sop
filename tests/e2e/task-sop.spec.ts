@@ -201,11 +201,7 @@ test('TaskSop draft → review → confirm → export → next draft → restore
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
   await page.reload();
-  await page.getByRole('button', { name: /^场景库/ }).click();
-  await page.getByRole('button', {
-    name: new RegExp(`^${escapeRegex(scene!.displayName)}\\s+\\d+ 个任务 SOP$`),
-  }).click();
-  await openTaskSopFromTable(page, title);
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
   await expect(page.getByText('当前任务 SOP 已确认')).toBeVisible();
 
   await page.getByRole('button', { name: '导出' }).click();

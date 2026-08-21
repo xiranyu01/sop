@@ -2349,6 +2349,19 @@ export default function App() {
     setMessage('检测到服务器内容刚刚更新，已同步最新版本；请检查后再次确认任务 SOP');
   }
 
+  async function recoverTaskSopConfirmationConflict(
+    kind: 'taskSops' | 'requirements',
+    name: string,
+    flow: DependencyReviewFlow,
+    attemptedEtag: string,
+  ): Promise<boolean> {
+    if (kind !== 'taskSops' || flow.state.kind !== 'failed') return false;
+    const latestDetail = await resourceClient.get(kind, name);
+    if (latestDetail.etag === attemptedEtag) return false;
+    await reloadTaskSopBeforeConfirmation(name, latestDetail);
+    return true;
+  }
+
   async function confirmRoot(kind: 'taskSops' | 'requirements', value: Subscene | Requirement) {
     const name = resourceNameOf(value);
     if (!name) throw new Error('资源尚未创建');
@@ -2377,13 +2390,7 @@ export default function App() {
       reviewFlows.current.set(name, flow);
     }
     await flow.requestConfirmation();
-    if (flow.state.kind === 'failed' && kind === 'taskSops') {
-      const latestAfterFailure = await resourceClient.get(kind, name);
-      if (latestAfterFailure.etag !== detail.etag) {
-        await reloadTaskSopBeforeConfirmation(name, latestAfterFailure);
-        return;
-      }
-    }
+    if (await recoverTaskSopConfirmationConflict(kind, name, flow, detail.etag)) return;
     if (flow.state.kind === 'review-required') {
       const proposal = flow.state.proposal;
       const count = proposal.added.length + proposal.changed.length + proposal.removed.length;
@@ -2398,6 +2405,7 @@ export default function App() {
         updateResourceEtag(kind, next);
         if (kind === 'taskSops') {
           await flow.requestConfirmation();
+          if (await recoverTaskSopConfirmationConflict(kind, name, flow, next.etag)) return;
         } else {
           setMessage('依赖审阅已确认，请再次点击确认版本');
           return;

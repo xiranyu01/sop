@@ -2334,6 +2334,21 @@ export default function App() {
     setSceneDetailOpen(true);
   }
 
+  async function reloadTaskSopBeforeConfirmation(name: string, detail: ResourceDetail): Promise<void> {
+    const revisions = await loadRevisionDetails('taskSops', name);
+    await hydrateOwnerAttachmentReferences('taskSops', name, [
+      detail.resource,
+      ...revisions.map((revision) => revision.resource),
+    ]);
+    removeTaskSopSyncEngine(name, true);
+    const refreshed = replaceTaskSopResource(detail, revisions).subscene;
+    const refreshedDraft = activeEditableDraft(refreshed.versions);
+    if (refreshedDraft) await ensureTaskSopSyncEngine(name, refreshedDraft, detail);
+    setSelectedSubsceneVersion(refreshedDraft?.version || latest(refreshed.versions).version);
+    reviewFlows.current.delete(name);
+    setMessage('检测到服务器内容刚刚更新，已同步最新版本；请检查后再次确认任务 SOP');
+  }
+
   async function confirmRoot(kind: 'taskSops' | 'requirements', value: Subscene | Requirement) {
     const name = resourceNameOf(value);
     if (!name) throw new Error('资源尚未创建');
@@ -2348,18 +2363,7 @@ export default function App() {
       const cached = resourceDetails.current.get(name);
       const latestDetail = await resourceClient.get(kind, name);
       if (cached && cached.etag !== latestDetail.etag) {
-        const revisions = await loadRevisionDetails(kind, name);
-        await hydrateOwnerAttachmentReferences(kind, name, [
-          latestDetail.resource,
-          ...revisions.map((revision) => revision.resource),
-        ]);
-        removeTaskSopSyncEngine(name, true);
-        const refreshed = replaceTaskSopResource(latestDetail, revisions).subscene;
-        const refreshedDraft = activeEditableDraft(refreshed.versions);
-        if (refreshedDraft) await ensureTaskSopSyncEngine(name, refreshedDraft, latestDetail);
-        setSelectedSubsceneVersion(refreshedDraft?.version || latest(refreshed.versions).version);
-        reviewFlows.current.delete(name);
-        setMessage('检测到服务器内容刚刚更新，已同步最新版本；请检查后再次确认任务 SOP');
+        await reloadTaskSopBeforeConfirmation(name, latestDetail);
         return;
       }
       updateResourceEtag(kind, latestDetail);
@@ -2373,6 +2377,13 @@ export default function App() {
       reviewFlows.current.set(name, flow);
     }
     await flow.requestConfirmation();
+    if (flow.state.kind === 'failed' && kind === 'taskSops') {
+      const latestAfterFailure = await resourceClient.get(kind, name);
+      if (latestAfterFailure.etag !== detail.etag) {
+        await reloadTaskSopBeforeConfirmation(name, latestAfterFailure);
+        return;
+      }
+    }
     if (flow.state.kind === 'review-required') {
       const proposal = flow.state.proposal;
       const count = proposal.added.length + proposal.changed.length + proposal.removed.length;

@@ -941,11 +941,7 @@ describe('Pages resource API adapter', () => {
 
     const { db, repository, data, request } = await harness(sourceData);
     const requirement = data.currents.find((item) => item.protoSchema.endsWith('.Requirement'))!;
-    const sleepRevision = data.revisions.find((item) => item.ownerName.includes('sleep-001'))!;
     const pharmacyRevision = data.revisions.find((item) => item.ownerName.includes('pharmacy-001'))!;
-    const sleepSummary = await repository.getRevision(sleepRevision.name);
-    expect(sleepSummary).toBeDefined();
-
     const stored = await repository.getCurrent(requirement.name);
     expect(stored).toBeDefined();
     const resource = JSON.parse(stored!.protoJson) as {
@@ -955,7 +951,7 @@ describe('Pages resource API adapter', () => {
       }> };
     } & Record<string, unknown>;
     resource.spec.productionItems[0].taskSopRevision = pharmacyRevision.name;
-    resource.spec.productionItems[0].legacyVersionId = sleepSummary!.uid;
+    resource.spec.productionItems[0].legacyVersionId = 'sleep-v0.0.5';
     const mismatched = await repository.updateCurrent(stored!.name, stored!.etag, {
       protoSchema: stored!.protoSchema,
       protoJson: JSON.stringify(resource),

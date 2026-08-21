@@ -301,6 +301,10 @@ async function resolveHistoricalTaskSopRevision(
   if (versionUid) {
     const exact = await repository.getRevisionByUid(versionUid);
     if (exact?.kind === 'TASK_SOP_REVISION' && exact.versionLabel === versionLabel) return exact;
+    const sourceMatches = await repository.findRevisionsBySourceVersionId?.(versionUid) ?? [];
+    const sourceExact = sourceMatches.filter((candidate) =>
+      candidate.kind === 'TASK_SOP_REVISION' && candidate.versionLabel === versionLabel);
+    if (sourceExact.length === 1) return sourceExact[0];
   }
   return findRevisionByVersion(repository, ownerName, versionLabel);
 }

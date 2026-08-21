@@ -304,6 +304,7 @@ export interface ResourceRepository {
 
   getRevision(name: string): Promise<RevisionRecord | undefined>;
   getRevisionByUid(uid: string): Promise<RevisionRecord | undefined>;
+  findRevisionsBySourceVersionId?(sourceVersionId: string): Promise<RevisionRecord[]>;
   getRevisions(names: readonly string[]): Promise<RevisionRecord[]>;
   listRevisions(ownerName: string, page?: PageRequest): Promise<PageResult<RevisionSummary>>;
   createRevision(input: RevisionWriteInput): Promise<RevisionRecord>;

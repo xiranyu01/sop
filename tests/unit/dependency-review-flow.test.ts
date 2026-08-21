@@ -73,6 +73,7 @@ describe('dependency review UI flow', () => {
     expect(flow.state.kind).toBe('acknowledged');
     await flow.requestConfirmation();
     expect(flow.state).toEqual({ kind: 'confirmed', etag: 'e4', result: confirmed });
+    expect(flow.canReuse('e4')).toBe(false);
     expect(api.confirm).toHaveBeenCalledTimes(2);
   });
 

@@ -1601,6 +1601,17 @@ export function createD1ResourceRepository(
     return revisionRecord(row);
   }
 
+  async function findRevisionsBySourceVersionId(sourceVersionId: string): Promise<RevisionRecord[]> {
+    const result = await db.prepare(`SELECT ${REVISION_DETAIL_COLUMNS}
+      FROM SOP_REVISIONS
+      WHERE json_extract(revision_proto_json, '$.sourceVersionId') = ?
+      ORDER BY name ASC`).bind(sourceVersionId).all<RevisionRow>();
+    return result.results.map((row) => {
+      assertRevisionParity(row);
+      return revisionRecord(row);
+    });
+  }
+
   async function getRevisions(names: readonly string[]): Promise<RevisionRecord[]> {
     const normalized = bulkNames(names);
     if (normalized.length === 0) return [];
@@ -2277,6 +2288,7 @@ export function createD1ResourceRepository(
     findActiveRequirementReferrers,
     getRevision,
     getRevisionByUid,
+    findRevisionsBySourceVersionId,
     getRevisions,
     listRevisions,
     createRevision,

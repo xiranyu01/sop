@@ -2334,6 +2334,34 @@ export default function App() {
     setSceneDetailOpen(true);
   }
 
+  async function reloadTaskSopBeforeConfirmation(name: string, detail: ResourceDetail): Promise<void> {
+    const revisions = await loadRevisionDetails('taskSops', name);
+    await hydrateOwnerAttachmentReferences('taskSops', name, [
+      detail.resource,
+      ...revisions.map((revision) => revision.resource),
+    ]);
+    removeTaskSopSyncEngine(name, true);
+    const refreshed = replaceTaskSopResource(detail, revisions).subscene;
+    const refreshedDraft = activeEditableDraft(refreshed.versions);
+    if (refreshedDraft) await ensureTaskSopSyncEngine(name, refreshedDraft, detail);
+    setSelectedSubsceneVersion(refreshedDraft?.version || latest(refreshed.versions).version);
+    reviewFlows.current.delete(name);
+    setMessage('检测到服务器内容刚刚更新，已同步最新版本；请检查后再次确认任务 SOP');
+  }
+
+  async function recoverTaskSopConfirmationConflict(
+    kind: 'taskSops' | 'requirements',
+    name: string,
+    flow: DependencyReviewFlow,
+    attemptedEtag: string,
+  ): Promise<boolean> {
+    if (kind !== 'taskSops' || flow.state.kind !== 'failed') return false;
+    const latestDetail = await resourceClient.get(kind, name);
+    if (latestDetail.etag === attemptedEtag) return false;
+    await reloadTaskSopBeforeConfirmation(name, latestDetail);
+    return true;
+  }
+
   async function confirmRoot(kind: 'taskSops' | 'requirements', value: Subscene | Requirement) {
     const name = resourceNameOf(value);
     if (!name) throw new Error('资源尚未创建');
@@ -2342,14 +2370,27 @@ export default function App() {
       await pendingQueue.whenSettled();
       if (pendingQueue.hasUnsavedChanges) throw new Error('仍有尚未成功保存的本地修改，处理保存冲突后才能确认版本');
     }
-    if (kind === 'taskSops') await flushTaskSopBeforeBoundary(name, '确认版本');
-    const detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
+    let detail: ResourceDetail;
+    if (kind === 'taskSops') {
+      await flushTaskSopBeforeBoundary(name, '确认版本');
+      const cached = resourceDetails.current.get(name);
+      const latestDetail = await resourceClient.get(kind, name);
+      if (cached && cached.etag !== latestDetail.etag) {
+        await reloadTaskSopBeforeConfirmation(name, latestDetail);
+        return;
+      }
+      updateResourceEtag(kind, latestDetail);
+      detail = latestDetail;
+    } else {
+      detail = resourceDetails.current.get(name) ?? await resourceClient.get(kind, name);
+    }
     let flow = reviewFlows.current.get(name);
-    if (!flow || flow.state.kind === 'confirmed') {
+    if (!flow || !flow.canReuse(detail.etag)) {
       flow = new DependencyReviewFlow({ api: resourceClient, kind, resourceName: name, initialEtag: detail.etag });
       reviewFlows.current.set(name, flow);
     }
     await flow.requestConfirmation();
+    if (await recoverTaskSopConfirmationConflict(kind, name, flow, detail.etag)) return;
     if (flow.state.kind === 'review-required') {
       const proposal = flow.state.proposal;
       const count = proposal.added.length + proposal.changed.length + proposal.removed.length;
@@ -2360,10 +2401,16 @@ export default function App() {
       await flow.accept();
       const acceptedState = flow.state as { kind: string };
       if (acceptedState.kind === 'acknowledged') {
+        const finalAttemptEtag = flow.state.etag;
         const next = await resourceClient.get(kind, name);
+        if (kind === 'taskSops' && next.etag !== finalAttemptEtag) {
+          await reloadTaskSopBeforeConfirmation(name, next);
+          return;
+        }
         updateResourceEtag(kind, next);
         if (kind === 'taskSops') {
           await flow.requestConfirmation();
+          if (await recoverTaskSopConfirmationConflict(kind, name, flow, finalAttemptEtag)) return;
         } else {
           setMessage('依赖审阅已确认，请再次点击确认版本');
           return;

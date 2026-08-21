@@ -9,14 +9,14 @@ import { SqliteD1 } from '../helpers/sqliteD1';
 import { resourceStorageMigrationsSql } from '../helpers/resourceStorageMigrations';
 import type { ResourceDetail, ResourceMutationResult } from '../../shared/transport/resourceDto';
 
-async function harness() {
+async function harness(sourceData = seedData) {
   const db = new SqliteD1(resourceStorageMigrationsSql);
   let etag = 0;
   const repository = createD1ResourceRepository(db, {
     clock: () => '2026-07-14T10:00:00.000Z',
     createEtag: () => `api-etag-${++etag}`,
   });
-  const data = prepareRepositoryData(structuredClone(seedData));
+  const data = prepareRepositoryData(structuredClone(sourceData));
   await bootstrapRepository(repository, data);
   const expectedBootstrapMarker = repositoryBootstrapMarkerValue('COMPLETE', data);
   const request = (path: string, init?: RequestInit) => handleResourceApiRequest(
@@ -895,6 +895,101 @@ describe('Pages resource API adapter', () => {
     });
     expect((await repository.listRevisions(requirement.name, { limit: 200 })).items).toHaveLength(revisionCount);
     expect(await repository.getExportBundle(confirmation.revision.name)).toBeDefined();
+    db.close();
+  });
+
+  it('exports the exact legacy TaskSop revision when a Requirement pin points at another task', async () => {
+    const sourceData = structuredClone(seedData);
+    sourceData.scenes[0].subscenes = [
+      {
+        code: 'SLEEP.001',
+        name: '睡前书桌物品归置整理',
+        versions: [{
+          ...structuredClone(sourceData.scenes[0].subscenes[0].versions[0]),
+          version: '0.0.5',
+          versionId: 'sleep-v0.0.5',
+          title: '睡前书桌物品归置整理',
+        }],
+      },
+      {
+        code: 'PHARMACY.001',
+        name: '药房药瓶归位',
+        versions: [{
+          ...structuredClone(sourceData.scenes[0].subscenes[0].versions[0]),
+          version: '0.0.1',
+          versionId: 'pharmacy-v0.0.1',
+          title: '药房药瓶归位',
+        }],
+      },
+    ];
+    sourceData.requirements[0].versions[0].selectedSubscenes = [{
+      id: 'item-10',
+      title: '生产需求项 10',
+      sceneName: '基线场景',
+      subsceneName: '睡前书桌物品归置整理',
+      version: '0.0.5',
+      taskSop: {
+        sceneName: '基线场景',
+        title: '睡前书桌物品归置整理',
+        version: '0.0.5',
+        versionId: 'sleep-v0.0.5',
+        status: 'confirmed',
+      },
+      targetDurationHours: 1,
+      targetCollectionCount: 1,
+    }];
+
+    const { db, repository, data, request } = await harness(sourceData);
+    const requirement = data.currents.find((item) => item.protoSchema.endsWith('.Requirement'))!;
+    const pharmacyRevision = data.revisions.find((item) => item.ownerName.includes('pharmacy-001'))!;
+    const stored = await repository.getCurrent(requirement.name);
+    expect(stored).toBeDefined();
+    const resource = JSON.parse(stored!.protoJson) as {
+      spec: { productionItems: Array<{
+        taskSopRevision: string;
+        legacyVersionId?: string;
+      }> };
+    } & Record<string, unknown>;
+    resource.spec.productionItems[0].taskSopRevision = pharmacyRevision.name;
+    resource.spec.productionItems[0].legacyVersionId = 'sleep-v0.0.5';
+    const mismatched = await repository.updateCurrent(stored!.name, stored!.etag, {
+      protoSchema: stored!.protoSchema,
+      protoJson: JSON.stringify(resource),
+    });
+
+    const reviewResponse = await request(
+      `/api/resources/requirements/${encodeURIComponent(requirement.name)}/review-proposal`,
+      { method: 'POST' },
+    );
+    expect(reviewResponse.status).toBe(200);
+    const review = await reviewResponse.json() as { proposalDigest: string };
+    const acknowledgementResponse = await request(
+      `/api/resources/requirements/${encodeURIComponent(requirement.name)}/review-acknowledgements`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ expectedEtag: mismatched.etag, proposalDigest: review.proposalDigest }),
+      },
+    );
+    expect(acknowledgementResponse.status).toBe(200);
+    const acknowledgement = await acknowledgementResponse.json() as { resource: { etag: string } };
+    const confirmationResponse = await request(
+      `/api/resources/requirements/${encodeURIComponent(requirement.name)}/confirmations`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ expectedEtag: acknowledgement.resource.etag }),
+      },
+    );
+    expect(confirmationResponse.status).toBe(200);
+    const confirmation = await confirmationResponse.json() as { exportPath: string };
+
+    const exported = await request(confirmation.exportPath);
+    expect(exported.status).toBe(200);
+    const yaml = await exported.text();
+    expect(yaml).toContain('title: 睡前书桌物品归置整理');
+    expect(yaml).toContain('sop_version: 0.0.5');
+    expect(yaml).not.toContain('title: 药房药瓶归位');
     db.close();
   });
 

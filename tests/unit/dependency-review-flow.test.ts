@@ -73,6 +73,35 @@ describe('dependency review UI flow', () => {
     expect(flow.state.kind).toBe('acknowledged');
     await flow.requestConfirmation();
     expect(flow.state).toEqual({ kind: 'confirmed', etag: 'e4', result: confirmed });
+    expect(flow.canReuse('e4')).toBe(false);
     expect(api.confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a failed or stale flow for another confirmation attempt', async () => {
+    const api = {
+      confirm: vi.fn().mockRejectedValue(new Error('资源已被其他操作更新')),
+      acknowledgeReview: vi.fn(),
+    };
+    const flow = new DependencyReviewFlow({
+      api,
+      kind: 'requirements',
+      resourceName: 'requirements/demo',
+      initialEtag: 'e1',
+    });
+
+    expect(flow.canReuse('e1')).toBe(true);
+    await flow.requestConfirmation();
+    expect(flow.state.kind).toBe('failed');
+    expect(flow.canReuse('e1')).toBe(false);
+    expect(flow.canReuse('e2')).toBe(false);
+
+    const current = new DependencyReviewFlow({
+      api: { confirm: vi.fn(), acknowledgeReview: vi.fn() },
+      kind: 'requirements',
+      resourceName: 'requirements/demo',
+      initialEtag: 'e2',
+    });
+    expect(current.canReuse('e2')).toBe(true);
+    expect(current.canReuse('e1')).toBe(false);
   });
 });

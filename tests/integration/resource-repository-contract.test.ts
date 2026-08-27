@@ -321,6 +321,48 @@ describe('D1 resource repository contract', () => {
     await expect(repository.listCatalog('MATERIAL')).resolves.toMatchObject({ items: [] });
   });
 
+  it('avoids the D1 LIKE pattern limit when searching archived current resources', async () => {
+    const repository = createD1ResourceRepository(db, options);
+    const query = '机器人夹取面包放入微波炉并加热面包';
+    const archiveTask = async (name: string, displayName: string) => {
+      const draft = JSON.parse(taskSopDraft(name)) as Record<string, unknown>;
+      draft.displayName = displayName;
+      const created = await repository.createCurrent({
+        protoSchema: 'TaskSop',
+        protoJson: JSON.stringify(draft),
+      });
+      const archivedProto = JSON.parse(created.protoJson) as Record<string, unknown>;
+      archivedProto.lifecycle = 'LIFECYCLE_ARCHIVED';
+      delete archivedProto.candidateVersionSequence;
+      delete archivedProto.candidateVersionLabel;
+      delete archivedProto.candidateSourceVersionId;
+      delete archivedProto.reviewedDependencyDigest;
+      await repository.archiveCurrentForLibrary(created.name, created.etag, {
+        protoSchema: created.protoSchema,
+        protoJson: JSON.stringify(archivedProto),
+      });
+      return created;
+    };
+    const created = await archiveTask('long-archive-search', `${query} Code 100%_MiXeD \\Path`);
+    await archiveTask('long-archive-search-decoy', 'Code 100AXmixed path');
+
+    await expect(repository.listArchivedCurrent('TASK_SOP', { query })).resolves.toMatchObject({
+      items: [expect.objectContaining({ name: created.name })],
+    });
+    await expect(repository.listArchivedCurrent('TASK_SOP', { query: 'code 100%_mixed' })).resolves.toMatchObject({
+      items: [expect.objectContaining({ name: created.name })],
+    });
+    await expect(repository.listArchivedCurrent('TASK_SOP', { query: '\\path' })).resolves.toMatchObject({
+      items: [expect.objectContaining({ name: created.name })],
+    });
+
+    const searchQuery = db.executed.find((entry) => entry.operation === 'all'
+      && entry.sql.includes('FROM SOP_CURRENT_ARCHIVES AS archive'))!;
+    expect(Buffer.byteLength(`%${query}%`, 'utf8')).toBeGreaterThan(50);
+    expect(searchQuery.sql).not.toContain(' LIKE ');
+    expect(searchQuery.values.slice(1, 6)).toEqual([query, query, query, query, query]);
+  });
+
   it('derives all current candidate and review columns from ProtoJSON', async () => {
     const repository = createD1ResourceRepository(db, options);
     const created = await repository.createCurrent({
